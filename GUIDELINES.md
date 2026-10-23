@@ -30,16 +30,33 @@ Every file a person uploads or keeps carries the project, board and version in i
 
 | Item | Pattern | Example |
 | --- | --- | --- |
-| Package | `<project>_v<x.y.z>.zip` | `paddle-keyer_v0.0.2.zip` |
-| Gerber zip | `<board>_v<x.y.z>_gerbers.zip` | `A_L-shape_v0.0.1L_gerbers.zip` |
-| BOM | `<board>_v<x.y.z>_BOM.csv` | `B_straight_v0.0.1_BOM.csv` |
-| CPL | `<board>_v<x.y.z>_CPL.csv` | `paddle-keyer_v0.0.2_CPL.csv` |
-| Firmware | `<project>_v<x.y.z>.uf2` | `paddle-keyer_v0.0.2.uf2` |
+| Package | `<project>_v<x.y.z>.zip` | `paddle-keyer_v1.2.0.zip` |
+| Gerber zip | `<board>_v<x.y.z>_gerbers.zip` | `A_L-shape_v2.0.3_gerbers.zip` |
+| BOM | `<board>_v<x.y.z>_BOM.csv` | `B_straight_v2.0.3_BOM.csv` |
+| CPL | `<board>_v<x.y.z>_CPL.csv` | `paddle-keyer_v1.2.0_CPL.csv` |
+| Firmware | `<project>_fw_v<x.y.z>.uf2` | `paddle-keyer_fw_v1.4.1.uf2` |
 
-- **Version on the board.** The version string is printed in the silkscreen and matches the file names and the firmware's reported version. A variant of the same version gets a letter suffix (`v0.0.1L` for the L-shape).
-- **Multiple boards in one project** get a letter and a short shape name (`A_L-shape`, `B_straight`). Each is its own JLCPCB order with its own files.
-- **Any change to fabricated output bumps the version.** Renames or README edits that don't touch Gerbers, BOM or CPL don't.
-- **Version control.** Design sources and scripts live in this repository (`nnamon/claude-pcb`) with a tag per release (`paddle-keyer-v0.0.2`), so any ordered board can be regenerated exactly.
+- **Version on the board.** The silkscreen carries the full version (`v2.0.3`) and matches the file names. Update it with every bump that changes the order files; a script should do this so it is never missed.
+- **Multiple boards in one project** get a letter and a short shape name (`A_L-shape`, `B_straight`). They share the project's version, and each is its own JLCPCB order with its own files. Variants are told apart by the board name, not by a suffix on the version.
+- **Version control.** Design sources and scripts live in this repository (`nnamon/claude-pcb`) with a tag per ordered version (`paddle-keyer-v1.2.0`), so any ordered board can be regenerated exactly.
+
+### Version numbers
+
+Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR and PATCH count the work within a spin.
+
+| Part | Meaning | Bump when | Resets |
+| --- | --- | --- | --- |
+| MAJOR | Fabrication spin. Spin N is the Nth design sent to JLCPCB. | Starting work after a spin has been ordered. | MINOR and PATCH to 0 |
+| MINOR | Big change within the spin. | The circuit, interfaces or physical form change: parts added, removed or given a new function; connector, outline or mounting changes; re-placement or re-route of a significant area; a new firmware feature that needs hardware support. | PATCH to 0 |
+| PATCH | Iterative change within the spin. | Anything else that changes the order files: a value or part swap with the same function and footprint, routing and clearance fixes, silkscreen and art, paste and DFM fixes, BOM/CPL corrections. | nothing |
+
+- **Spin lifecycle.** Spin 2 starts at `2.0.0` and moves through `2.0.1`, `2.1.0`, `2.1.1` and so on. Whatever version is current when it passes Gate 2 is the one ordered, for example `2.1.1`. That version is tagged and frozen, and the next change starts `3.0.0`.
+- **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
+- **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
+- **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
+- **Only ordered versions are tagged.** Intermediate versions appear in commit messages and `CHANGELOG.md`.
+- **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `<project>-fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
+- **Before this scheme** the adapter was ordered as `v0.0.1` and the keyer was designed as `v0.0.2`. Those names stay in history. The adapter's next spin is `2.0.0`, since `v0.0.1` counts as its first. The keyer has never been ordered, so its next version is `1.0.0`.
 - **CHANGELOG.md** lists what changed in each version and why, including review findings fixed.
 
 ## Package and deliverables

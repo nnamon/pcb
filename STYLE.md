@@ -21,7 +21,7 @@ Applies to everything in this repo: READMEs, notes, changelogs, commit messages,
 
 ## Specific formats
 
-- **Commit messages:** imperative subject under 72 characters, prefixed with project and version where relevant: `paddle-keyer v0.0.3: move R11 to 1/4 W 0805`. The body says what changed and why. No "This commit…".
+- **Commit messages:** imperative subject under 72 characters, prefixed with project and version where relevant: `paddle-keyer v1.0.1: move R11 to 1/4 W 0805`. The body says what changed and why. No "This commit…".
 - **Code comments:** say why, not what. Delete any comment that restates the code.
 - **Review findings:** `SEVERITY: what is wrong, where, evidence, fix`. One finding per item. Omit "Overall the design looks good".
 - **Changelog entries:** one line per change, past tense is fine, with the reason after a semicolon or in parentheses.
