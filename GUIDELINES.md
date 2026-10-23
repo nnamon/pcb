@@ -158,6 +158,7 @@ A board is orderable only when every check below passes on the final files, or c
 17. **Firmware vs hardware.**
     - GPIO numbers match the netlist, and input polarity matches the circuit.
     - Outputs have duty limits and timeouts, and a watchdog stops a hang from leaving one on.
+    - Keying and transmit outputs arm only after every input has read idle since power-up, so a wrong switch position or a stuck input at power-up can't key anything.
     - The firmware reports the board version.
     - The build is reproducible, with toolchain and core versions recorded.
 
