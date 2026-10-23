@@ -18,6 +18,11 @@ Applies to everything in this repo: READMEs, notes, changelogs, commit messages,
 12. **Short sentences, active voice.** Name who or what does the action: "JLCPCB rotates the footprint counter-clockwise", not "the footprint is rotated".
 13. **Formatting carries structure, not emphasis.** Use bullets for parallel items and tables for things compared on the same attributes. Use bold only for a term being defined or a label at the start of a bullet. Don't put a heading over a single paragraph.
 14. **Say it once.** Don't restate a point in different words. Link to where it's already written.
+15. **Headings are labels, not taglines.** A heading names what the section contains, as a plain noun phrase in sentence case with no trailing punctuation: "True power measurement", "Bring-up", "Version numbers". Avoid slogan shapes:
+    - The comma-pause reveal: "True power, visualised." or "Power, simplified."
+    - A full stop at the end: "Built for the field."
+    - A question or a pun: "Why a relay?", "Keying it simple"
+    - A colon subtitle that restates the heading: "Bring-up: getting it alive"
 
 ## Specific formats
 
@@ -36,4 +41,5 @@ Applies to everything in this repo: READMEs, notes, changelogs, commit messages,
 | It's important to note that the 27 Ω resistor is an Extended part, which could potentially increase costs. | 27 Ω 0402 (C25100) is Extended (about $3 fee); used 22 Ω (C25092, Basic). |
 | This robust design seamlessly handles power-bank operation. | Runs from a power bank. Some banks switch off below about 70 mA. |
 | In summary, the board is ready for ordering. | (delete) |
+| ## True power, visualised. | ## True power display |
 | Fix stuff | paddle-keyer v0.0.2: add 1 s watchdog; a hang could leave PTT keyed |
