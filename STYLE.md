@@ -23,6 +23,11 @@ Applies to everything in this repo: READMEs, notes, changelogs, commit messages,
     - A full stop at the end: "Built for the field."
     - A question or a pun: "Why a relay?", "Keying it simple"
     - A colon subtitle that restates the heading: "Bring-up: getting it alive"
+16. **No conversational residue.** Files are read by people who weren't in the chat. No agreement, apology or acknowledgement: "You're right", "Good catch", "Fair point", "To be clear", "I should be clearer". No colon setups that announce a point before making it ("Here's the thing:", "The short answer:"). State the corrected fact.
+17. **No dramatised framing.** Say what fails, when and how, as a plain statement.
+    - No cleft sentences used for emphasis: "X is the one that…", "What matters here is…", "The catch is…".
+    - No idioms in place of the mechanism: "bites", "gotcha", "footgun", "the real killer", "under the hood", "the secret sauce".
+18. **No em dashes.** Not for asides, not for afterthoughts, and no spaced hyphen (" - ") standing in for one. End the sentence and start a new one, or use a comma, colon or parentheses. En dashes are for numeric ranges only (`checks 1–6`, `21–22 Oct`).
 
 ## Specific formats
 
@@ -42,4 +47,7 @@ Applies to everything in this repo: READMEs, notes, changelogs, commit messages,
 | This robust design seamlessly handles power-bank operation. | Runs from a power bank. Some banks switch off below about 70 mA. |
 | In summary, the board is ready for ordering. | (delete) |
 | ## True power, visualised. | ## True power display |
+| You're right, and I should be clearer: the relay is needed. | The relay is needed: without 5 V it connects the paddle straight to D+/D−. |
+| The race variant is the one that bites, and it needs concurrency to show up. | The race variant fails only when two tasks write the buffer at once. |
+| Gerbers pass DFM — though the silk is tight — and the fish is fine. | Gerbers pass DFM. Silk clearance is 0.16 mm against a 0.15 mm limit. |
 | Fix stuff | paddle-keyer v0.0.2: add 1 s watchdog; a hang could leave PTT keyed |
