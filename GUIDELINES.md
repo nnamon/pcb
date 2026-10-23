@@ -56,7 +56,7 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
 - **Only ordered versions are tagged.** Intermediate versions appear in commit messages and `CHANGELOG.md`.
 - **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `<project>-fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
-- **Before this scheme** the adapter was ordered as `v0.0.1` and the keyer was designed as `v0.0.2`. Those names stay in history. The adapter's next spin is `2.0.0`, since `v0.0.1` counts as its first. The keyer has never been ordered, so its next version is `1.0.0`.
+- **Before this scheme** boards were numbered `v0.0.x`. Ordered work is renumbered to its spin: the adapter, ordered as `v0.0.1`, is `v1.0.0`, and its next spin is `2.0.0`. Its silkscreen and original file names still say `v0.0.1`. The keyer, designed as `v0.0.2`, was never ordered and continues as `1.0.0`.
 - **CHANGELOG.md** lists what changed in each version and why, including review findings fixed.
 
 ## Package and deliverables
