@@ -1,8 +1,8 @@
 # PCB Project Guidelines: Deliverables, Checks, Formats
 
-Last updated 23 Oct 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
+Last updated 24 Oct 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
 
-Every board in this project ships as one versioned zip that a person can order from without reading the source, and it passes two independent review gates (schematic, then release) plus checks on the final Gerbers before anything is ordered. These rules come from the Quansheng paddle adapter (v0.0.1, two boards) and the paddle keyer (v0.0.2).
+Every board in this project ships as one versioned zip that a person can order from without reading the source, and it passes two independent review gates (schematic, then release) plus checks on the final Gerbers before anything is ordered. These rules come from the Quansheng paddle adapter (v1.0.0, two boards) and the paddle keyer (v0.2.x).
 
 ## Principles
 
@@ -21,7 +21,7 @@ Each stage ends at a gate with written exit criteria. A change after a gate re-r
 1. **Requirements.** A one-page brief at the top of the README, before any part is chosen. It covers function, interfaces and their mating parts, supply range and power budget, size and mechanical limits, environment (handheld, outdoor, near RF), quantity, target cost, and pass/fail acceptance tests. Exit: the person agrees the brief.
 2. **Schematic.** Parts chosen and checks 1–6 pass. Exit: **Gate 1**, an independent schematic review before any layout.
 3. **Layout.** Placement, routing and art; checks 7–17 pass on the final files.
-4. **Release.** **Gate 2**, the independent release review (check 18), then freeze. Files are tagged and checksummed, and any later change to `order/` bumps the version.
+4. **Release.** **Gate 2**, the independent release review (check 18), then freeze. Files are checksummed, and any later change to `order/` bumps the version.
 5. **Order and bring-up.** Order exactly the released files and record the order numbers against the version. Bring-up follows the README, and failures go to the errata.
 
 ## Naming and versioning
@@ -38,7 +38,7 @@ Every file a person uploads or keeps carries the project, board and version in i
 
 - **Version on the board.** The silkscreen carries the full version (`v2.0.3`) and matches the file names. Update it with every bump that changes the order files; a script should do this so it is never missed.
 - **Multiple boards in one project** get a letter and a short shape name (`A_L-shape`, `B_straight`). They share the project's version, and each is its own JLCPCB order with its own files. Alternative designs of the same board, where only one will be ordered, share the version with a letter suffix (`0.2.1a`, `0.2.1b`) and each has its own board folder.
-- **Version control.** Design sources and scripts live in this repository (`nnamon/claude-pcb`) with a tag per ordered version (`paddle-keyer-v1.2.0`), so any ordered board can be regenerated exactly.
+- **Version control.** Design sources and scripts live in this repository (`nnamon/claude-pcb`) with a tag per version (`paddle-keyer-v1.2.0`), so any board, ordered or not, can be regenerated exactly.
 
 ### Version numbers
 
@@ -54,7 +54,7 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 - **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
 - **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
-- **Only ordered versions are tagged.** Intermediate versions appear in commit messages and `CHANGELOG.md`.
+- **Every version is tagged** when it is committed: hardware `<project>-v<x.y.z>`, firmware `<project>-fw-v<x.y.z>`, annotated. The tag message says whether the version was ordered; an ordered version's tag also carries the JLCPCB order numbers once known (add them with a note in `NOTES.md`, since tags are never moved).
 - **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `<project>-fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
 - **CHANGELOG.md** lists what changed in each version and why, including review findings fixed.
 
@@ -183,7 +183,7 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 | Vias | 0.3 mm drill / 0.6 mm pad | Standard process |
 | Hole-to-hole, different nets | ≥ 0.5 mm edge to edge (design to 0.56) | Means ≥ 0.2 mm copper between via pads, including vias next to NPTH pegs |
 | Copper to routed edge | ≥ 0.3 mm | JLCPCB guideline |
-| Silkscreen | ink-jet; lines ≥ 0.15 mm, text ≥ 1.0 mm | High-precision allows 0.1 / 0.8 mm but cost 4× here |
+| Silkscreen | ink-jet; lines ≥ 0.15 mm; text ≥ 0.6 mm cap height in a bold font (Inter ExtraBold), 1.0 mm where there is room | JLCPCB asks for 0.8 mm; 0.6 mm bold text with 0.15 mm strokes is the project's accepted floor until the adapter A resolution test is back. Polarity marks are shapes, not text. High-precision silkscreen costs 4× here |
 | Assembly | Economic, top side only | Standard PCBA is $25 setup per side and forces a 70 × 70 mm panel with rails |
 
 **Part selection**
