@@ -121,6 +121,9 @@ A board is orderable only when every check below passes on the final files, or c
    - Logic-level MOSFETs for 3.3 V gate drive.
    - Solve each transistor stage's DC operating point, feedback included, and rate its parts from that solution rather than the intended current. On Nightjar 0.1.0 a collector-base feedback resistor set 18 mA where the comment said 10 mA, and an emitter resistor ran at 108 %.
    - A power amplifier's load line includes the output network's loss, and its harmonic terminations are part of the design. Nightjar 0.1.0's load ignored a 0.75 dB loss and left the drain inductive at 2f; together they cut 10 W to an estimated 2–6 W.
+   - A transmitter's PA and driver are simulated large-signal with the maker's SPICE models, from the exciter's real source impedance to the antenna, at every supply and load corner: SWR 3 at all phases, open, short, and the drive with the level control failed. Report output power, drain peaks against the rating, dissipation and junction temperature, and run a no-drive kick test into a short and an open. On Nightjar 0.1.0 this found a 70 MHz drain ring reaching 91 V of 100 V, a 3.5 MHz oscillation into a short, and an op-amp exciter that could not reach 10 W in the slow-part corner; linear network models had shown none of them.
+   - Name the heat sink and its mounting. Size it for continuous carrier at the maximum ambient, then derive the fold-back time from the device's transient thermal impedance at the worst fault dissipation.
+   - An op-amp drives at most the capacitive load its datasheet allows. A reference buffer feeding a large decoupling capacitor needs an isolation resistor inside the feedback loop; one driving a switch at RF needs a hold capacitor at the switch, since its open-loop output impedance is tens of ohms there.
 5. **Protection and defined states.**
    - ESD protection on lines a person or cable touches.
    - Reverse-polarity and overcurrent protection where power comes in.
@@ -131,6 +134,10 @@ A board is orderable only when every check below passes on the final files, or c
    - No floating inputs, and outputs safe at reset and when unpowered.
    - No back-powering through I/O from a connected device.
    - RC corners well away from the signal; simulate (SPICE) any analog block whose behaviour depends on values.
+   - Prefer an integrated protection part (eFuse, surge stopper) to a discrete feedback clamp. A discrete clamp is a control loop: check its phase margin over part spread and temperature, and set its threshold from a temperature-stable reference, not a zener at a few microamps. On Nightjar 0.1.0 a zener-referenced clamp had 4–14° of margin and moved 2 V with temperature.
+   - Every capacitor's surge or rush-current rating holds at hot-plug (polymer types are often limited to about 10 A), and every pass transistor's pulsed rating holds at the inrush the lead allows.
+   - An input protected by a series resistor, a clamp and a pull-up still reaches a valid logic low when the far end is pulled to ground: the pull-up must be several times the series resistor. Check the unpowered case too: the clamp must hold the pin under its limit with the processor off.
+   - Sum the datasheet maximum currents before setting a current acceptance limit.
 6. **Design for test.** Test points on every rail and GND, programming and debug access (SWD, BOOT), and acceptance tests that can run without probing fine-pitch pins. ERC is clean.
 
 **Layout**
