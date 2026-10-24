@@ -22,7 +22,7 @@ Each stage ends at a gate with written exit criteria. A change after a gate re-r
 2. **Schematic.** Parts chosen and checks 1–6 pass. Exit: **Gate 1**, an independent schematic review before any layout.
 3. **Layout.** Placement, routing and art; checks 7–17 pass on the final files.
 4. **Release.** **Gate 2**, the independent release review (check 18), then freeze. Files are checksummed, and any later change to `order/` bumps the version.
-5. **Order and bring-up.** Order exactly the released files and record the order numbers against the version. Bring-up follows the README, and failures go to the errata.
+5. **Order and bring-up.** Order exactly the released files and record the order in `NOTES.md` against the version. Bring-up follows the README, and failures go to the errata.
 
 ## Naming and versioning
 
@@ -54,7 +54,7 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 - **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
 - **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
-- **Every version is tagged** when it is committed: hardware `<project>-v<x.y.z>`, firmware `<project>-fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered; an ordered version's tag also carries the JLCPCB order numbers once known (add them with a note in `NOTES.md`, since tags are never moved).
+- **Every version is tagged** when it is committed: hardware `<project>-v<x.y.z>`, firmware `<project>-fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered.
 - **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `<project>-fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
 - **CHANGELOG.md** lists what changed in each version and why, including review findings fixed.
 
