@@ -184,7 +184,7 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 | Vias | 0.3 mm drill / 0.6 mm pad | Standard process |
 | Hole-to-hole, different nets | ≥ 0.5 mm edge to edge (design to 0.56) | Means ≥ 0.2 mm copper between via pads, including vias next to NPTH pegs |
 | Copper to routed edge | ≥ 0.3 mm | JLCPCB guideline |
-| Silkscreen | ink-jet; lines ≥ 0.15 mm; text ≥ 0.6 mm cap height in a bold font (Inter ExtraBold), 1.0 mm where there is room | JLCPCB asks for 0.8 mm; 0.6 mm bold text with 0.15 mm strokes is the project's accepted floor until the adapter A resolution test is back. Polarity marks are shapes, not text. High-precision silkscreen costs 4× here |
+| Silkscreen | ink-jet; lines ≥ 0.15 mm; text ≥ 0.6 mm cap height in a bold font (Inter ExtraBold), 1.0 mm where there is room | JLCPCB asks for 0.8 mm; 0.6 mm bold text with 0.15 mm strokes is the project's floor. The adapter A test (Oct 2026, ink-jet) printed separate dots from 0.12 mm and merged 0.10 mm, so 0.15 mm strokes have margin. Polarity marks are shapes, not text. High-precision silkscreen costs 4× here |
 | Assembly | Economic, top side only | Standard PCBA is $25 setup per side and forces a 70 × 70 mm panel with rails |
 
 **Part selection**
