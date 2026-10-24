@@ -113,7 +113,7 @@ A board is orderable only when every check below passes on the final files, or c
 
 1. **Requirements trace.** Every requirement maps to a circuit block or firmware feature, and every block maps back to a requirement. This catches parts that do nothing.
 2. **Pins against the datasheet.** Map every IC, connector and polarised part by pad position against the datasheet and the EasyEDA footprint and symbol. tscircuit's JLCPCB import swapped VIN and VOUT on the XC6206 LDO.
-3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Prefer Basic, and flag low stock in the README.
+3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Prefer Basic, and flag low stock in the README. A part with stock under 20 times the need, or under 1000, goes in a buy-ahead table: the owner buys it into the JLCPCB parts library (or the LCSC cart if hand-fitted) before ordering.
 4. **Ratings and margins.**
    - Resistors at ≤ 50 % of rated power (I²R × duty).
    - MLCCs rated ≥ 2× working voltage, since DC bias cuts their capacitance.
