@@ -119,10 +119,14 @@ A board is orderable only when every check below passes on the final files, or c
    - MLCCs rated ≥ 2× working voltage, since DC bias cuts their capacitance.
    - Semiconductors within voltage and current ratings with margin.
    - Logic-level MOSFETs for 3.3 V gate drive.
+   - Solve each transistor stage's DC operating point, feedback included, and rate its parts from that solution rather than the intended current. On Nightjar 0.1.0 a collector-base feedback resistor set 18 mA where the comment said 10 mA, and an emitter resistor ran at 108 %.
+   - A power amplifier's load line includes the output network's loss, and its harmonic terminations are part of the design. Nightjar 0.1.0's load ignored a 0.75 dB loss and left the drain inductive at 2f; together they cut 10 W to an estimated 2–6 W.
 5. **Protection and defined states.**
    - ESD protection on lines a person or cable touches.
    - Reverse-polarity and overcurrent protection where power comes in.
    - A clamp diode on every inductive load.
+   - Trace the DC path through every RF network. Wherever a DC rail meets an inductor to ground or a connector, a series capacitor breaks the path. Nightjar 0.1.0 had none at the PA drain, so VSYS reached the antenna and shorted through the receive inductors.
+   - A transmit/receive switch has a hardware interlock, so the transmitter cannot be driven while the receive path is unprotected.
    - USB-C CC pull-downs of 5.1 kΩ.
    - No floating inputs, and outputs safe at reset and when unpowered.
    - No back-powering through I/O from a connected device.
