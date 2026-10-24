@@ -210,7 +210,7 @@ The README's ordering steps list only what differs from JLCPCB's defaults, per b
 4. **Assembly:** Economic, top side, qty 5 (minimum); Confirm parts placement: Yes; depanel and edge rails if cheap.
 5. **Assembly remark:** call out intentional overhangs, for example a USB-C plug past the board edge, and repeat "rails outside the outline, no tooling holes inside".
 6. **BOM/CPL:** upload that board's two CSVs; check every line is matched and quantities are right; in the placement preview, check polarised and edge parts.
-7. **Record the order:** order numbers, options chosen and total cost go in `<project>/NOTES.md` against the version.
+7. **Record the order:** options chosen and the order and arrival dates go in `<project>/NOTES.md` against the version; order numbers and cost only if they are to hand.
 8. **After paying:** watch email for a day. JLCPCB sends engineering questions before production, and the order waits for an answer.
 
 Flag in the README any option that changes price a lot (ENIG, high-precision silkscreen) so the person can decide by clicking it.
