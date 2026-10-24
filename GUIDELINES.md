@@ -126,6 +126,7 @@ A board is orderable only when every check below passes on the final files, or c
    - USB-C CC pull-downs of 5.1 kΩ.
    - No floating inputs, and outputs safe at reset and when unpowered.
    - No back-powering through I/O from a connected device.
+   - Lines another device reads (a radio's key input, say): read how its firmware samples them before adding filtering, ESD parts or any other load. Note the pull-up, any discharge or settle timing, and what it does with an ambiguous read, then set a capacitance and leakage budget for the line. The NR7Y firmware samples its USB paddle pins microseconds after discharging them, so the v1.0.0 adapter's 1 nF RF capacitors held a released dah pressed.
    - RC corners well away from the signal; simulate (SPICE) any analog block whose behaviour depends on values.
 6. **Design for test.** Test points on every rail and GND, programming and debug access (SWD, BOOT), and acceptance tests that can run without probing fine-pitch pins. ERC is clean.
 
