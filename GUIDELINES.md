@@ -22,7 +22,7 @@ Each stage ends at a gate with written exit criteria. A change after a gate re-r
 2. **Schematic.** Parts chosen and checks 1–6 pass. Exit: **Gate 1**, an independent schematic review before any layout.
 3. **Layout.** Placement, routing and art; checks 7–17 pass on the final files.
 4. **Release.** **Gate 2**, the independent release review (check 18), then freeze. Files are checksummed, and any later change to `order/` bumps the version.
-5. **Order and bring-up.** Order exactly the released files and record the order numbers against the version. Bring-up follows the README, and failures go to the errata.
+5. **Order and bring-up.** Order exactly the released files and record the order in `NOTES.md` against the version. Bring-up follows the README, and failures go to the errata.
 
 ## Naming and versioning
 
@@ -133,6 +133,7 @@ A board is orderable only when every check below passes on the final files, or c
    - USB-C CC pull-downs of 5.1 kΩ.
    - No floating inputs, and outputs safe at reset and when unpowered.
    - No back-powering through I/O from a connected device.
+   - Lines another device reads (a radio's key input, say): read how its firmware samples them before adding filtering, ESD parts or any other load. Note the pull-up, any discharge or settle timing, and what it does with an ambiguous read, then set a capacitance and leakage budget for the line. The NR7Y firmware samples its USB paddle pins microseconds after discharging them, so the v1.0.0 adapter's 1 nF RF capacitors held a released dah pressed.
    - RC corners well away from the signal; simulate (SPICE) any analog block whose behaviour depends on values.
    - Prefer an integrated protection part (eFuse, surge stopper) to a discrete feedback clamp. A discrete clamp is a control loop: check its phase margin over part spread and temperature, and set its threshold from a temperature-stable reference, not a zener at a few microamps. On Nightjar 0.1.0 a zener-referenced clamp had 4–14° of margin and moved 2 V with temperature.
    - Every capacitor's surge or rush-current rating holds at hot-plug (polymer types are often limited to about 10 A), and every pass transistor's pulsed rating holds at the inrush the lead allows.
@@ -195,7 +196,7 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 | Vias | 0.3 mm drill / 0.6 mm pad | Standard process |
 | Hole-to-hole, different nets | ≥ 0.5 mm edge to edge (design to 0.56) | Means ≥ 0.2 mm copper between via pads, including vias next to NPTH pegs |
 | Copper to routed edge | ≥ 0.3 mm | JLCPCB guideline |
-| Silkscreen | ink-jet; lines ≥ 0.15 mm; text ≥ 0.6 mm cap height in a bold font (Inter ExtraBold), 1.0 mm where there is room | JLCPCB asks for 0.8 mm; 0.6 mm bold text with 0.15 mm strokes is the project's accepted floor until the adapter A resolution test is back. Polarity marks are shapes, not text. High-precision silkscreen costs 4× here |
+| Silkscreen | ink-jet; lines ≥ 0.15 mm; text ≥ 0.6 mm cap height in a bold font (Inter ExtraBold), 1.0 mm where there is room | JLCPCB asks for 0.8 mm; 0.6 mm bold text with 0.15 mm strokes is the project's floor. The adapter A test (Oct 2026, ink-jet) printed separate dots from 0.12 mm and merged 0.10 mm, so 0.15 mm strokes have margin. Polarity marks are shapes, not text. High-precision silkscreen costs 4× here |
 | Assembly | Economic, top side only | Standard PCBA is $25 setup per side and forces a 70 × 70 mm panel with rails |
 
 **Part selection**
@@ -221,7 +222,7 @@ The README's ordering steps list only what differs from JLCPCB's defaults, per b
 4. **Assembly:** Economic, top side, qty 5 (minimum); Confirm parts placement: Yes; depanel and edge rails if cheap.
 5. **Assembly remark:** call out intentional overhangs, for example a USB-C plug past the board edge, and repeat "rails outside the outline, no tooling holes inside".
 6. **BOM/CPL:** upload that board's two CSVs; check every line is matched and quantities are right; in the placement preview, check polarised and edge parts.
-7. **Record the order:** order numbers, options chosen and total cost go in `<project>/NOTES.md` against the version.
+7. **Record the order:** options chosen and the order and arrival dates go in `<project>/NOTES.md` against the version; order numbers and cost only if they are to hand.
 8. **After paying:** watch email for a day. JLCPCB sends engineering questions before production, and the order waits for an answer.
 
 Flag in the README any option that changes price a lot (ENIG, high-precision silkscreen) so the person can decide by clicking it.
