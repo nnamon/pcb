@@ -113,21 +113,32 @@ A board is orderable only when every check below passes on the final files, or c
 
 1. **Requirements trace.** Every requirement maps to a circuit block or firmware feature, and every block maps back to a requirement. This catches parts that do nothing.
 2. **Pins against the datasheet.** Map every IC, connector and polarised part by pad position against the datasheet and the EasyEDA footprint and symbol. tscircuit's JLCPCB import swapped VIN and VOUT on the XC6206 LDO.
-3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Prefer Basic, and flag low stock in the README.
+3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Prefer Basic, and flag low stock in the README. A part with stock under 20 times the need, or under 1000, goes in a buy-ahead table: the owner buys it into the JLCPCB parts library (or the LCSC cart if hand-fitted) before ordering.
 4. **Ratings and margins.**
    - Resistors at ≤ 50 % of rated power (I²R × duty).
    - MLCCs rated ≥ 2× working voltage, since DC bias cuts their capacitance.
    - Semiconductors within voltage and current ratings with margin.
    - Logic-level MOSFETs for 3.3 V gate drive.
+   - Solve each transistor stage's DC operating point, feedback included, and rate its parts from that solution rather than the intended current. On Nightjar 0.1.0 a collector-base feedback resistor set 18 mA where the comment said 10 mA, and an emitter resistor ran at 108 %.
+   - A power amplifier's load line includes the output network's loss, and its harmonic terminations are part of the design. Nightjar 0.1.0's load ignored a 0.75 dB loss and left the drain inductive at 2f; together they cut 10 W to an estimated 2–6 W.
+   - A transmitter's PA and driver are simulated large-signal with the maker's SPICE models, from the exciter's real source impedance to the antenna, at every supply and load corner: SWR 3 at all phases, open, short, and the drive with the level control failed. Report output power, drain peaks against the rating, dissipation and junction temperature, and run a no-drive kick test into a short and an open. Stability also needs large disturbances: key-up from full drive and from over-drive, an abrupt cut (interlock, reset), into every load, watched for at least 1 ms afterwards. Small kicks only prove the operating point is stable; on Nightjar 0.1.0 a 1 kΩ drain-gate feedback damped every kick but latched a 3 MHz limit cycle after a key-up into a short (round 7). Then check every firmware protection rule against that model in time (bias recovery, thermal tails, calibration start points), since rules written from steady-state figures tripped on normal keying (round 10). On Nightjar 0.1.0 this found a 70 MHz drain ring reaching 91 V of 100 V, a 3.5 MHz oscillation into a short, and an op-amp exciter that could not reach 10 W in the slow-part corner; linear network models had shown none of them.
+   - Name the heat sink and its mounting. Size it for continuous carrier at the maximum ambient, then derive the fold-back time from the device's transient thermal impedance at the worst fault dissipation.
+   - An op-amp drives at most the capacitive load its datasheet allows. A reference buffer feeding a large decoupling capacitor needs an isolation resistor inside the feedback loop; one driving a switch at RF needs a hold capacitor at the switch, since its open-loop output impedance is tens of ohms there.
 5. **Protection and defined states.**
    - ESD protection on lines a person or cable touches.
    - Reverse-polarity and overcurrent protection where power comes in.
    - A clamp diode on every inductive load.
+   - Trace the DC path through every RF network. Wherever a DC rail meets an inductor to ground or a connector, a series capacitor breaks the path. Nightjar 0.1.0 had none at the PA drain, so VSYS reached the antenna and shorted through the receive inductors.
+   - A transmit/receive switch has a hardware interlock, so the transmitter cannot be driven while the receive path is unprotected.
    - USB-C CC pull-downs of 5.1 kΩ.
    - No floating inputs, and outputs safe at reset and when unpowered.
    - No back-powering through I/O from a connected device.
    - Lines another device reads (a radio's key input, say): read how its firmware samples them before adding filtering, ESD parts or any other load. Note the pull-up, any discharge or settle timing, and what it does with an ambiguous read, then set a capacitance and leakage budget for the line. The NR7Y firmware samples its USB paddle pins microseconds after discharging them, so the v1.0.0 adapter's 1 nF RF capacitors held a released dah pressed.
    - RC corners well away from the signal; simulate (SPICE) any analog block whose behaviour depends on values.
+   - Prefer an integrated protection part (eFuse, surge stopper) to a discrete feedback clamp. A discrete clamp is a control loop: check its phase margin over part spread and temperature, and set its threshold from a temperature-stable reference, not a zener at a few microamps. On Nightjar 0.1.0 a zener-referenced clamp had 4–14° of margin and moved 2 V with temperature.
+   - Every capacitor's surge or rush-current rating holds at hot-plug (polymer types are often limited to about 10 A), and every pass transistor's pulsed rating holds at the inrush the lead allows.
+   - An input protected by a series resistor, a clamp and a pull-up still reaches a valid logic low when the far end is pulled to ground: the pull-up must be several times the series resistor. Check the unpowered case too: the clamp must hold the pin under its limit with the processor off.
+   - Sum the datasheet maximum currents before setting a current acceptance limit.
 6. **Design for test.** Test points on every rail and GND, programming and debug access (SWD, BOOT), and acceptance tests that can run without probing fine-pitch pins. ERC is clean.
 
 **Layout**
