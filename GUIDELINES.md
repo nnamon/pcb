@@ -113,6 +113,8 @@ A board is orderable only when every check below passes on the final files, or c
 
 1. **Requirements trace.** Every requirement maps to a circuit block or firmware feature, and every block maps back to a requirement. This catches parts that do nothing.
 2. **Pins against the datasheet.** Map every IC, connector and polarised part by pad position against the datasheet and the EasyEDA footprint and symbol. tscircuit's JLCPCB import swapped VIN and VOUT on the XC6206 LDO.
+   - For every connector, check the mating part as it will physically meet the board: gender (badges carry the female SAO header, add-ons the male), the side the cable or board enters, and its orientation when fitted. Read the connector's section drawing for which side the FFC/FPC enters relative to the solder tails, and derive the pin-to-pad map from the flat cable's real path. On nandynarwhals-defcon-sg-2027-badge 0.1.0 the SAO header was male and the e-paper map assumed the wrong mouth side; 0.2.0 first reversed every e-paper pin.
+   - For a module on a header, confirm which way its header is fitted (on a Pi-style module, pins up on the component side means it mounts face down) and map the socket from that flip. Check that the module's holes and header stay aligned after the flip.
 3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Prefer Basic, and flag low stock in the README. A part with stock under 20 times the need, or under 1000, goes in a buy-ahead table: the owner buys it into the JLCPCB parts library (or the LCSC cart if hand-fitted) before ordering.
 4. **Ratings and margins.**
    - Resistors at ≤ 50 % of rated power (I²R × duty).
