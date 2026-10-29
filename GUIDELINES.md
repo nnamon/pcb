@@ -221,6 +221,9 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 - Put rail test points beside their sources. A strip of test points far from the power section pulls wide power traces across the ground plane under fast signals, and can run unfused cell copper next to GND.
 - Give every decoupling capacitor and IC ground pin its own via to the ground plane, and give every layer change on a high-current path enough vias for its current (about 1 A per 0.3 mm via).
 - Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint.
+- Scripts that finish the router's open connections must never complete a power net, and must log every trace and via they add. On the badge carrier one closed VBAT and VBOOST with 0.2 mm traces across the ground kept under the boost IC, and a `tail -1` in the pipeline hid it; only the current check caught it.
+- Check where the power nets have to cross before restricting them to one layer. Two power nets that must cross (a boost output going one way, its input the other) need a planned layer change with enough vias, or the router leaves them open.
+- When filling power nets with copper, first give every power net a strip along its own traces, then grow the large fills. A single pass lets the first big fill take the room a neighbouring power trace needs.
 - Leave no room for, and ask JLCPCB not to add, order numbers or tooling holes inside small boards; plan for edge rails instead.
 - Keep a readable hand-written source with datasheet pin names next to the generated files.
 
