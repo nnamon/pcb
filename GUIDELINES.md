@@ -153,6 +153,10 @@ A board is orderable only when every check below passes on the final files, or c
    - Unbroken return paths under fast signals.
    - USB pairs and crystals routed per the MCU's hardware guide.
 10. **Mechanical fit.** Check connector positions and overhangs against the mating parts' drawings, plus keep-outs and the outline. When fit matters, use a 1:1 paper print with the real parts laid on it, or a STEP check against the enclosure.
+    - A flat cable or FPC must reach its connector with the full insertion depth, measured from the cable drawing's length tolerance to the connector's contact point. The badge carrier 0.3.0 tail stopped 1 mm short of J401's mouth.
+    - A connector mouth sits flush with or past the board edge when the plug's overmold is wider than the receptacle.
+    - Antenna keep-outs come from where the antenna is on the module drawing, not from the module's outline.
+    - Test points must be reachable with every module fitted.
 
 **Final Gerbers and drill files**
 
@@ -214,6 +218,9 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 - Treat a through-hole pad as copper on both sides when packing parts and checking overlaps. A same-side check let an SMD capacitor sit on a back-side connector's plated pad (badge carrier, Oct 2026).
 - When writing Gerber regions with holes (pours, silkscreen), draw them largest first. A hole is drawn in clear polarity and erases anything drawn before it inside the hole: on the badge carrier it wiped the text inside the holder outline, and would have wiped pour islands of other nets.
 - Freerouting leaves fixed (pre-routed) wires and vias out of its session file, so add them back when importing the routing.
+- Put rail test points beside their sources. A strip of test points far from the power section pulls wide power traces across the ground plane under fast signals, and can run unfused cell copper next to GND.
+- Give every decoupling capacitor and IC ground pin its own via to the ground plane, and give every layer change on a high-current path enough vias for its current (about 1 A per 0.3 mm via).
+- Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint.
 - Leave no room for, and ask JLCPCB not to add, order numbers or tooling holes inside small boards; plan for edge rails instead.
 - Keep a readable hand-written source with datasheet pin names next to the generated files.
 
