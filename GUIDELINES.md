@@ -212,6 +212,8 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 
 - Treat every part body as a silkscreen obstacle, not just its pads, or labels end up under parts.
 - Treat a through-hole pad as copper on both sides when packing parts and checking overlaps. A same-side check let an SMD capacitor sit on a back-side connector's plated pad (badge carrier, Oct 2026).
+- When writing Gerber regions with holes (pours, silkscreen), draw them largest first. A hole is drawn in clear polarity and erases anything drawn before it inside the hole: on the badge carrier it wiped the text inside the holder outline, and would have wiped pour islands of other nets.
+- Freerouting leaves fixed (pre-routed) wires and vias out of its session file, so add them back when importing the routing.
 - Leave no room for, and ask JLCPCB not to add, order numbers or tooling holes inside small boards; plan for edge rails instead.
 - Keep a readable hand-written source with datasheet pin names next to the generated files.
 
