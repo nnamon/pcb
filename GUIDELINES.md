@@ -1,6 +1,6 @@
 # PCB Project Guidelines: Deliverables, Checks, Formats
 
-Last updated 24 Oct 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
+Last updated 30 Oct 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
 
 Every board in this project ships as one versioned zip that a person can order from without reading the source, and it passes two independent review gates (schematic, then release) plus checks on the final Gerbers before anything is ordered. These rules come from the Quansheng paddle adapter (v1.0.0, two boards) and the paddle keyer (v0.2.x).
 
@@ -51,7 +51,7 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 | PATCH | Iterative change within the spin. | Anything else that changes the order files: a value or part swap with the same function and footprint, routing and clearance fixes, silkscreen and art, paste and DFM fixes, BOM/CPL corrections. | nothing |
 
 - **Spin lifecycle.** Spin 2 starts at `2.0.0` and moves through `2.0.1`, `2.1.0`, `2.1.1` and so on. Whatever version is current when it passes Gate 2 is the one ordered, for example `2.1.1`. That version is tagged and frozen, and the next change starts `3.0.0`.
-- **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
+- **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues, and `VERSION` changes with the branch. On the badge carrier 0.5.0 the cell-input change was routed before Gate 1, which then found a blocker, and the version file still said 0.4.0. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
 - **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
 - **Every version is tagged** when it is committed: hardware `<project>-v<x.y.z>`, firmware `<project>-fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered.
@@ -193,11 +193,12 @@ A board is orderable only when every check below passes on the final files, or c
 
 ## JLCPCB rules and part selection
 
-Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on top; anything outside these numbers needs a stated reason in the README.
+Design to JLCPCB's standard 2-layer process with Economic assembly, all assembled parts on top; anything outside these numbers needs a stated reason in the README. Hand-fitted parts may go on the back.
 
 | Rule | Project default | Why |
 | --- | --- | --- |
-| Layers, thickness, finish | 2 layers, 1.6 mm, 1 oz copper, HASL | Cheapest; HASL is fine for 0.5 mm-pitch USB-C |
+| Layers, thickness, finish | 2 layers, 1.6 mm, 1 oz copper, HASL. 4 layers when the owner allows it: L2 and L3 solid GND, inner copper 0.5 oz | Cheapest; HASL is fine for 0.5 mm-pitch USB-C. On the badge carrier the power copper split a 2-layer ground under the power stage |
+| Inner copper to holes (4 layers) | ≥ 0.3 mm from a component hole, ≥ 0.2 mm from a via (design to 0.35) | JLCPCB multilayer capabilities, checked 30 Oct 2026 |
 | Trace / gap | 0.15 / 0.15 mm | Standard process |
 | Vias | 0.3 mm drill / 0.6 mm pad | Standard process |
 | Hole-to-hole, different nets | ≥ 0.5 mm edge to edge (design to 0.56) | Means ≥ 0.2 mm copper between via pads, including vias next to NPTH pegs |
@@ -218,6 +219,8 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 - Treat a through-hole pad as copper on both sides when packing parts and checking overlaps. A same-side check let an SMD capacitor sit on a back-side connector's plated pad (badge carrier, Oct 2026).
 - When writing Gerber regions with holes (pours, silkscreen), draw them largest first. A hole is drawn in clear polarity and erases anything drawn before it inside the hole: on the badge carrier it wiped the text inside the holder outline, and would have wiped pour islands of other nets.
 - Freerouting leaves fixed (pre-routed) wires and vias out of its session file, so add them back when importing the routing.
+- Seed the router from an earlier run only while every pad that run touched is where it was. The router keeps seeded copper, so wires to a removed part or under a part the packer moved become shorts. Drop seeded copper at removed pads and pin moved parts at the seed run's positions, or route fresh.
+- tscircuit writes 2-layer Gerber attributes. On 4 layers, set the plated drill to span L1–L4 and B_Cu to copper layer 4, or the bottom clashes with In1_Cu.
 - Put rail test points beside their sources. A strip of test points far from the power section pulls wide power traces across the ground plane under fast signals, and can run unfused cell copper next to GND.
 - Give every decoupling capacitor and IC ground pin its own via to the ground plane, and give every layer change on a high-current path enough vias for its current (about 1 A per 0.3 mm via).
 - Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint.
@@ -231,7 +234,7 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 
 The README's ordering steps list only what differs from JLCPCB's defaults, per board, so a person can order without a back-and-forth.
 
-1. **Upload** only that board's Gerber zip from `order/`. Confirm JLCPCB detects 2 layers and the expected size, which the README states. "Detected 0 layer" means nothing was read. Step through JLCPCB's layer preview and compare it with the renders.
+1. **Upload** only that board's Gerber zip from `order/`. Confirm JLCPCB detects the layer count and size the README states. "Detected 0 layer" means nothing was read. Step through JLCPCB's layer preview and compare it with the renders.
 2. **PCB options:** Remove Mark; colour and silkscreen technology as chosen; everything else default.
 3. **PCB remark** (paste-ready in the README): name anything intentional that looks odd, such as bottom art, exposed copper or test patterns, and add: "Please do not add tooling holes, order numbers or marks inside the board outline."
 4. **Assembly:** Economic, top side, qty 5 (minimum); Confirm parts placement: Yes; depanel and edge rails if cheap.
