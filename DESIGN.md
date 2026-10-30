@@ -143,6 +143,14 @@ Every command:
   - one column per unit for results.
 - **`CHECKSUMS.txt`** and the verification-record rows for the README.
 
+## Testing and contract (milestone M0)
+
+- **The suite:** `cargo xtask test` (see `tests/README.md`), run by CI in the pinned image (`ci/Dockerfile`, published to GHCR by `.github/workflows/pcb-ci-image.yml`; tested by `pcb-test.yml`).
+- **Output contract:** every command keeps it (`src/contract.rs`, `schemas/`, `docs/codes.md`).
+- **One write path:** every write goes through `src/gate.rs`.
+- **One door to KiCad:** every KiCad call goes through `src/kicad.rs`.
+- **Pinned tools:** `pcb doctor` checks the versions and the KiCad behaviours pcb works around.
+
 ## Planning drawings
 
 `pcb drawing placement` writes the Gate 1 placement proposal in the house drawing style, written down in `docs/drawing-standard.md` from the badge's NNDC27-CAR-PLC-001 (A3 at 1:1, zoned frame, title block, datum A ordinates, leaders, mirrored bottom view with a stack-up section, placement table). All its facts come from the board and `pcb.toml [drawing]`. Milestone M4 in the proposal.
