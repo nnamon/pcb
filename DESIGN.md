@@ -197,3 +197,15 @@ Exit criteria: VBUS_F and U106's ILM pin connected; nothing outside the region c
 - **ILM: not met.** U106 pin 10 is boxed in on the top layer by C116 pad 1, a GND via and the USB_SENSE via, with no room for a via of its own. The only routes Freerouting found need GND re-routed as tracks, which splits GND elsewhere. `pcb route` refused those results itself. This moves to spike 3: with GND as a plane, its vias stitch to the plane instead of needing tracks, and the area can be re-routed.
 
 After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB_SENSE lets the router join ILM, but the ripped GND vias leave 14 GND pads unconnected, because Freerouting treats the pour outline as already connecting them. The refused results went to `.rejected` files. What is left needs a hand edit (moving the GND via at 49.55, 27.80 that boxes in U106 pin 10) and the VBUS_F link at 0.3 mm. Both need a `pcb` command for explicit track and via edits, checked by the same DRC gate.
+
+## Spike 3: KiCad zones and the coil as a net tie (30 Oct 2026)
+
+Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/verify_zones.py`, whose sensitivity is shown by `tests/zone_mutations.py` (7 of 7 caught).
+
+- **NFC coil:** the 49 spiral segments became copper inside L601, a net tie for pads 1 and 3. The two coil vias became L601 pads 3 and 4, and the bottom bridge and top link stay NFC_AC1 tracks. The coil copper is unchanged (same ends and widths). KiCad DRC's 4 coil clearance errors and 2 mask bridges are gone.
+- **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 35 power fills grown from each power net's copper; GND pours on both outer layers. Copper areas are within about 20 % of the old scripts' pours per net and layer; the top GND pour is about 17 % smaller.
+- **KiCad DRC:** 336 → 215 violations. Dangling vias 115 → 1, clearance 8 → 4 (the LED_A4 via at BT101, known), GND unconnected 2 → 1 (U501 pad 21, known), plus ILM. One new item: a starved thermal on J102 pad 4, which needs a pad override or a design-rule exception.
+- **Fill time:** about 2 s.
+- **KiCad traps found:** zones created and filled in one process kept islands that DRC then calls isolated, so filling is a separate step; a zone given several outlines from Python saved only the first, so each polygon is its own zone; footprint pads and shapes need their local positions set; rule areas must name only the board's own copper layers.
+
+Not yet done: stitching vias between the outer pours, a pad override for J102 pad 4, and the Rust `pcb zone` command that replaces the prototype.
