@@ -65,8 +65,8 @@ Applies to everything in this repo: READMEs, notes, changelogs, commit messages,
 | The race variant is the one that bites, and it needs concurrency to show up. | The race variant fails only when two tasks write the buffer at once. |
 | Gerbers pass DFM — though the silk is tight — and the fish is fine. | Gerbers pass DFM. Silk clearance is 0.16 mm against a 0.15 mm limit. |
 | Fix stuff | paddle-keyer v0.0.2: add 1 s watchdog; a hang could leave PTT keyed |
-| It does a full-text search over every HTTP response body that AVID-0000503 and AVID-0000504 have saved, and a 7-day search usually comes back in a few seconds. | 22641 searches the page bodies saved by AVID-0000503 and AVID-0000504. |
-| ADVANS records everything its scanners observe in the advans-prod Postgres database exposed through ais-redash, which makes it the practical way to find live hosts. | ADVANS stores everything its scanners see in the `advans-prod` database on ais-redash, so it's the easiest place to find live hosts. |
+| It does a full-text search over every HTTP response body that ID-0000503 and ID-0000504 have saved, and a 7-day search usually comes back in a few seconds. | 22641 searches the page bodies saved by ID-0000503 and ID-0000504. |
+| NOA records everything its scanners observe in the noa-prod Postgres database exposed through ais-redash, which makes it the practical way to find live hosts. | NOA stores everything its scanners see in the `noa-prod` database on ais-redash, so it's the easiest place to find live hosts. |
 | Suppose you are writing a Grafana version plugin. Running 22650 with term = grafana establishes what already exists. | 1. Check for an existing plugin: run 22650 with `term` = `grafana`. |
 | The 91 unidentified hosts are the ones that repay reading, and 22646 decodes what they actually sent. | Run 22646 with `port` = `6379` to see what the unidentified hosts sent. |
 | That last row is the precondition to check before scanning. | Check the port shows `http`. HTTP plugins don't run on other ports. |
