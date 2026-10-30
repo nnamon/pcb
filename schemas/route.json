@@ -1,0 +1,91 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:route",
+ "title": "pcb route output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/route/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "ripped_segments",
+     "ripped_vias",
+     "added_segments",
+     "added_vias",
+     "dropped_outside",
+     "dropped_other_nets",
+     "dropped_duplicates",
+     "nets_routed",
+     "seconds",
+     "fixed",
+     "regressions",
+     "drc_total_before",
+     "drc_total_after",
+     "still_open",
+     "net_widths",
+     "written",
+     "pruned_segments",
+     "split_tracks",
+     "joins_outside_region",
+     "declared_pinless_nets",
+     "freerouting_log"
+    ],
+    "properties": {
+     "regressions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "fixed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "still_open": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "nets_routed": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "integer",
+       "minimum": 0
+      }
+     },
+     "net_widths": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "number"
+      }
+     },
+     "seconds": {
+      "type": "number"
+     }
+    }
+   }
+  }
+ }
+}

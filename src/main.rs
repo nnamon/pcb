@@ -1,6 +1,7 @@
 //! `pcb`: board tooling for agents. See DESIGN.md.
 
 mod board;
+mod contract;
 mod import_tscircuit;
 mod render;
 mod route;
@@ -9,6 +10,7 @@ mod sexpr;
 use anyhow::{Context, Result, bail};
 use board::Board;
 use clap::{Parser, Subcommand};
+use contract::{Outcome, Warning};
 use serde_json::json;
 
 #[derive(Parser)]
@@ -105,32 +107,73 @@ fn parse_region(s: &str) -> Result<(f64, f64, f64, f64)> {
     Ok((v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])))
 }
 
-fn emit(json_mode: bool, ok: bool, human: String, data: serde_json::Value) -> Result<()> {
-    if json_mode {
-        println!("{}", serde_json::to_string_pretty(&json!({ "ok": ok, "data": data }))?);
-    } else {
-        println!("{human}");
+/// What a command hands back: printed through the output contract (src/contract.rs) by `main`.
+struct Reply {
+    outcome: Outcome,
+    written: Option<String>,
+    warnings: Vec<Warning>,
+    human: String,
+    data: serde_json::Value,
+}
+
+fn emit(_json_mode: bool, ok: bool, human: String, data: serde_json::Value) -> Result<Reply> {
+    Ok(Reply { outcome: if ok { Outcome::Done } else { Outcome::Rejected }, written: None, warnings: vec![], human, data })
+}
+
+fn command_name(c: &Cmd) -> &'static str {
+    match c {
+        Cmd::Roundtrip { .. } => "roundtrip",
+        Cmd::Info { .. } => "info",
+        Cmd::ImportTscircuit { .. } => "import-tscircuit",
+        Cmd::Route { .. } => "route",
+        Cmd::Render { .. } => "render",
     }
-    if !ok {
-        std::process::exit(1);
-    }
-    Ok(())
 }
 
 fn main() {
-    let cli = Cli::parse();
-    let json_mode = cli.json;
-    if let Err(e) = run(cli) {
-        if json_mode {
-            println!("{}", json!({ "ok": false, "error": format!("{e:#}") }));
-        } else {
-            eprintln!("error: {e:#}");
+    // a usage error keeps the contract too when --json was asked for
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) || !std::env::args().any(|a| a == "--json") {
+                e.exit();
+            }
+            let msg = e.to_string();
+            let v = contract::envelope("usage", Outcome::Refused, None, &[], Some(("usage", msg.trim())), json!({}));
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            std::process::exit(Outcome::Refused.exit_code());
         }
-        std::process::exit(2);
+    };
+    let json_mode = cli.json;
+    let name = command_name(&cli.cmd);
+    let (outcome, value, human) = match run(cli) {
+        Ok(r) => {
+            let v = contract::envelope(name, r.outcome, r.written.as_deref(), &r.warnings, None, r.data);
+            let mut h = r.human;
+            for w in &r.warnings {
+                h += &format!("\nwarning [{}]: {}", w.code, w.message);
+            }
+            (r.outcome, v, h)
+        }
+        Err(e) => {
+            let (outcome, code) = contract::classify(&e);
+            let msg = format!("{e:#}");
+            let v = contract::envelope(name, outcome, None, &[], Some((&code, &msg)), json!({}));
+            (outcome, v, format!("{} [{code}]: {msg}", outcome.name()))
+        }
+    };
+    if json_mode {
+        println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+    } else if outcome == Outcome::Done {
+        println!("{human}");
+    } else {
+        eprintln!("{human}");
     }
+    std::process::exit(outcome.exit_code());
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<Reply> {
     match cli.cmd {
         Cmd::Roundtrip { board } => {
             let src = std::fs::read_to_string(&board)?;
@@ -179,15 +222,13 @@ fn run(cli: Cli) -> Result<()> {
                 let stem = pro.file_stem().and_then(|s| s.to_str()).unwrap_or("board");
                 std::fs::write(&pro, import_tscircuit::project_file(stem))?;
             }
-            for w in &st.warnings {
-                eprintln!("warning: {w}");
-            }
-            emit(
-                cli.json,
-                true,
-                format!("wrote {out}: {} footprints, {} pads, {} nets, {} segments, {} vias", st.footprints, st.pads, st.nets, st.segments, st.vias),
-                json!({ "out": out, "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN, "warnings": st.warnings }),
-            )
+            Ok(Reply {
+                outcome: Outcome::Done,
+                written: Some(out.clone()),
+                warnings: st.warnings.clone(),
+                human: format!("wrote {out}: {} footprints, {} pads, {} nets, {} segments, {} vias", st.footprints, st.pads, st.nets, st.segments, st.vias),
+                data: json!({ "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
+            })
         }
         Cmd::Route { board, region, nets, passes, freerouting, work, rip, layers, timeout, out } => {
             let o = route::Opts {
@@ -211,7 +252,18 @@ fn run(cli: Cli) -> Result<()> {
                 rep.written, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates,
                 rep.still_open, rep.drc_total_before, rep.drc_total_after, rep.fixed.join("\n  "), rep.regressions.join("\n  ")
             );
-            emit(cli.json, rep.regressions.is_empty(), h, serde_json::to_value(&rep)?)
+            let mut warnings: Vec<Warning> = rep.still_open.iter().map(|n| contract::warn("still-open", format!("{n} is still not fully connected"))).collect();
+            warnings.extend(rep.declared_pinless_nets.iter().map(|n| contract::warn("pinless-net", format!("{n} has copper but no pads; declared to Freerouting"))));
+            if rep.joins_outside_region > 0 {
+                warnings.push(contract::warn("join-outside-region", format!("{} joins in the middle of tracks wholly outside the region were left unsplit", rep.joins_outside_region)));
+            }
+            Ok(Reply {
+                outcome: if rep.regressions.is_empty() { Outcome::Done } else { Outcome::Rejected },
+                written: Some(rep.written.clone()),
+                warnings,
+                human: h,
+                data: serde_json::to_value(&rep)?,
+            })
         }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;
@@ -222,7 +274,7 @@ fn run(cli: Cli) -> Result<()> {
                 labels: !no_labels,
             };
             render::png(&b, &o, &out)?;
-            emit(cli.json, true, format!("wrote {out}"), json!({ "png": out }))
+            Ok(Reply { outcome: Outcome::Done, written: Some(out.clone()), warnings: vec![], human: format!("wrote {out}"), data: json!({}) })
         }
     }
 }

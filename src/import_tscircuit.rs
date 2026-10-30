@@ -101,7 +101,7 @@ pub struct Stats {
     pub nets: usize,
     pub segments: usize,
     pub vias: usize,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<crate::contract::Warning>,
 }
 
 /// Union-find over source ports and nets.
@@ -151,7 +151,7 @@ fn sanitize_lib(name: &str) -> String {
 /// net tie later); any other trace that does stops the import, because it is a short.
 pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<(String, Stats)> {
     let d: Vec<Value> = serde_json::from_str(cj).context("circuit JSON")?;
-    let mut warnings = vec![];
+    let mut warnings: Vec<crate::contract::Warning> = vec![];
     for e in &d {
         let t = s(e, "type");
         if !READ.contains(&t) && !ignored(t) {
@@ -181,11 +181,11 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         bail!("circuit JSON has {n_} pcb_trace_error (unrouted connections)");
     }
     for (t, n_) in &errs {
-        warnings.push(format!("circuit JSON has {n_} {t}"));
+        warnings.push(crate::contract::warn("source-errors", format!("circuit JSON has {n_} {t}")));
     }
     if let Some(nl) = f(board, "num_layers") {
         if nl as u32 != layers {
-            warnings.push(format!("circuit JSON says {nl} layers; writing {layers}"));
+            warnings.push(crate::contract::warn("layer-count", format!("circuit JSON says {nl} layers; writing {layers}")));
         }
     }
 
@@ -318,7 +318,7 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                     if !allow_cross.iter().any(|a| *a == net) {
                         bail!("trace {} ({net}) ends on a port of net {pn}: a short (allow it with --allow-cross-net {net} if the trace is a net tie)", s(t, "pcb_trace_id"));
                     }
-                    warnings.push(format!("trace {} ({net}) ends on a port of net {pn}, allowed", s(t, "pcb_trace_id")));
+                    warnings.push(crate::contract::warn("cross-net-allowed", format!("trace {} ({net}) ends on a port of net {pn}, allowed", s(t, "pcb_trace_id"))));
                 }
             }
         }
@@ -465,7 +465,7 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
             if matches!(s(e, "type"), "pcb_smtpad" | "pcb_plated_hole") {
                 let (num, _, net) = pad_info(e, reference)?;
                 if num == "MP" {
-                    warnings.push(format!("{reference}: pad with no port written as mechanical pad MP"));
+                    warnings.push(crate::contract::warn("mechanical-pad", format!("{reference}: pad with no port written as mechanical pad MP")));
                     continue;
                 }
                 if let Some(prev) = seen_nums.insert(num.clone(), net.clone()) {

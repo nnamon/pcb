@@ -12,6 +12,8 @@ import subprocess
 import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(here, "..", "lib"))
+from contract_check import check  # noqa: E402
 REGION = "10,5,50,35"
 # name: (board variant, extra route arguments, outcome, words in the error, nets for verify (targets, allowed))
 CASES = {
@@ -40,13 +42,12 @@ if __name__ == "__main__":
         before = sha(board)
         out = os.path.join(work, f"{name}.out.kicad_pcb")
         r = subprocess.run([pcb, "--json", "route", board, "--region", REGION, "--freerouting", jar, "--work", os.path.join(work, name + "_w"), "-o", out, *args], capture_output=True, text=True)
-        try:
-            d = json.loads(r.stdout)
-        except ValueError:
-            results[name] = f"no JSON (exit {r.returncode}): {r.stdout[-300:]} {r.stderr[-300:]}"
+        d, problems = check(r.stdout, r.returncode)
+        if problems:
+            results[name] = "output contract: " + "; ".join(problems)
             continue
-        got = d.get("outcome") or ("done" if d.get("ok") else ("rejected" if d.get("data", {}).get("regressions") else "refused"))
-        msg = d.get("error", "")
+        got = d["outcome"]
+        msg = d.get("error", {}).get("message", "")
         if got != want:
             results[name] = f"expected {want}, got {got} (exit {r.returncode}): {msg or d.get('data', {}).get('regressions')}"
         elif words and words not in msg:

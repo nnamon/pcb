@@ -1,0 +1,229 @@
+//! `cargo xtask test [--fast]`: runs the whole pcb test suite from a clean checkout and prints one summary.
+//!
+//! Layers (proposal, "Testing"): unit tests; the output contract; the import and route edge cases on synthetic
+//! inputs; and each fixture in tests/fixtures run through import, route and zones, each result checked by its
+//! independent oracle and each oracle by its mutation suite. `--fast` skips everything that runs Freerouting and
+//! the mutation suites. Freerouting comes from PCB_FREEROUTING_JAR. Exit status 1 if any step fails.
+
+use anyhow::{Context, Result, bail};
+use serde_json::json;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Instant;
+
+struct Step {
+    name: String,
+    ok: bool,
+    seconds: f64,
+    detail: String,
+}
+
+struct Suite {
+    root: PathBuf,
+    work: PathBuf,
+    pcb: PathBuf,
+    jar: Option<PathBuf>,
+    fast: bool,
+    steps: Vec<Step>,
+}
+
+fn tail(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().filter(|l| !l.starts_with("Picked up JAVA_TOOL_OPTIONS")).collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+impl Suite {
+    /// Runs one command as a step: passes when it exits 0.
+    fn run(&mut self, name: &str, prog: &str, args: &[&str]) -> bool {
+        let t0 = Instant::now();
+        eprintln!("-- {name}");
+        let out = Command::new(prog).args(args).current_dir(&self.root).output();
+        let (ok, detail) = match out {
+            Ok(o) => {
+                let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+                (o.status.success(), tail(&text, if o.status.success() { 3 } else { 40 }))
+            }
+            Err(e) => (false, format!("could not start {prog}: {e}")),
+        };
+        eprintln!("   {} ({:.0} s)", if ok { "ok" } else { "FAILED" }, t0.elapsed().as_secs_f64());
+        if !ok {
+            eprintln!("{}", detail.lines().map(|l| format!("   | {l}")).collect::<Vec<_>>().join("\n"));
+        }
+        self.steps.push(Step { name: name.to_string(), ok, seconds: t0.elapsed().as_secs_f64(), detail });
+        ok
+    }
+
+    fn skip(&mut self, name: &str, why: &str) {
+        eprintln!("-- {name}: skipped ({why})");
+        self.steps.push(Step { name: format!("{name} (skipped: {why})"), ok: true, seconds: 0.0, detail: String::new() });
+    }
+
+    fn py(&mut self, name: &str, script: &str, args: &[&str]) -> bool {
+        let mut a = vec![script];
+        a.extend_from_slice(args);
+        self.run(name, "python3", &a)
+    }
+
+    fn w(&self, p: &str) -> String {
+        self.work.join(p).to_string_lossy().to_string()
+    }
+}
+
+fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(|s| s.as_str()) != Some("test") {
+        bail!("usage: cargo xtask test [--fast]");
+    }
+    let fast = args.iter().any(|a| a == "--fast");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().context("xtask sits in tools/pcb")?.to_path_buf();
+    let work = root.join("target").join("xtask");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work)?;
+    let jar = std::env::var("PCB_FREEROUTING_JAR").ok().map(PathBuf::from).filter(|p| p.exists());
+    let mut s = Suite { root: root.clone(), work: work.clone(), pcb: root.join("target/release/pcb"), jar, fast, steps: vec![] };
+    let t0 = Instant::now();
+
+    // unit tests and the release binary every later step uses
+    s.run("unit tests", "cargo", &["test", "--release", "--package", "pcb", "--quiet"]);
+    if !s.run("build pcb", "cargo", &["build", "--release", "--package", "pcb", "--quiet"]) {
+        return finish(&s, t0);
+    }
+    let pcb = s.pcb.to_string_lossy().to_string();
+    let jar = s.jar.as_ref().map(|p| p.to_string_lossy().to_string());
+    if !s.fast && jar.is_none() {
+        bail!("PCB_FREEROUTING_JAR must name the Freerouting 1.9.0 jar (or use --fast)");
+    }
+
+    s.py("output contract", "tests/cases/contract_cases.py", &[&pcb, &s.w("contract")]);
+    s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
+    match (&jar, s.fast) {
+        (Some(j), false) => {
+            let j = j.clone();
+            s.py("route edge cases", "tests/cases/route_cases.py", &[&pcb, &j, &s.w("route_cases")]);
+        }
+        _ => s.skip("route edge cases", "--fast"),
+    }
+
+    // fixtures
+    let fx_dir = root.join("tests/fixtures");
+    let mut fixtures: Vec<_> = std::fs::read_dir(&fx_dir)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("fixture.toml").exists()).collect();
+    fixtures.sort();
+    for dir in fixtures {
+        fixture(&mut s, &dir, &pcb, jar.as_deref())?;
+    }
+    finish(&s, t0)
+}
+
+fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()> {
+    let fx: toml::Value = toml::from_str(&std::fs::read_to_string(dir.join("fixture.toml"))?)?;
+    let name = fx["fixture"]["name"].as_str().context("fixture name")?.to_string();
+    let ftoml = dir.join("fixture.toml").to_string_lossy().to_string();
+    let cj = dir.join(fx["fixture"]["circuit_json"].as_str().context("circuit_json")?).to_string_lossy().to_string();
+    let wd = s.work.join(&name);
+    std::fs::create_dir_all(&wd)?;
+    let board = wd.join("board.kicad_pcb").to_string_lossy().to_string();
+    let w = |p: &str| wd.join(p).to_string_lossy().to_string();
+
+    // import
+    let layers = fx["fixture"].get("layers").and_then(|v| v.as_integer()).unwrap_or(2).to_string();
+    let allow: Vec<&str> = fx.get("import").and_then(|i| i.get("allow_cross_net")).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+    let allow = allow.join(",");
+    if !s.run(&format!("{name}: import"), pcb, &["--json", "import-tscircuit", &cj, "--layers", &layers, "--allow-cross-net", &allow, "-o", &board]) {
+        return Ok(());
+    }
+    s.py(&format!("{name}: verify_import"), "tests/oracles/verify_import.py", &[&cj, &board, &ftoml]);
+    if s.fast {
+        s.skip(&format!("{name}: import mutations"), "--fast");
+    } else {
+        s.py(&format!("{name}: import mutations"), "tests/mutations/import_mutations.py", &[&cj, &board, &ftoml, &w("imut")]);
+    }
+
+    // route cases
+    let mut mutated = false;
+    for case in fx.get("route").and_then(|r| r.as_array()).cloned().unwrap_or_default() {
+        let cname = case["name"].as_str().context("route case name")?.to_string();
+        let label = format!("{name}: route {cname}");
+        let (Some(jar), false) = (jar, s.fast) else {
+            s.skip(&label, "--fast");
+            continue;
+        };
+        let list = |k: &str| case.get(k).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")).unwrap_or_default();
+        let region = case["region"].as_array().context("region")?.iter().map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).unwrap_or(0.0).to_string()).collect::<Vec<_>>().join(",");
+        let out = w(&format!("{cname}.kicad_pcb"));
+        let mut args = vec!["--json".to_string(), "route".into(), board.clone(), "--region".into(), region.clone(), "--freerouting".into(), jar.into(), "--work".into(), w(&format!("{cname}_w")), "-o".into(), out.clone()];
+        if !list("nets").is_empty() {
+            args.extend(["--nets".into(), list("nets")]);
+        }
+        if !list("rip").is_empty() {
+            args.extend(["--rip".into(), list("rip")]);
+        }
+        let t0 = Instant::now();
+        eprintln!("-- {label}");
+        let o = Command::new(pcb).args(&args).output()?;
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(json!({}));
+        let want = case.get("expect").and_then(|x| x.as_str()).unwrap_or("done");
+        let mut problems = vec![];
+        if v["outcome"] != want {
+            problems.push(format!("outcome {} (want {want}): {}", v["outcome"], v["error"]));
+        }
+        let open: Vec<String> = v["data"]["still_open"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let want_open: Vec<String> = list("still_open").split(',').filter(|x| !x.is_empty()).map(String::from).collect();
+        if open != want_open {
+            problems.push(format!("still open {open:?} (want {want_open:?})"));
+        }
+        let ok = problems.is_empty();
+        eprintln!("   {} ({:.0} s)", if ok { "ok" } else { "FAILED" }, t0.elapsed().as_secs_f64());
+        s.steps.push(Step { name: label.clone(), ok, seconds: t0.elapsed().as_secs_f64(), detail: problems.join("; ") });
+        if ok && want == "done" && Path::new(&out).exists() {
+            let mut allowed = list("nets");
+            if !list("rip").is_empty() {
+                allowed = format!("{allowed},{}", list("rip"));
+            }
+            let targets = list("targets");
+            s.py(&format!("{label}: verify_route"), "tests/oracles/verify_route.py", &[&board, &out, &region, &targets, &allowed]);
+            if !mutated && !targets.is_empty() && v["data"]["added_segments"].as_u64().unwrap_or(0) > 0 {
+                mutated = true;
+                s.py(&format!("{label}: route mutations"), "tests/mutations/route_mutations.py", &[&board, &out, &region, &targets, &allowed, &w("rmut")]);
+            }
+        }
+    }
+
+    // zones (spike 3 prototype until pcb zone exists)
+    if let Some(z) = fx.get("zones") {
+        let coil = dir.join(z["coil_json"].as_str().context("coil_json")?).to_string_lossy().to_string();
+        let base = w("base.kicad_pcb");
+        let zoned = w("zoned.kicad_pcb");
+        std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&base).with_extension("kicad_pro"))?;
+        std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&zoned).with_extension("kicad_pro"))?;
+        let save = format!("import pcbnew; b = pcbnew.LoadBoard({board:?}); b.Save({base:?})");
+        s.run(&format!("{name}: zones base (KiCad save)"), "python3", &["-c", &save]);
+        if s.py(&format!("{name}: zones (spike 3)"), "phase0/spike3.py", &[&base, &coil, &zoned]) && s.py(&format!("{name}: zone fill"), "src/kicad_helper.py", &["fill", &zoned]) {
+            s.py(&format!("{name}: verify_zones"), "tests/oracles/verify_zones.py", &[&base, &zoned, &ftoml]);
+            if s.fast {
+                s.skip(&format!("{name}: zone mutations"), "--fast");
+            } else {
+                s.py(&format!("{name}: zone mutations"), "tests/mutations/zone_mutations.py", &[&base, &zoned, &ftoml, &w("zmut")]);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn finish(s: &Suite, t0: Instant) -> Result<()> {
+    let failed: Vec<&Step> = s.steps.iter().filter(|x| !x.ok).collect();
+    let summary = json!({
+        "ok": failed.is_empty(),
+        "fast": s.fast,
+        "seconds": t0.elapsed().as_secs_f64(),
+        "steps": s.steps.iter().map(|x| json!({ "name": x.name, "ok": x.ok, "seconds": (x.seconds * 10.0).round() / 10.0, "detail": x.detail })).collect::<Vec<_>>(),
+    });
+    std::fs::write(s.work.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
+    eprintln!("\n{} of {} steps passed in {:.0} s; summary in {}", s.steps.len() - failed.len(), s.steps.len(), t0.elapsed().as_secs_f64(), s.work.join("summary.json").display());
+    for f in &failed {
+        eprintln!("FAILED: {}", f.name);
+    }
+    if !failed.is_empty() {
+        std::process::exit(1);
+    }
+    Ok(())
+}

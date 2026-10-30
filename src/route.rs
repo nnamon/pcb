@@ -13,6 +13,7 @@
 //!    otherwise it goes to `<output>.rejected.kicad_pcb` and the output is not touched.
 
 use crate::board::Board;
+use crate::contract::{failed, refused};
 use crate::sexpr::{self, Edits, Node, fmt_num as n};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -101,9 +102,9 @@ fn inside(r: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
 pub fn helper(work: &Path, args: &[&str]) -> Result<serde_json::Value> {
     let h = work.join("kicad_helper.py");
     std::fs::write(&h, HELPER)?;
-    let out = Command::new("python3").arg(&h).args(args).output().context("running python3 with pcbnew")?;
+    let out = Command::new("python3").arg(&h).args(args).output().map_err(|e| failed("kicad", format!("running python3 with pcbnew: {e}")))?;
     if !out.status.success() {
-        bail!("kicad helper {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr));
+        return Err(failed("kicad", format!("kicad helper {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr))));
     }
     let s = String::from_utf8_lossy(&out.stdout);
     let last = s.lines().filter(|l| l.trim_start().starts_with('{')).last().context("no JSON from kicad helper")?;
@@ -417,7 +418,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         let b0 = Board::load(board_path)?;
         for nm in &o.nets {
             if !b0.nets.values().any(|s| s == nm) {
-                bail!("no net {nm} on this board");
+                return Err(refused("unknown-net", format!("no net {nm} on this board")));
             }
         }
     }
@@ -438,20 +439,20 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         });
         for nm in named {
             if !known.contains(nm.as_str()) {
-                bail!("no net {nm} on this board");
+                return Err(refused("unknown-net", format!("no net {nm} on this board")));
             }
         }
         if let Some(bad) = known.iter().find(|s| !s.is_ascii()) {
-            bail!("net name {bad:?} is not ASCII; Freerouting cannot take it and the session would not match");
+            return Err(refused("non-ascii-net", format!("net name {bad:?} is not ASCII; Freerouting cannot take it and the session would not match")));
         }
         // arcs are not in the board model yet: they would go to the router as chords it may cross
         if b0.root.items().iter().any(|n| n.is("arc")) {
-            bail!("the board has track arcs, which pcb route does not handle yet");
+            return Err(refused("arc-unsupported", "the board has track arcs, which pcb route does not handle yet"));
         }
     }
     for l in &o.layers {
         if !Board::load(board_path)?.copper_layers.contains(l) {
-            bail!("routing layer {l} is not a copper layer of this board");
+            return Err(refused("bad-layer", format!("routing layer {l} is not a copper layer of this board")));
         }
     }
     let before = drc_counts(&o.work, board_path, "drc_before")?;
@@ -498,7 +499,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let dsn = o.work.join("route.dsn");
     let h = helper(&o.work, &["dsn", scratch_pcb.to_str().unwrap(), dsn.to_str().unwrap()])?;
     if h["ok"] != true {
-        bail!("KiCad DSN export failed");
+        return Err(failed("kicad", "KiCad DSN export failed"));
     }
     let scratch_board = Board::load(scratch_pcb.to_str().unwrap())?;
     let dsn_text = keepouts(&std::fs::read_to_string(&dsn)?, &scratch_board, r, &o.layers)?;
@@ -521,18 +522,18 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         .arg("-de").arg(&dsn).arg("-do").arg(&ses).arg("-mp").arg(o.passes.to_string())
         .current_dir(&o.work)
         .output()
-        .context("running Freerouting")?;
+        .map_err(|e| failed("freerouting", format!("running Freerouting: {e}")))?;
     let log = String::from_utf8_lossy(&fr.stdout).to_string() + &String::from_utf8_lossy(&fr.stderr);
     if fr.status.code() == Some(124) {
         let warns: Vec<&str> = log.lines().filter(|l| l.contains(" WARN ") || l.contains(" ERROR ")).collect();
         if warns.is_empty() {
-            bail!("Freerouting did not finish within {} s", o.timeout_s);
+            return Err(failed("freerouting-timeout", format!("Freerouting did not finish within {} s", o.timeout_s)));
         }
-        bail!("Freerouting did not finish within {} s; it shows import warnings in a dialog that waits for a click, so these probably hung it:\n{}", o.timeout_s, warns.join("\n"));
+        return Err(failed("freerouting-timeout", format!("Freerouting did not finish within {} s; it shows import warnings in a dialog that waits for a click, so these probably hung it:\n{}", o.timeout_s, warns.join("\n"))));
     }
     rep.freerouting_log = log.lines().filter(|l| l.contains("INFO") || l.contains("WARN") || l.contains("ERROR")).map(|l| l.chars().skip(24).collect::<String>()).collect::<Vec<_>>().join("\n");
     if !ses.exists() {
-        bail!("Freerouting wrote no session:\n{}", rep.freerouting_log);
+        return Err(failed("freerouting", format!("Freerouting wrote no session:\n{}", rep.freerouting_log)));
     }
 
     // 5. read back, keep new copper for the requested nets inside the region

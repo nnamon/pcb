@@ -13,6 +13,7 @@ import sys
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(here, "..", "lib"))
 from circuit import C  # noqa: E402
+from contract_check import check  # noqa: E402
 
 def base():
     c=C()
@@ -230,13 +231,12 @@ if __name__ == "__main__":
         f().dump(cj)
         r = subprocess.run([pcb, "--json", "import-tscircuit", cj, "-o", out], capture_output=True, text=True)
         want, words = EXPECT[name]
-        try:
-            d = json.loads(r.stdout)
-        except ValueError:
-            results[name] = f"no JSON: {r.stdout[-200:]} {r.stderr[-200:]}"
+        d, problems = check(r.stdout, r.returncode)
+        if problems:
+            results[name] = "output contract: " + "; ".join(problems)
             continue
-        got = "done" if d.get("ok") else "refused"
-        msg = d.get("error", "")
+        got = d["outcome"]
+        msg = d.get("error", {}).get("message", "")
         if got != want:
             results[name] = f"expected {want}, got {got}: {msg}"
         elif words and words not in msg:

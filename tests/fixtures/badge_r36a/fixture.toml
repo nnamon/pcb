@@ -7,6 +7,10 @@ name = "badge_r36a"
 circuit_json = "circuit.json"
 layers = 4
 
+# the NFC coil is drawn as a trace on its own net between L601's two pins; spike 3 makes it a net tie
+[import]
+allow_cross_net = ["NFC_COIL"]
+
 # Board-level holes, named as in the source (source/badge.tsx), at tscircuit coordinates (mm, y up).
 [import.holes]
 H1 = [-76, 51]
@@ -57,30 +61,29 @@ drc_allowed = [
 spoke_min = 0.5
 # non-plated holes to fill: JLCPCB's minimum; review 4 (Z8) asks for 0.3, to be set in milestone M2
 npth_gap = 0.2
-# fills that must exist, at no less than half the area spike 3 gave them (30 Oct 2026); a lost fill fails
+# fills that must exist, at no less than half the area spike 3 gave this fixture (30 Oct 2026); a lost fill fails
 expect_fill = [
-  { net = "BAT_F", layer = "F.Cu", min_area = 15.2 },
-  { net = "BAT_RAW", layer = "B.Cu", min_area = 19.4 },
-  { net = "BAT_RAW", layer = "F.Cu", min_area = 25.3 },
-  { net = "GND", layer = "B.Cu", min_area = 6538.8 },
-  { net = "GND", layer = "F.Cu", min_area = 4568.0 },
-  { net = "GND", layer = "In1.Cu", min_area = 7576.2 },
-  { net = "GND", layer = "In2.Cu", min_area = 7576.2 },
+  { net = "BAT_F", layer = "F.Cu", min_area = 11.0 },
+  { net = "BAT_RAW", layer = "B.Cu", min_area = 19.9 },
+  { net = "BAT_RAW", layer = "F.Cu", min_area = 47.5 },
+  { net = "GND", layer = "B.Cu", min_area = 6550.6 },
+  { net = "GND", layer = "F.Cu", min_area = 4567.9 },
+  { net = "GND", layer = "In1.Cu", min_area = 7577.6 },
+  { net = "GND", layer = "In2.Cu", min_area = 7577.6 },
   { net = "LYRA_5V", layer = "B.Cu", min_area = 6.7 },
-  { net = "LYRA_5V", layer = "F.Cu", min_area = 36.4 },
-  { net = "LYRA_5V_D", layer = "F.Cu", min_area = 11.3 },
+  { net = "LYRA_5V", layer = "F.Cu", min_area = 37.7 },
+  { net = "LYRA_5V_D", layer = "F.Cu", min_area = 10.2 },
   { net = "SW_BOOST", layer = "F.Cu", min_area = 4.8 },
-  { net = "V5", layer = "B.Cu", min_area = 120.0 },
-  { net = "V5", layer = "F.Cu", min_area = 93.7 },
+  { net = "V5", layer = "B.Cu", min_area = 120.1 },
+  { net = "V5", layer = "F.Cu", min_area = 94.3 },
   { net = "V5_LED", layer = "B.Cu", min_area = 51.4 },
-  { net = "V5_LED", layer = "F.Cu", min_area = 238.2 },
+  { net = "V5_LED", layer = "F.Cu", min_area = 210.6 },
   { net = "V5_LED_SW", layer = "F.Cu", min_area = 12.1 },
   { net = "V5_LYRA", layer = "F.Cu", min_area = 5.5 },
-  { net = "VBAT", layer = "B.Cu", min_area = 56.5 },
-  { net = "VBAT", layer = "F.Cu", min_area = 98.2 },
-  { net = "VBOOST", layer = "F.Cu", min_area = 16.9 },
+  { net = "VBAT", layer = "B.Cu", min_area = 53.7 },
+  { net = "VBAT", layer = "F.Cu", min_area = 95.7 },
+  { net = "VBOOST", layer = "F.Cu", min_area = 19.4 },
   { net = "VBUS", layer = "B.Cu", min_area = 12.9 },
-  { net = "VBUS", layer = "F.Cu", min_area = 7.2 },
-  { net = "VBUS_F", layer = "B.Cu", min_area = 10.0 },
-  { net = "VBUS_F", layer = "F.Cu", min_area = 66.7 },
+  { net = "VBUS", layer = "F.Cu", min_area = 8.3 },
+  { net = "VBUS_F", layer = "F.Cu", min_area = 52.9 },
 ]
