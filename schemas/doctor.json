@@ -1,0 +1,46 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:doctor",
+ "title": "pcb doctor output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/doctor/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "checks"
+    ],
+    "properties": {
+     "checks": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name",
+        "ok",
+        "found",
+        "want"
+       ]
+      }
+     }
+    }
+   }
+  }
+ }
+}

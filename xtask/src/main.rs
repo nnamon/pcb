@@ -94,6 +94,16 @@ fn main() -> Result<()> {
         bail!("PCB_FREEROUTING_JAR must name the Freerouting 1.9.0 jar (or use --fast)");
     }
 
+    // the pinned tools first: nothing else means anything on other versions
+    let doctor_work = s.w("doctor");
+    let mut dargs = vec!["--json", "doctor", "--work", &doctor_work];
+    let jar_s = jar.clone().unwrap_or_default();
+    if jar.is_some() {
+        dargs.extend(["--freerouting", jar_s.as_str()]);
+    }
+    if !s.run("pcb doctor", &pcb, &dargs) {
+        return finish(&s, t0);
+    }
     s.py("output contract", "tests/cases/contract_cases.py", &[&pcb, &s.w("contract")]);
     s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
     match (&jar, s.fast) {

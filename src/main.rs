@@ -2,6 +2,9 @@
 
 mod board;
 mod contract;
+mod doctor;
+mod gate;
+mod kicad;
 mod import_tscircuit;
 mod render;
 mod route;
@@ -80,6 +83,15 @@ enum Cmd {
         #[arg(long, short)]
         out: Option<String>,
     },
+    /// Check the pinned tool versions (KiCad 7.0.11, Freerouting 1.9.0) and the tool behaviours pcb relies on.
+    Doctor {
+        /// Freerouting jar.
+        #[arg(long, env = "PCB_FREEROUTING_JAR")]
+        freerouting: Option<String>,
+        /// Work directory for the self-test files.
+        #[arg(long, default_value = "pcb_work/doctor")]
+        work: String,
+    },
     /// PNG of the board or a region, nets labelled.
     Render {
         board: String,
@@ -127,6 +139,7 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::ImportTscircuit { .. } => "import-tscircuit",
         Cmd::Route { .. } => "route",
         Cmd::Render { .. } => "render",
+        Cmd::Doctor { .. } => "doctor",
     }
 }
 
@@ -264,6 +277,15 @@ fn run(cli: Cli) -> Result<Reply> {
                 human: h,
                 data: serde_json::to_value(&rep)?,
             })
+        }
+        Cmd::Doctor { freerouting, work } => {
+            let (checks, warnings) = doctor::run(std::path::Path::new(&work), freerouting.as_deref().map(std::path::Path::new))?;
+            let bad: Vec<&doctor::Check> = checks.iter().filter(|c| !c.ok).collect();
+            let human = checks.iter().map(|c| format!("{} {}: {}{}", if c.ok { "ok  " } else { "FAIL" }, c.name, c.found, if c.ok { String::new() } else { format!(" (want {})", c.want) })).collect::<Vec<_>>().join("\n");
+            if !bad.is_empty() {
+                return Err(contract::refused("tools-mismatch", format!("{} of {} tool checks failed:\n{human}", bad.len(), checks.len())));
+            }
+            Ok(Reply { outcome: Outcome::Done, written: None, warnings, human, data: json!({ "checks": checks }) })
         }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;

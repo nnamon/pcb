@@ -14,6 +14,8 @@
 
 use crate::board::Board;
 use crate::contract::{failed, refused};
+use crate::gate::Gate;
+use crate::kicad;
 use crate::sexpr::{self, Edits, Node, fmt_num as n};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -25,7 +27,6 @@ use std::time::Instant;
 /// mm between the region's edge and the copper that may be ripped.
 pub const RIP_MARGIN: f64 = 1.0;
 
-pub const HELPER: &str = include_str!("kicad_helper.py");
 
 #[derive(Clone)]
 pub struct Opts {
@@ -97,18 +98,6 @@ pub struct Report {
 
 fn inside(r: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
     x >= r.0 && x <= r.2 && y >= r.1 && y <= r.3
-}
-
-pub fn helper(work: &Path, args: &[&str]) -> Result<serde_json::Value> {
-    let h = work.join("kicad_helper.py");
-    std::fs::write(&h, HELPER)?;
-    let out = Command::new("python3").arg(&h).args(args).output().map_err(|e| failed("kicad", format!("running python3 with pcbnew: {e}")))?;
-    if !out.status.success() {
-        return Err(failed("kicad", format!("kicad helper {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr))));
-    }
-    let s = String::from_utf8_lossy(&out.stdout);
-    let last = s.lines().filter(|l| l.trim_start().starts_with('{')).last().context("no JSON from kicad helper")?;
-    Ok(serde_json::from_str(last)?)
 }
 
 /// Board text with the segment or via at `span` marked locked (KiCad 7 writes `(segment locked ...`).
@@ -455,7 +444,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             return Err(refused("bad-layer", format!("routing layer {l} is not a copper layer of this board")));
         }
     }
-    let before = drc_counts(&o.work, board_path, "drc_before")?;
+    let gate = Gate::begin(&o.work, board_path)?;
     let b = Board::load(board_path)?;
     let src = &b.src;
     let r = o.region;
@@ -497,7 +486,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
 
     // 2-3. DSN with keep-outs outside the region
     let dsn = o.work.join("route.dsn");
-    let h = helper(&o.work, &["dsn", scratch_pcb.to_str().unwrap(), dsn.to_str().unwrap()])?;
+    let h = kicad::helper(&o.work, &["dsn", scratch_pcb.to_str().unwrap(), dsn.to_str().unwrap()])?;
     if h["ok"] != true {
         return Err(failed("kicad", "KiCad DSN export failed"));
     }
@@ -740,20 +729,14 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // 6. splice into the original: removals plus the new copper before the closing paren
     let root: &Node = &b.root;
     final_edits.insert(root.span.1 - 1, new_text);
-    let cand = o.work.join("candidate.kicad_pcb");
-    std::fs::write(&cand, final_edits.apply(src)?)?;
-    // the design rules travel with the board: without the project file KiCad falls back to its defaults
-    if pro.exists() {
-        std::fs::copy(&pro, cand.with_extension("kicad_pro"))?;
-    }
-    // 7. zones refilled around the new copper, then DRC; only a result with no new violation reaches the output
-    if !b.zones.is_empty() {
-        helper(&o.work, &["fill", cand.to_str().unwrap()])?;
-    }
-    let after = drc_counts(&o.work, cand.to_str().unwrap(), "drc_after")?;
-    compare(&before, &after, &mut rep);
+    // 7. the write gate: zones refilled, DRC against the input; written to the output only if nothing got worse
+    let g = gate.finish(&final_edits.apply(src)?, out_path, !b.zones.is_empty())?;
+    rep.fixed = g.fixed;
+    rep.regressions = g.regressions;
+    rep.drc_total_before = g.total_before;
+    rep.drc_total_after = g.total_after;
     // requested nets KiCad still reports as not connected
-    for (k, v) in &after {
+    for (k, v) in &g.after {
         if let Some(nets) = k.strip_prefix("unconnected_items ") {
             for net in nets.split(' ') {
                 if o.nets.iter().any(|x| x == net) && !rep.still_open.contains(&net.to_string()) && *v > 0 {
@@ -762,54 +745,10 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             }
         }
     }
-    let dest = if rep.regressions.is_empty() {
-        out_path.to_string()
-    } else {
-        let p = Path::new(out_path);
-        p.with_file_name(format!("{}.rejected.kicad_pcb", p.file_stem().and_then(|s| s.to_str()).unwrap_or("board"))).to_string_lossy().to_string()
-    };
-    std::fs::copy(&cand, &dest)?;
-    if pro.exists() && std::fs::canonicalize(&pro).ok() != std::fs::canonicalize(Path::new(&dest).with_extension("kicad_pro")).ok() {
-        std::fs::copy(&pro, Path::new(&dest).with_extension("kicad_pro"))?;
-    }
+    let dest = g.written;
     rep.written = dest;
     rep.seconds = t0.elapsed().as_secs_f64();
     Ok(rep)
-}
-
-/// KiCad DRC violations counted by type and the nets involved, e.g. "unconnected_items PMUX_ILM".
-fn drc_counts(work: &Path, board: &str, name: &str) -> Result<BTreeMap<String, usize>> {
-    let rpt = work.join(format!("{name}.rpt"));
-    let h = helper(work, &["drc", board, rpt.to_str().unwrap()])?;
-    let mut m = BTreeMap::new();
-    for it in h["items"].as_array().context("DRC gave no items")? {
-        let mut nets: Vec<String> = it["at"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|a| a["item"].as_str())
-            .filter_map(|s| s.split_once('[').and_then(|(_, r)| r.split_once(']')).map(|(n, _)| n.to_string()))
-            .collect();
-        nets.sort();
-        nets.dedup();
-        *m.entry(format!("{} {}", it["type"].as_str().unwrap_or("?"), nets.join(" "))).or_default() += 1;
-    }
-    Ok(m)
-}
-
-/// Fewer violations of a kind is progress; more is a regression.
-fn compare(before: &BTreeMap<String, usize>, after: &BTreeMap<String, usize>, rep: &mut Report) {
-    let keys: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
-    for k in keys {
-        let (b, a) = (before.get(k).copied().unwrap_or(0), after.get(k).copied().unwrap_or(0));
-        if a > b {
-            rep.regressions.push(format!("{k}: {b} -> {a}"));
-        } else if a < b {
-            rep.fixed.push(format!("{k}: {b} -> {a}"));
-        }
-    }
-    rep.drc_total_before = before.values().sum();
-    rep.drc_total_after = after.values().sum();
 }
 
 #[cfg(test)]
@@ -854,16 +793,6 @@ mod tests {
         assert_eq!(a, "(segment locked (start 0 0) (end 4 0) (width 0.3) (layer \"F.Cu\") (net 5))");
         let s2 = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5))";
         assert_eq!(with_ends(s2, (4.0, 0.0), (10.0, 0.0)).unwrap(), "(segment (start 4 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5))");
-    }
-
-    #[test]
-    fn compare_flags_increases_only() {
-        let b: BTreeMap<String, usize> = [("unconnected_items A".to_string(), 2), ("clearance A B".to_string(), 1)].into();
-        let a: BTreeMap<String, usize> = [("unconnected_items A".to_string(), 1), ("track_dangling C".to_string(), 1), ("clearance A B".to_string(), 1)].into();
-        let mut r = Report::default();
-        compare(&b, &a, &mut r);
-        assert_eq!(r.fixed, vec!["unconnected_items A: 2 -> 1"]);
-        assert_eq!(r.regressions, vec!["track_dangling C: 0 -> 1"]);
     }
 
     #[test]
