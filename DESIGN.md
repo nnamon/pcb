@@ -184,7 +184,7 @@ The project's Python scripts stay in the repository until phase 6 replaces their
 
 ## Spike 2: region routing on r36a (30 Oct 2026)
 
-Exit criteria: VBUS_F and U106's ILM pin connected; nothing outside the region changed; no new KiCad DRC violation; time recorded; checked by `tests/verify_route.py`, whose sensitivity is shown by `tests/route_mutations.py` (9 of 9 caught).
+Exit criteria: VBUS_F and U106's ILM pin connected; nothing outside the region changed; no new KiCad DRC violation; time recorded; checked by `tests/verify_route.py`, whose sensitivity is shown by `tests/route_mutations.py` (12 of 12 caught after review 3).
 
 | Run | Region | Ripped | Result | Time |
 | --- | --- | --- | --- | --- |
@@ -203,9 +203,9 @@ After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB
 Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/verify_zones.py`, whose sensitivity is shown by `tests/zone_mutations.py` (7 of 7 caught).
 
 - **NFC coil:** the 49 spiral segments became copper inside L601, a net tie for pads 1 and 3. The two coil vias became L601 pads 3 and 4, and the bottom bridge and top link stay NFC_AC1 tracks. The coil copper is unchanged (same ends and widths). KiCad DRC's 4 coil clearance errors and 2 mask bridges are gone.
-- **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 35 power fills grown from each power net's copper; GND pours on both outer layers. Copper areas are within about 20 % of the old scripts' pours per net and layer; the top GND pour is about 17 % smaller.
-- **KiCad DRC:** 336 → 215 violations. Dangling vias 115 → 1, clearance 8 → 4 (the LED_A4 via at BT101, known), GND unconnected 2 → 1 (U501 pad 21, known), plus ILM. One new item: a starved thermal on J102 pad 4, which needs a pad override or a design-rule exception.
+- **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 35 power fills grown from each power net's copper; GND pours on both outer layers. Copper areas differ from the old scripts' pours by up to −47 % (BAT_RAW top) and +71 % (VBAT bottom); the top GND pour is 21 % smaller (review 4, Z3). The bottom-layer exclusion under the power stage is missing (Z4).
+- **KiCad DRC:** 335 → 215 violations (the KiCad-saved base). Dangling vias 115 → 1, clearance 8 → 4 (the LED_A4 via at BT101, known), GND unconnected 2 → 1 (U501 pad 21, known), plus ILM. One new item: a starved thermal on J102 pad 4, which needs a pad override or a design-rule exception.
 - **Fill time:** about 2 s.
 - **KiCad traps found:** zones created and filled in one process kept islands that DRC then calls isolated, so filling is a separate step; a zone given several outlines from Python saved only the first, so each polygon is its own zone; footprint pads and shapes need their local positions set; rule areas must name only the board's own copper layers.
 
-Not yet done: stitching vias between the outer pours, a pad override for J102 pad 4, and the Rust `pcb zone` command that replaces the prototype.
+Review 4 found that verify_zones.py would pass a short across the net tie (Z1), and missing fills or thin spokes (Z2); the coil's inner via is 0.075 mm from the next turn (Z6). These go into M2 of the proposal. Not yet done: stitching vias between the outer pours, a pad override for J102 pad 4, and the Rust `pcb zone` command that replaces the prototype.

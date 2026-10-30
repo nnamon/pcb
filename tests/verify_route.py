@@ -36,9 +36,26 @@ def items(path):
     out = []
     for ln in lines:
         s = ln.strip()
-        if s.startswith("(segment") or s.startswith("(via"):
+        # "(via " with the space: KiCad-saved boards also carry a "(viasonmask ...)" line (review 4, R1)
+        if s.startswith("(segment ") or s.startswith("(via "):
             out.append(s)
-    rest = [ln for ln in lines if not (ln.strip().startswith("(segment") or ln.strip().startswith("(via"))]
+    rest = [ln for ln in lines if not (ln.strip().startswith("(segment ") or ln.strip().startswith("(via "))]
+    # zone fills are recomputed by KiCad after a route, across the whole board (review 4, R2): compare the zone
+    # definitions, not their filled polygons
+    out_rest, skip = [], None
+    for ln in rest:
+        if skip is not None:
+            if ln.startswith(skip + ")"):
+                skip = None
+            continue
+        st = ln.lstrip()
+        if st.startswith("(filled_polygon"):
+            skip = ln[: len(ln) - len(st)]
+            if st.rstrip().endswith(")") and st.count("(") == st.count(")"):
+                skip = None
+            continue
+        out_rest.append(ln)
+    rest = out_rest
     return out, rest
 
 

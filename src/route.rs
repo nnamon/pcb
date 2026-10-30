@@ -412,6 +412,15 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // absolute, because Freerouting runs inside the work directory
     let work = std::fs::canonicalize(&o.work)?;
     let o = &Opts { region: o.region, nets: o.nets.clone(), passes: o.passes, fr_jar: o.fr_jar.clone(), work, rip: o.rip.clone(), layers: o.layers.clone(), timeout_s: o.timeout_s };
+    // names checked before `--rip all` clears the list (review 4, R3)
+    {
+        let b0 = Board::load(board_path)?;
+        for nm in &o.nets {
+            if !b0.nets.values().any(|s| s == nm) {
+                bail!("no net {nm} on this board");
+            }
+        }
+    }
     // a ripped net has to be routed again, so its new copper is always kept; ripping all keeps all
     let mut nets = o.nets.clone();
     match &o.rip {

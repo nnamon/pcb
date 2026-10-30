@@ -42,8 +42,9 @@ enum Cmd {
         #[arg(long, short)]
         out: String,
     },
-    /// Route inside one region with Freerouting; everything outside it is locked and left byte-identical.
-    /// KiCad DRC runs before and after; any new violation fails the command (the board is still written).
+    /// Route inside one region with Freerouting; items wholly outside it are locked and left byte-identical.
+    /// KiCad DRC runs before and after; with any new violation the result goes to `<out>.rejected.kicad_pcb`
+    /// and the output is not touched.
     Route {
         board: String,
         /// x0,y0,x1,y1 in mm (KiCad coordinates).
@@ -203,8 +204,8 @@ fn run(cli: Cli) -> Result<()> {
             let out = out.unwrap_or_else(|| board.clone());
             let rep = route::run(&board, &out, &o)?;
             let h = format!(
-                "routed {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates\nstill open: {:?}\nDRC {} -> {}\nfixed:\n  {}\nregressions:\n  {}",
-                out, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates,
+                "wrote {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates\nstill open: {:?}\nDRC {} -> {}\nfixed:\n  {}\nregressions:\n  {}",
+                rep.written, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates,
                 rep.still_open, rep.drc_total_before, rep.drc_total_after, rep.fixed.join("\n  "), rep.regressions.join("\n  ")
             );
             emit(cli.json, rep.regressions.is_empty(), h, serde_json::to_value(&rep)?)

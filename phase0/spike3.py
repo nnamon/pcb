@@ -1,7 +1,7 @@
 """Spike 3: KiCad zones in place of the pour, plane and fill scripts, and the NFC coil as a net-tie footprint.
 
 A prototype in Python with pcbnew, to prove the approach before it goes into `pcb`. On a copy of the board:
-1. the NFC coil's tracks and vias become copper inside L601's footprint, a net tie for pads 1-4;
+1. the NFC coil's spiral becomes copper inside L601's footprint, a net tie for pads 1 and 3; its vias become pads 3 and 4;
 2. rule areas keep pours out of the coil area (plus 3.5 mm) and the Lyra antenna area, on every copper layer;
 3. In1.Cu and In2.Cu get solid GND planes (0.35 mm clearance, thermal reliefs on plated GND holes);
 4. each power net gets a fill within GROW mm of its own copper on each outer layer (solid to its pads);
