@@ -54,6 +54,7 @@ for t in d:
             for n in t.get("connected_source_net_ids", []):
                 port_net.setdefault(p, sn.get(n))
 pp = {e["pcb_port_id"]: e for e in d if e["type"] == "pcb_port"}
+sport = {e["source_port_id"]: e for e in d if e["type"] == "source_port"}
 sc = {e["source_component_id"]: e for e in d if e["type"] == "source_component"}
 pc = {e["pcb_component_id"]: e for e in d if e["type"] == "pcb_component"}
 
@@ -82,8 +83,24 @@ for cid, c in pc.items():
     side = "F.Cu" if c["layer"] == "top" else "B.Cu"
     if f.GetLayerName() != side:
         err(f"{ref} side {f.GetLayerName()} != {side}")
-    if abs(((f.GetOrientationDegrees() - c.get("rotation", 0)) + 540) % 360 - 180) > 1e-6:
-        err(f"{ref} rotation {f.GetOrientationDegrees()} != {c.get('rotation', 0)}")
+    want_rot = c.get("rotation", 0) + (180 if side == "B.Cu" else 0)   # independently tested below for BT101
+    if abs(((f.GetOrientationDegrees() - want_rot) + 540) % 360 - 180) > 1e-6:
+        err(f"{ref} rotation {f.GetOrientationDegrees()} != {want_rot}")
+    # footprint type and DNP flags from the circuit JSON's pads and do_not_place
+    kinds = {e["type"] for e in d if e.get("pcb_component_id") == cid}
+    a = f.GetAttributes()
+    want_tht = "pcb_plated_hole" in kinds
+    want_smd = not want_tht and "pcb_smtpad" in kinds
+    if bool(a & pcbnew.FP_THROUGH_HOLE) != want_tht or bool(a & pcbnew.FP_SMD) != want_smd:
+        err(f"{ref} type attributes {a} (want through_hole={want_tht} smd={want_smd})")
+    dnp = bool(c.get("do_not_place"))
+    if bool(a & pcbnew.FP_EXCLUDE_FROM_POS_FILES) != dnp or bool(a & pcbnew.FP_EXCLUDE_FROM_BOM) != dnp:
+        err(f"{ref} DNP flags {a} != {dnp}")
+    want_lcsc = ((sc[c["source_component_id"]].get("supplier_part_numbers") or {}).get("jlcpcb") or [""])[0]
+    props = f.GetProperties()
+    got = props.get("LCSC", "") if hasattr(props, "get") else ""
+    if got != want_lcsc:
+        err(f"{ref} LCSC {got!r} != {want_lcsc!r}")
 
 # pads
 kpads = []
@@ -91,10 +108,17 @@ for f in b.GetFootprints():
     for p in f.Pads():
         bb = p.GetBoundingBox()
         dr = p.GetDrillSize()
-        kpads.append({"ref": f.GetReference(), "x": mm(p.GetPosition().x), "y": mm(p.GetPosition().y),
+        # drill size is in the pad's frame; pads are at absolute angle 0, so it is the board-frame slot (unsorted, so
+        # the slot's axis is checked; review 1, S8)
+        if abs(p.GetOrientationDegrees()) > 1e-6:
+            err(f"{f.GetReference()} pad {p.GetNumber()} at angle {p.GetOrientationDegrees()}")
+        poly = p.GetEffectivePolygon()
+        kpads.append({"ref": f.GetReference(), "x": mm(bb.GetCenter().x), "y": mm(bb.GetCenter().y),
                       "w": mm(bb.GetWidth()), "h": mm(bb.GetHeight()), "net": p.GetNetname(),
                       "attr": {pcbnew.PAD_ATTRIB_SMD: "smd", pcbnew.PAD_ATTRIB_PTH: "pth", pcbnew.PAD_ATTRIB_NPTH: "npth"}.get(p.GetAttribute(), "other"),
-                      "drill": (mm(dr.x), mm(dr.y)), "used": False})
+                      "drill": (mm(dr.x), mm(dr.y)), "used": False, "number": p.GetNumber(), "pinfunction": p.GetPinFunction(),
+                      "front": p.IsOnLayer(pcbnew.F_Cu), "back": p.IsOnLayer(pcbnew.B_Cu),
+                      "area": poly.Area() / 1e12 if poly else 0.0})
 by_ref = {}
 for k in kpads:
     by_ref.setdefault(k["ref"], []).append(k)
@@ -157,6 +181,37 @@ for e in d:
         err(f"{ref} pad at {X:.3f},{Y:.3f}: kind {k['attr']} != {want_attr}")
     if abs(k["w"] - w) > TOL or abs(k["h"] - h) > TOL:
         err(f"{ref} pad at {X:.3f},{Y:.3f}: size {k['w']:.4f}x{k['h']:.4f} != {w:.4f}x{h:.4f}")
+    # copper side (SMD pads on their own layer only; holes on both)
+    if t == "pcb_smtpad":
+        want_front = e["layer"] == "top"
+        if k["front"] != want_front or k["back"] == want_front:
+            err(f"{ref} pad at {X:.3f},{Y:.3f}: on front={k['front']} back={k['back']}, JSON layer {e['layer']}")
+    elif not (k["front"] and k["back"]):
+        err(f"{ref} hole at {X:.3f},{Y:.3f}: not on both copper layers")
+    # pad number and pin name, derived from the JSON independently of the importer
+    if t != "pcb_hole":
+        port = pp.get(e.get("pcb_port_id"))
+        spt = sport.get(port["source_port_id"]) if port else None
+        want_num = None
+        if spt is not None and spt.get("pin_number") is not None:
+            want_num = str(spt["pin_number"])
+        if want_num is None:
+            for h_ in e.get("port_hints", []):
+                if re.fullmatch(r"pin\d+", h_):
+                    want_num = h_[3:]
+                    break
+        if want_num is None and spt is not None:
+            want_num = spt.get("name", "")
+        if k["number"] != want_num:
+            err(f"{ref} pad at {X:.3f},{Y:.3f}: number {k['number']!r} != {want_num!r}")
+        want_pf = spt.get("name", "") if spt else ""
+        if k["pinfunction"] != want_pf:
+            err(f"{ref} pad {k['number']}: pinfunction {k['pinfunction']!r} != {want_pf!r}")
+    if t == "pcb_smtpad" and e["shape"] == "polygon":
+        pts = [(p_["x"], p_["y"]) for p_ in e["points"]]
+        area = abs(sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))) / 2
+        if abs(k["area"] - area) > max(0.002, area * 0.01):
+            err(f"{ref} polygon pad at {X:.3f},{Y:.3f}: copper area {k['area']:.4f} != {area:.4f} mm2")
     want_net = "" if t == "pcb_hole" else cj_net(e)
     if k["net"] != want_net:
         err(f"{ref} pad at {X:.3f},{Y:.3f}: net {k['net']!r} != {want_net!r}")
@@ -169,9 +224,8 @@ for e in d:
             if round(rot) % 180 == 90:
                 hw, hh = hh, hw
             want_d = (hw, hh)
-        kd = tuple(sorted(k["drill"]))
-        if abs(kd[0] - min(want_d)) > TOL or abs(kd[1] - max(want_d)) > TOL:
-            err(f"{ref} hole at {X:.3f},{Y:.3f}: drill {k['drill']} != {want_d}")
+        if abs(k["drill"][0] - want_d[0]) > TOL or abs(k["drill"][1] - want_d[1]) > TOL:
+            err(f"{ref} hole at {X:.3f},{Y:.3f}: drill {k['drill']} != {want_d} (width, height on the board)")
     if t == "pcb_hole" and abs(k["drill"][0] - e["hole_diameter"]) > TOL:
         err(f"{ref} NPTH at {X:.3f},{Y:.3f}: drill {k['drill']} != {e['hole_diameter']}")
 extra = [k for k in kpads if not k["used"]]
@@ -260,6 +314,100 @@ for k in miss[:5]:
     err(f"via missing in KiCad: {k}")
 for k in extra[:5]:
     err(f"extra via in KiCad: {k}")
+# vias: through, outer copper to outer copper
+for tr in b.GetTracks():
+    if tr.GetClass() == "PCB_VIA" and (tr.TopLayer() != pcbnew.F_Cu or tr.BottomLayer() != pcbnew.B_Cu):
+        err(f"via at {mm(tr.GetPosition().x):.3f},{mm(tr.GetPosition().y):.3f} is not through")
+
+# outline: the closed JSON outline, transformed, against the board's Edge.Cuts segments
+ol = [(p_["x"], p_["y"]) for p_ in board["outline"]]
+if len(ol) > 1 and abs(ol[0][0] - ol[-1][0]) < 1e-9 and abs(ol[0][1] - ol[-1][1]) < 1e-9:
+    ol.pop()
+want_edges = []
+for i in range(len(ol)):
+    A, C = T(*ol[i]), T(*ol[(i + 1) % len(ol)])
+    want_edges.append((A, C))
+got_edges = []
+for dr_ in b.GetDrawings():
+    if dr_.GetLayer() == pcbnew.Edge_Cuts:
+        got_edges.append(((mm(dr_.GetStart().x), mm(dr_.GetStart().y)), (mm(dr_.GetEnd().x), mm(dr_.GetEnd().y))))
+m_, x_ = match([(a_, c_, "", 0, "") for a_, c_ in want_edges], [(a_, c_, "", 0, "") for a_, c_ in got_edges], seg_pos, seg_same)
+report["outline"] = {"json_edges": len(want_edges), "kicad_edges": len(got_edges), "missing": len(m_), "extra": len(x_)}
+if m_ or x_:
+    err(f"outline differs: {len(m_)} edges missing, {len(x_)} extra")
+
+# courtyards: corners derived here from the JSON (rect: width/height before ccw_rotation, turned about the centre in
+# tscircuit's y-up frame) against the corners of the footprint's courtyard polygon in KiCad
+import math
+cy_checked = 0
+for e in d:
+    if e["type"] not in ("pcb_courtyard_rect", "pcb_courtyard_outline"):
+        continue
+    ref = sc[pc[e["pcb_component_id"]]["source_component_id"]]["name"]
+    if e["type"] == "pcb_courtyard_rect":
+        a_ = math.radians(e.get("ccw_rotation", 0))
+        w_, h_ = e["width"], e["height"]
+        cx_, cy_ = e["center"]["x"], e["center"]["y"]
+        want = [T(cx_ + dx * math.cos(a_) - dy * math.sin(a_), cy_ + dx * math.sin(a_) + dy * math.cos(a_))
+                for dx, dy in ((-w_ / 2, -h_ / 2), (w_ / 2, -h_ / 2), (w_ / 2, h_ / 2), (-w_ / 2, h_ / 2))]
+    else:
+        want = [T(p_["x"], p_["y"]) for p_ in e["outline"]]
+    f = fps[ref]
+    # KiCad's own courtyard polygon, as DRC sees it (GetCorners() in KiCad 7 ignores the footprint's rotation)
+    f.BuildCourtyardCaches()
+    got = []
+    for lyr in (pcbnew.F_CrtYd, pcbnew.B_CrtYd):
+        ps = f.GetCourtyard(lyr)
+        for i in range(ps.OutlineCount()):
+            o_ = ps.Outline(i)
+            got.append([(mm(o_.CPoint(j).x), mm(o_.CPoint(j).y)) for j in range(o_.PointCount())])
+    if want and near(want[0], want[-1]) and len(want) > 3:
+        want = want[:-1]
+    if not any(len(gp) == len(want) and all(any(near(w2, g2) for g2 in gp) for w2 in want) for gp in got):
+        report.setdefault('courtyard_debug', {})[ref] = {'want': want[:4], 'got': [gp[:4] for gp in got]}
+        err(f"{ref} courtyard corners do not match the JSON {e['type']}")
+    cy_checked += 1
+report["courtyards_checked"] = cy_checked
+
+# back-side convention (review 1, B2), independent of the importer: build BT101 from its library footprint
+# (source/parts/KEYSTONE_2464.tsx, tscircuit frame y up; KiCad library frame is y down), put its origin at the
+# JSON courtyard centre (the courtyard is symmetric about the library origin), flip it with KiCad's own Flip and
+# turn it to the imported orientation; its pads must land on the JSON pads
+lib = {}
+ks = os.path.join(os.path.dirname(tsx), "parts", "KEYSTONE_2464.tsx")
+for m in re.finditer(r'portHints=\{\["pin(\d)"\]\} pcbX="(-?[\d.]+)mm" pcbY="(-?[\d.]+)mm"', open(ks).read()):
+    lib[m.group(1)] = (float(m.group(2)), -float(m.group(3)))
+bt = next(c for c in pc.values() if sc[c["source_component_id"]]["name"] == "BT101")
+cyo = next(e for e in d if e["type"] == "pcb_courtyard_outline" and e["pcb_component_id"] == bt["pcb_component_id"])
+# centre of the courtyard's bounding box (its outline repeats the first point, so a plain average is biased)
+ox = (min(p_["x"] for p_ in cyo["outline"]) + max(p_["x"] for p_ in cyo["outline"])) / 2
+oy = (min(p_["y"] for p_ in cyo["outline"]) + max(p_["y"] for p_ in cyo["outline"])) / 2
+tb = pcbnew.BOARD()
+fp = pcbnew.FOOTPRINT(tb)
+for num, (lx, ly) in lib.items():
+    pd = pcbnew.PAD(fp)
+    pd.SetNumber(num)
+    pd.SetPos0(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
+    pd.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
+    fp.Add(pd)
+tb.Add(fp)
+OX, OY = T(ox, oy)
+fp.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(OX), pcbnew.FromMM(OY)))
+fp.Flip(fp.GetPosition(), False)
+fp.SetOrientationDegrees(fps["BT101"].GetOrientationDegrees())
+want_bt = {}
+for e in d:
+    if e["type"] == "pcb_plated_hole" and e["pcb_component_id"] == bt["pcb_component_id"]:
+        spt = sport[pp[e["pcb_port_id"]]["source_port_id"]]
+        want_bt[str(spt["pin_number"])] = T(e["x"], e["y"])
+bt_err = 0
+for pd in fp.Pads():
+    got_p = (mm(pd.GetPosition().x), mm(pd.GetPosition().y))
+    if not near(got_p, want_bt[pd.GetNumber()]):
+        bt_err += 1
+        err(f"BT101 library pad {pd.GetNumber()} flipped at the imported orientation lands at {got_p}, JSON pad at {want_bt[pd.GetNumber()]}")
+report["back_side_convention"] = {"part": "BT101", "pads": len(lib), "mismatches": bt_err}
+
 report["ok"] = not report.get("error_count")
 print(json.dumps(report, indent=1))
 sys.exit(0 if report["ok"] else 1)

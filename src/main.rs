@@ -3,6 +3,7 @@
 mod board;
 mod import_tscircuit;
 mod render;
+mod route;
 mod sexpr;
 
 use anyhow::{Context, Result, bail};
@@ -39,6 +40,33 @@ enum Cmd {
         layers: u32,
         #[arg(long, short)]
         out: String,
+    },
+    /// Route inside one region with Freerouting; everything outside it is locked and left byte-identical.
+    Route {
+        board: String,
+        /// x0,y0,x1,y1 in mm (KiCad coordinates).
+        #[arg(long)]
+        region: String,
+        /// Comma-separated nets to keep from the router's result (default: all).
+        #[arg(long, default_value = "")]
+        nets: String,
+        #[arg(long, default_value_t = 30)]
+        passes: u32,
+        /// Freerouting jar.
+        #[arg(long, env = "PCB_FREEROUTING_JAR")]
+        freerouting: String,
+        /// Work directory for the DSN, session and logs.
+        #[arg(long, default_value = "pcb_work")]
+        work: String,
+        /// Keep unlocked copper inside the region instead of re-routing it.
+        #[arg(long)]
+        keep_inside: bool,
+        /// Seconds before Freerouting is stopped.
+        #[arg(long, default_value_t = 900)]
+        timeout: u64,
+        /// Output board (default: overwrite the input).
+        #[arg(long, short)]
+        out: Option<String>,
     },
     /// PNG of the board or a region, nets labelled.
     Render {
@@ -79,8 +107,20 @@ fn emit(json_mode: bool, ok: bool, human: String, data: serde_json::Value) -> Re
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
+    let json_mode = cli.json;
+    if let Err(e) = run(cli) {
+        if json_mode {
+            println!("{}", json!({ "ok": false, "error": format!("{e:#}") }));
+        } else {
+            eprintln!("error: {e:#}");
+        }
+        std::process::exit(2);
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     match cli.cmd {
         Cmd::Roundtrip { board } => {
             let src = std::fs::read_to_string(&board)?;
@@ -123,12 +163,39 @@ fn main() -> Result<()> {
             let src = std::fs::read_to_string(&circuit_json)?;
             let (text, st) = import_tscircuit::convert(&src, layers)?;
             std::fs::write(&out, &text)?;
+            // the project file carries the design rules; written only if none exists, so hand-tuned rules survive
+            let pro = std::path::Path::new(&out).with_extension("kicad_pro");
+            if !pro.exists() {
+                let stem = pro.file_stem().and_then(|s| s.to_str()).unwrap_or("board");
+                std::fs::write(&pro, import_tscircuit::project_file(stem))?;
+            }
+            for w in &st.warnings {
+                eprintln!("warning: {w}");
+            }
             emit(
                 cli.json,
                 true,
                 format!("wrote {out}: {} footprints, {} pads, {} nets, {} segments, {} vias", st.footprints, st.pads, st.nets, st.segments, st.vias),
-                json!({ "out": out, "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
+                json!({ "out": out, "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN, "warnings": st.warnings }),
             )
+        }
+        Cmd::Route { board, region, nets, passes, freerouting, work, keep_inside, timeout, out } => {
+            let o = route::Opts {
+                region: parse_region(&region)?,
+                nets: nets.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
+                passes,
+                fr_jar: std::fs::canonicalize(&freerouting).with_context(|| format!("Freerouting jar {freerouting}"))?,
+                work: std::path::PathBuf::from(&work),
+                keep_inside,
+                timeout_s: timeout,
+            };
+            let out = out.unwrap_or_else(|| board.clone());
+            let rep = route::run(&board, &out, &o)?;
+            let h = format!(
+                "routed {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates",
+                out, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates
+            );
+            emit(cli.json, true, h, serde_json::to_value(&rep)?)
         }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;

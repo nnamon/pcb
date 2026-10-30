@@ -78,6 +78,7 @@ pub struct Zone {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+/// An Edge.Cuts segment.
 pub struct Segment {
     pub x0: f64,
     pub y0: f64,
@@ -131,6 +132,29 @@ fn locked(n: &Node) -> bool {
 
 fn pts(n: &Node) -> Vec<(f64, f64)> {
     n.find("pts").map(|p| p.find_all("xy").map(|q| (q.num(1).unwrap_or(0.0), q.num(2).unwrap_or(0.0))).collect()).unwrap_or_default()
+}
+
+/// Points along a three-point arc (start, mid, end), 16 segments; a straight line if the points are collinear.
+pub fn arc_points(a: (f64, f64), m: (f64, f64), c: (f64, f64)) -> Vec<(f64, f64)> {
+    let d = 2.0 * (a.0 * (m.1 - c.1) + m.0 * (c.1 - a.1) + c.0 * (a.1 - m.1));
+    if d.abs() < 1e-12 {
+        return vec![a, c];
+    }
+    let sq = |p: (f64, f64)| p.0 * p.0 + p.1 * p.1;
+    let ux = (sq(a) * (m.1 - c.1) + sq(m) * (c.1 - a.1) + sq(c) * (a.1 - m.1)) / d;
+    let uy = (sq(a) * (c.0 - m.0) + sq(m) * (a.0 - c.0) + sq(c) * (m.0 - a.0)) / d;
+    let r = ((a.0 - ux).powi(2) + (a.1 - uy).powi(2)).sqrt();
+    let ang = |p: (f64, f64)| (p.1 - uy).atan2(p.0 - ux);
+    let (t0, tm, t1) = (ang(a), ang(m), ang(c));
+    // sweep from t0 to t1 in the direction that passes through tm
+    let tau = std::f64::consts::TAU;
+    let norm = |t: f64| ((t % tau) + tau) % tau;
+    let ccw = norm(tm - t0) < norm(t1 - t0);
+    let sweep = if ccw { norm(t1 - t0) } else { -norm(t0 - t1) };
+    (0..=16).map(|i| {
+        let t = t0 + sweep * i as f64 / 16.0;
+        (ux + r * t.cos(), uy + r * t.sin())
+    }).collect()
 }
 
 impl Board {
@@ -191,7 +215,7 @@ impl Board {
                         .collect();
                     b.zones.push(Zone { net: n.find("net_name").and_then(|x| x.arg(1)).unwrap_or("").to_string(), layers, outline, filled })
                 }
-                Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") => {
+                Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle") => {
                     if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") {
                         let (x0, y0) = xy(n, "start");
                         let (x1, y1) = xy(n, "end");
@@ -202,15 +226,28 @@ impl Board {
                                 }
                             }
                             Some("gr_poly") => {
+                                // closed: the last point joins the first (review 1, N9)
                                 let p = pts(n);
-                                for w in p.windows(2) {
-                                    b.outline.push(Segment { x0: w[0].0, y0: w[0].1, x1: w[1].0, y1: w[1].1 });
+                                for i in 0..p.len() {
+                                    let (a, c) = (p[i], p[(i + 1) % p.len()]);
+                                    b.outline.push(Segment { x0: a.0, y0: a.1, x1: c.0, y1: c.1 });
                                 }
                             }
                             Some("gr_arc") => {
                                 let (mx, my) = xy(n, "mid");
-                                b.outline.push(Segment { x0, y0, x1: mx, y1: my });
-                                b.outline.push(Segment { x0: mx, y0: my, x1, y1 });
+                                for s in arc_points((x0, y0), (mx, my), (x1, y1)).windows(2) {
+                                    b.outline.push(Segment { x0: s[0].0, y0: s[0].1, x1: s[1].0, y1: s[1].1 });
+                                }
+                            }
+                            Some("gr_circle") => {
+                                // (gr_circle (center x y) (end x y)): radius from centre to end
+                                let (cx, cy) = xy(n, "center");
+                                let r = ((x1 - cx).powi(2) + (y1 - cy).powi(2)).sqrt();
+                                let k = 64;
+                                for i in 0..k {
+                                    let (a, c) = (i as f64 / k as f64 * std::f64::consts::TAU, (i + 1) as f64 / k as f64 * std::f64::consts::TAU);
+                                    b.outline.push(Segment { x0: cx + r * a.cos(), y0: cy + r * a.sin(), x1: cx + r * c.cos(), y1: cy + r * c.sin() });
+                                }
                             }
                             _ => b.outline.push(Segment { x0, y0, x1, y1 }),
                         }
@@ -321,5 +358,28 @@ impl Board {
             }
         }
         if b.0 > b.2 { (0.0, 0.0, 100.0, 100.0) } else { b }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arc_through_mid() {
+        // quarter circle radius 1 about the origin, from (1,0) through (0.7071,0.7071) to (0,1)
+        let p = arc_points((1.0, 0.0), (0.5f64.sqrt(), 0.5f64.sqrt()), (0.0, 1.0));
+        assert_eq!(p.len(), 17);
+        for q in &p {
+            assert!(((q.0 * q.0 + q.1 * q.1).sqrt() - 1.0).abs() < 1e-9);
+            assert!(q.0 >= -1e-9 && q.1 >= -1e-9, "left the quarter: {q:?}");
+        }
+    }
+
+    #[test]
+    fn closed_poly_outline() {
+        let src = r#"(kicad_pcb (version 20221018) (gr_poly (pts (xy 0 0) (xy 10 0) (xy 10 5)) (layer "Edge.Cuts") (width 0.1)))"#;
+        let b = Board::from_str(src.to_string()).unwrap();
+        assert_eq!(b.outline.len(), 3);
     }
 }
