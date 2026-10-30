@@ -6,7 +6,7 @@
 # Freerouting by SHA-256. Not pinned: the rustup installer script (the toolchain it installs is).
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
-ARG IMAGE_VERSION=5
+ARG IMAGE_VERSION=6
 ARG APT_SNAPSHOT=20261030T090000Z
 # KiCad 10 from the KiCad project's PPA (Ubuntu 24.04 ships 7.0.11), read at APT_SNAPSHOT. To move to a newer KiCad,
 # move APT_SNAPSHOT past its release, bump this and KICAD_VERSION in src/doctor.rs together, and re-run the suite.
@@ -20,20 +20,24 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 
 # the PPA's signing key is kept beside this file and checked against the fingerprint Launchpad publishes
 COPY kicad-10-ppa.asc /tmp/kicad-10-ppa.asc
-# every apt command reads the archive and the PPA as they were at APT_SNAPSHOT: set in apt's config, not as a flag on
-# update alone, because `apt-get update --snapshot` leaves install reading the live archive (review 7, C3)
-RUN printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
- && apt-get update \
+# The snapshot service is HTTPS only and the base image has no CA certificates, so ca-certificates and gnupg come first
+# from the live archive over plain HTTP (signed by Ubuntu's archive key), and are reinstalled from the snapshot below.
+# Then every apt command reads the archive and the PPA as they were at APT_SNAPSHOT: set in apt's config, not as a flag
+# on update alone, because `apt-get update --snapshot` leaves install reading the live archive (review 7, C3).
+RUN apt-get update \
  && apt-get install -y --no-install-recommends gnupg ca-certificates \
+ && printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
+ && rm -rf /var/lib/apt/lists/* \
  && test "$(gpg --show-keys --with-colons /tmp/kicad-10-ppa.asc | awk -F: '/^fpr/ {print $10; exit}')" = "${KICAD_PPA_FINGERPRINT}" \
  && mkdir -p /etc/apt/keyrings && gpg --dearmor < /tmp/kicad-10-ppa.asc > /etc/apt/keyrings/kicad-10.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/kicad-10.gpg] https://ppa.launchpadcontent.net/kicad/kicad-10.0-releases/ubuntu noble main" > /etc/apt/sources.list.d/kicad-10.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends --allow-downgrades \
+      gnupg ca-certificates \
       kicad=${KICAD_VERSION} \
       python3 python3-pip python3-shapely \
       openjdk-25-jre-headless \
-      curl ca-certificates git build-essential pkg-config \
+      curl git build-essential pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
 # jsonschema 4.18 or later (noble ships 4.10, which lacks the registry the contract checker uses; review 5, 1)
