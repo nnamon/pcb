@@ -1,6 +1,6 @@
 //! `pcb doctor`: the tools pcb is tested against, and the behaviours of theirs it relies on.
 //!
-//! Versions are pinned (proposal, decision 4): KiCad 7.0.11 and Freerouting 2.5.0 (on Java 25), checked by version
+//! Versions are pinned (proposal, decision 4): KiCad 10.0.8 and Freerouting 2.5.0 (on Java 25), checked by version
 //! string and, for the jar, by SHA-256. The self-tests record each tool behaviour a workaround in pcb depends on; if an upgrade
 //! changes one, doctor fails and names it, before any board is touched.
 
@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
 
-pub const KICAD_VERSION: &str = "7.0.11";
+pub const KICAD_VERSION: &str = "10.0.8";
 /// freerouting-2.5.0.jar from the v2.5.0 GitHub release (5 Oct 2026).
 pub const FREEROUTING_SHA256: &str = "f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7";
 pub const JAVA_MAJOR: u32 = 25;
@@ -46,12 +46,12 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
             let ver = v["version"].as_str().unwrap_or("").to_string();
             checks.push(check("kicad version", ver.starts_with(KICAD_VERSION), ver, KICAD_VERSION));
             // the importer's back-side convention (rotation + 180) was verified on KiCad 7.0.11 against library
-            // pads (reviews 1 and 2); 7.0.11 puts this flipped, turned pad at (50, 48). Any other answer means the
-            // convention must be checked again.
+            // pads (reviews 1 and 2); 7.0.11 and 10.0.8 both put this flipped, turned pad at (50, 48). Any other
+            // answer means the convention must be checked again.
             let at = v["flip_pad_at"].clone();
             let flip_ok = at[0].as_f64().map(|x| (x - 50.0).abs() < 1e-3).unwrap_or(false) && at[1].as_f64().map(|y| (y - 48.0).abs() < 1e-3).unwrap_or(false);
-            checks.push(check("kicad flip convention", flip_ok, at.to_string(), "[50.0,48.0] as on 7.0.11"));
-            // spike 3 writes one zone per polygon because KiCad 7 kept only the first outline; still true?
+            checks.push(check("kicad flip convention", flip_ok, at.to_string(), "[50.0,48.0] as on 7.0.11 and 10.0.8"));
+            // spike 3 writes one zone per polygon because KiCad kept only the first outline (7.0.11 and 10.0.8); still true?
             let n = v["zone_outlines_after_save"].as_u64().unwrap_or(0);
             checks.push(check("kicad multi-outline zones", n == 1, n.to_string(), "1 (the behaviour pcb works around)"));
         }

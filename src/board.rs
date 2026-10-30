@@ -5,7 +5,10 @@
 use crate::sexpr::{self, Node};
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+/// The board file format pcb reads and writes: KiCad 10's. Older files are refused, not converted silently.
+pub const FORMAT_VERSION: u64 = 20260206;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Pad {
@@ -89,7 +92,8 @@ pub struct Segment {
 pub struct Board {
     pub src: String,
     pub root: Node,
-    pub nets: BTreeMap<u32, String>,
+    /// Every net name used by a pad, track, via or zone (KiCad 10 has no net table).
+    pub nets: BTreeSet<String>,
     pub footprints: Vec<Footprint>,
     pub tracks: Vec<Track>,
     pub vias: Vec<Via>,
@@ -115,15 +119,9 @@ fn xy(n: &Node, name: &str) -> (f64, f64) {
     n.find(name).map(|a| (a.num(1).unwrap_or(0.0), a.num(2).unwrap_or(0.0))).unwrap_or((0.0, 0.0))
 }
 
-fn net_of(n: &Node, nets: &BTreeMap<u32, String>) -> String {
-    match n.find("net") {
-        // pads and tracks: (net 3 "VBAT") in KiCad 7; tracks carry only the number
-        Some(nn) => match nn.arg(2) {
-            Some(name) => name.to_string(),
-            None => nn.num(1).and_then(|i| nets.get(&(i as u32)).cloned()).unwrap_or_default(),
-        },
-        None => String::new(),
-    }
+/// `(net "VBAT")` on a pad, track, via or zone; none means no net.
+fn net_of(n: &Node) -> String {
+    n.find("net").and_then(|nn| nn.arg(1)).unwrap_or("").to_string()
 }
 
 fn locked(n: &Node) -> bool {
@@ -166,17 +164,18 @@ impl Board {
     pub fn from_str(src: String) -> Result<Board> {
         let root = sexpr::parse(&src)?;
         anyhow::ensure!(root.is("kicad_pcb"), "not a kicad_pcb file");
-        let mut nets = BTreeMap::new();
-        for n in root.find_all("net") {
-            if let (Some(i), Some(name)) = (n.num(1), n.arg(2)) {
-                nets.insert(i as u32, name.to_string());
-            }
+        let version = root.find("version").and_then(|v| v.num(1)).unwrap_or(0.0) as u64;
+        if version < FORMAT_VERSION {
+            return Err(crate::contract::refused(
+                "old-kicad-format",
+                format!("the board is in an older KiCad format (version {version}); pcb reads KiCad 10 files (version {FORMAT_VERSION} or later). Convert a copy with: kicad-cli pcb upgrade <file>"),
+            ));
         }
         let copper_layers = root
             .find("layers")
             .map(|l| l.items().iter().skip(1).filter(|c| c.arg(2) == Some("signal") || c.arg(2) == Some("power")).filter_map(|c| c.arg(1).map(String::from)).collect())
             .unwrap_or_default();
-        let mut b = Board { src: String::new(), root: root.clone(), nets, footprints: vec![], tracks: vec![], vias: vec![], zones: vec![], outline: vec![], copper_layers };
+        let mut b = Board { src: String::new(), root: root.clone(), nets: BTreeSet::new(), footprints: vec![], tracks: vec![], vias: vec![], zones: vec![], outline: vec![], copper_layers };
         for n in root.items() {
             match n.head() {
                 Some("footprint") => b.footprints.push(b.footprint(n)),
@@ -187,7 +186,7 @@ impl Board {
                         x0, y0, x1, y1,
                         width: n.find("width").and_then(|w| w.num(1)).unwrap_or(0.0),
                         layer: n.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(),
-                        net: net_of(n, &b.nets),
+                        net: net_of(n),
                         locked: locked(n),
                         span: n.span,
                     })
@@ -198,7 +197,7 @@ impl Board {
                         x, y,
                         size: n.find("size").and_then(|w| w.num(1)).unwrap_or(0.0),
                         drill: n.find("drill").and_then(|w| w.num(1)).unwrap_or(0.0),
-                        net: net_of(n, &b.nets),
+                        net: net_of(n),
                         locked: locked(n),
                         span: n.span,
                     })
@@ -213,7 +212,7 @@ impl Board {
                         .find_all("filled_polygon")
                         .map(|f| (f.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(), pts(f)))
                         .collect();
-                    b.zones.push(Zone { net: n.find("net_name").and_then(|x| x.arg(1)).unwrap_or("").to_string(), layers, outline, filled })
+                    b.zones.push(Zone { net: net_of(n), layers, outline, filled })
                 }
                 Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle") => {
                     if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") {
@@ -256,6 +255,8 @@ impl Board {
                 _ => {}
             }
         }
+        let used = b.footprints.iter().flat_map(|f| f.pads.iter().map(|p| &p.net)).chain(b.tracks.iter().map(|t| &t.net)).chain(b.vias.iter().map(|v| &v.net)).chain(b.zones.iter().map(|z| &z.net));
+        b.nets = used.filter(|n| !n.is_empty()).cloned().collect();
         b.src = src;
         Ok(b)
     }
@@ -294,7 +295,7 @@ impl Board {
             });
             pads.push(Pad {
                 number: p.arg(1).unwrap_or("").to_string(),
-                net: net_of(p, &self.nets),
+                net: net_of(p),
                 x: fx + dx,
                 y: fy + dy,
                 // KiCad 7 stores the pad angle including the footprint's rotation
@@ -377,8 +378,19 @@ mod tests {
     }
 
     #[test]
+    fn nets_by_name_and_old_format_refused() {
+        let src = r#"(kicad_pcb (version 20260206) (footprint "x" (layer "F.Cu") (at 0 0) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A"))) (segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (locked yes) (net "B")) (zone (net "GND") (layer "B.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1)))))"#;
+        let b = Board::from_str(src.to_string()).unwrap();
+        assert_eq!(b.nets.iter().cloned().collect::<Vec<_>>(), vec!["A", "B", "GND"]);
+        assert_eq!((b.footprints[0].pads[0].net.as_str(), b.tracks[0].net.as_str(), b.tracks[0].locked, b.zones[0].net.as_str()), ("A", "B", true, "GND"));
+        let old = Board::from_str(r#"(kicad_pcb (version 20221018) (net 0 ""))"#.to_string()).err().unwrap();
+        let c = old.downcast_ref::<crate::contract::CodedError>().unwrap();
+        assert_eq!(c.code, "old-kicad-format");
+    }
+
+    #[test]
     fn closed_poly_outline() {
-        let src = r#"(kicad_pcb (version 20221018) (gr_poly (pts (xy 0 0) (xy 10 0) (xy 10 5)) (layer "Edge.Cuts") (width 0.1)))"#;
+        let src = r#"(kicad_pcb (version 20260206) (gr_poly (pts (xy 0 0) (xy 10 0) (xy 10 5)) (layer "Edge.Cuts") (width 0.1)))"#;
         let b = Board::from_str(src.to_string()).unwrap();
         assert_eq!(b.outline.len(), 3);
     }

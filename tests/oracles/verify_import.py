@@ -20,6 +20,13 @@ import sys
 from collections import Counter
 
 import pcbnew
+from shapely.geometry import Polygon
+
+# KiCad 10.0.8 builds a footprint's courtyard polygon this far (mm) inside its drawn outline (7.0.11: 0)
+CRTYD_INSET = 0.005
+
+sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.abspath(__file__)), "..", "lib"))
+import kisexp  # noqa: E402
 
 cj_path, pcb_path = sys.argv[1:3]
 d = json.load(open(cj_path))
@@ -135,8 +142,7 @@ for cid, c in pc.items():
     if bool(a & pcbnew.FP_EXCLUDE_FROM_POS_FILES) != dnp or bool(a & pcbnew.FP_EXCLUDE_FROM_BOM) != dnp:
         err(f"{ref} DNP flags {a} != {dnp}")
     want_lcsc = ((sc[c["source_component_id"]].get("supplier_part_numbers") or {}).get("jlcpcb") or [""])[0]
-    props = f.GetProperties()
-    got = props.get("LCSC", "") if hasattr(props, "get") else ""
+    got = f.GetFieldText("LCSC") if f.HasField("LCSC") else ""
     if got != want_lcsc:
         err(f"{ref} LCSC {got!r} != {want_lcsc!r}")
 
@@ -150,7 +156,8 @@ for f in b.GetFootprints():
         # the slot's axis is checked; review 1, S8)
         if abs(p.GetOrientationDegrees()) > 1e-6:
             err(f"{f.GetReference()} pad {p.GetNumber()} at angle {p.GetOrientationDegrees()}")
-        poly = p.GetEffectivePolygon()
+        # KiCad 10 pads can differ by layer; the importer writes one shape for all, so the outer copper layer it is on
+        poly = p.GetEffectivePolygon(pcbnew.F_Cu if p.IsOnLayer(pcbnew.F_Cu) else pcbnew.B_Cu)
         kpads.append({"ref": f.GetReference(), "x": mm(bb.GetCenter().x), "y": mm(bb.GetCenter().y),
                       "w": mm(bb.GetWidth()), "h": mm(bb.GetHeight()), "net": p.GetNetname(),
                       "attr": {pcbnew.PAD_ATTRIB_SMD: "smd", pcbnew.PAD_ATTRIB_PTH: "pth", pcbnew.PAD_ATTRIB_NPTH: "npth"}.get(p.GetAttribute(), "other"),
@@ -317,14 +324,15 @@ for t in d:
             prev = (a["x"], a["y"], a.get("to_layer"), prev[3] if prev else 0.15)
 kc_segs, kc_vias = [], []
 # review 2, 6: pcbnew reassigns a via's net from its tracks on load, so via nets come from the file text
-_netname = {int(m.group(1)): m.group(2) for m in re.finditer(r'^  \(net (\d+) "([^"]*)"\)', open(pcb_path).read(), re.M)}
+_file_vias = kisexp.parse(open(pcb_path).read()).find_all("via")
 _via_text = {}
-for m in re.finditer(r'^  \(via (?:locked )?\(at ([-\d.]+) ([-\d.]+)\)[^\n]*\(net (\d+)\)', open(pcb_path).read(), re.M):
-    _via_text[(round(float(m.group(1)), 4), round(float(m.group(2)), 4))] = _netname.get(int(m.group(3)), "")
+for v_ in _file_vias:
+    at_ = v_.nums("at")
+    _via_text[(round(at_[0], 4), round(at_[1], 4))] = v_.find("net").arg(1) if v_.find("net") else ""
 for tr in b.GetTracks():
     if tr.GetClass() == "PCB_VIA":
         pos = (mm(tr.GetPosition().x), mm(tr.GetPosition().y))
-        kc_vias.append((pos, mm(tr.GetWidth()), mm(tr.GetDrillValue()), _via_text.get((round(pos[0], 4), round(pos[1], 4)), "?")))
+        kc_vias.append((pos, mm(tr.GetWidth(pcbnew.F_Cu)), mm(tr.GetDrillValue()), _via_text.get((round(pos[0], 4), round(pos[1], 4)), "?")))
     else:
         kc_segs.append(((mm(tr.GetStart().x), mm(tr.GetStart().y)), (mm(tr.GetEnd().x), mm(tr.GetEnd().y)), tr.GetLayerName(), mm(tr.GetWidth()), tr.GetNetname()))
 
@@ -405,9 +413,17 @@ for tr in b.GetTracks():
     if tr.GetClass() == "PCB_VIA" and (tr.TopLayer() != pcbnew.F_Cu or tr.BottomLayer() != pcbnew.B_Cu):
         err(f"via at {mm(tr.GetPosition().x):.3f},{mm(tr.GetPosition().y):.3f} is not through")
 # and in the file text, which pcbnew normalises on load (review 5, 7)
-for m in re.finditer(r'^  \(via [^\n]*?\(at ([-\d.]+) ([-\d.]+)\)[^\n]*?\(layers ([^)]*)\)', open(pcb_path).read(), re.M):
-    if m.group(3).split() != ['"F.Cu"', '"B.Cu"']:
-        err(f"via at {m.group(1)},{m.group(2)} is not through in the file: layers {m.group(3)}")
+for v_ in _file_vias:
+    lay_ = v_.find("layers").items[1:]
+    if lay_ != ["F.Cu", "B.Cu"]:
+        err(f"via at {v_.nums('at')} is not through in the file: layers {lay_}")
+# plated holes too: KiCad 10 puts a plated pad back on every copper layer when it loads one
+for fp_ in kisexp.parse(open(pcb_path).read()).find_all("footprint"):
+    ref_ = next((pr.arg(2) for pr in fp_.find_all("property") if pr.arg(1) == "Reference"), "?")
+    for pd_ in fp_.find_all("pad"):
+        lay_ = pd_.find("layers").items[1:] if pd_.find("layers") else []
+        if pd_.arg(2) == "thru_hole" and "*.Cu" not in lay_ and not {"F.Cu", "B.Cu"} <= set(lay_):
+            err(f"{ref_} hole pad {pd_.arg(1)}: not on both copper layers in the file: layers {lay_}")
 
 # outline: the closed JSON outline, transformed, against the board's Edge.Cuts segments
 ol = [(p_["x"], p_["y"]) for p_ in board["outline"]]
@@ -445,7 +461,7 @@ for e in d:
     f = fps.get(ref)
     if f is None:
         continue   # reported as a missing footprint above
-    # KiCad's own courtyard polygon, as DRC sees it (GetCorners() in KiCad 7 ignores the footprint's rotation)
+    # KiCad's own courtyard polygon, as DRC sees it (GetCorners() in KiCad 7 ignored the footprint's rotation)
     f.BuildCourtyardCaches()
     got = []
     # review 2, 5: only the courtyard layer of the footprint's own side counts
@@ -453,7 +469,10 @@ for e in d:
         ps = f.GetCourtyard(lyr)
         for i in range(ps.OutlineCount()):
             o_ = ps.Outline(i)
-            got.append([(mm(o_.CPoint(j).x), mm(o_.CPoint(j).y)) for j in range(o_.PointCount())])
+            pts_ = [(mm(o_.CPoint(j).x), mm(o_.CPoint(j).y)) for j in range(o_.PointCount())]
+            # KiCad 10 builds the courtyard 5 um inside its drawn outline; a mitred 5 um offset gives the corners back
+            grown = Polygon(pts_).buffer(CRTYD_INSET, join_style=2)
+            got.append(list(grown.exterior.coords)[:-1] if CRTYD_INSET else pts_)
     if want and near(want[0], want[-1]) and len(want) > 3:
         want = want[:-1]
     if not any(len(gp) == len(want) and all(any(near(w2, g2) for g2 in gp) for w2 in want) for gp in got):
@@ -478,13 +497,12 @@ for part, spec in fx.get("import", {}).get("back_side", {}).items():
     for num, (lx, ly) in lib.items():
         pd = pcbnew.PAD(fp)
         pd.SetNumber(num)
-        pd.SetPos0(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
-        pd.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
         fp.Add(pd)
+        pd.SetFPRelativePosition(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
     tb.Add(fp)
     OX, OY = T(ox, oy)
     fp.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(OX), pcbnew.FromMM(OY)))
-    fp.Flip(fp.GetPosition(), False)
+    fp.Flip(fp.GetPosition(), pcbnew.FLIP_DIRECTION_TOP_BOTTOM)
     fp.SetOrientationDegrees(fps[part].GetOrientationDegrees())
     want_bt = {}
     for e in d:

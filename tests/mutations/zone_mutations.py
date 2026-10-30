@@ -38,7 +38,7 @@ MUT = {
     "tie_copper_moved": (f"""
 f = b.FindFootprintByReference({fx(tie['footprint'])})
 g = next(g for g in f.GraphicalItems() if g.GetLayerName().endswith('.Cu'))
-g.SetEnd0(g.GetEnd0() + pcbnew.VECTOR2I(50000, 0))  # the saved end is the footprint-local one
+g.SetEnd(g.GetEnd() + pcbnew.VECTOR2I(50000, 0))  # KiCad 10: board position; KiCad keeps the footprint-local one
 """, True),
     "tie_track_dropped": (f"""
 f = b.FindFootprintByReference({fx(tie['footprint'])})

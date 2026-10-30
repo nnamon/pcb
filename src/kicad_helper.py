@@ -1,8 +1,8 @@
-"""KiCad operations `pcb` delegates to KiCad 7's pcbnew module. Embedded in the pcb binary and written to its
+"""KiCad operations `pcb` delegates to KiCad 10's pcbnew module. Embedded in the pcb binary and written to its
 work directory at run time; prints one JSON object.
 
   dsn  board.kicad_pcb out.dsn         Specctra DSN export (locked tracks go out as fixed wiring)
-  drc  board.kicad_pcb report.rpt      zones refilled in memory, then DRC report plus a JSON summary by type and position
+  drc  board.kicad_pcb report.json     kicad-cli DRC, zones refilled in memory (the file is not saved); items by type and position
   fill board.kicad_pcb                 fill every zone and save the board
   selftest workdir                     KiCad version and the behaviours pcb relies on (pcb doctor)
 """
@@ -22,12 +22,11 @@ def selftest(work):
     f = pcbnew.FOOTPRINT(b)
     p = pcbnew.PAD(f)
     p.SetNumber("1")
-    p.SetPos0(pcbnew.VECTOR2I(pcbnew.FromMM(2), 0))
-    p.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(2), 0))
     f.Add(p)
+    p.SetFPRelativePosition(pcbnew.VECTOR2I(pcbnew.FromMM(2), 0))
     b.Add(f)
     f.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(50), pcbnew.FromMM(50)))
-    f.Flip(f.GetPosition(), False)
+    f.Flip(f.GetPosition(), pcbnew.FLIP_DIRECTION_TOP_BOTTOM)
     f.SetOrientationDegrees(90)
     q = p.GetPosition()
     res["flip_pad_at"] = [round(pcbnew.ToMM(q.x), 4), round(pcbnew.ToMM(q.y), 4)]
@@ -46,7 +45,7 @@ def selftest(work):
     res["zone_outlines_after_save"] = max((zz.Outline().OutlineCount() for zz in b2.Zones()), default=0)
     # probe boards for doctor's own DRC and Freerouting runs, each in a fresh process (see kicad.rs)
     for name, short in (("drc_probe", True), ("route_probe", False)):
-        pb = pcbnew.BOARD()
+        pb = pcbnew.NewBoard(os.path.join(work, name + ".kicad_pcb"))
         pb.SetCopperLayerCount(2)
         nets = {}
         for n in ("A", "B"):
@@ -87,6 +86,36 @@ def selftest(work):
     print(json.dumps({"ok": True, **res}))
 
 
+DRC_SCHEMA = "https://schemas.kicad.org/drc.v1.json"
+
+
+def drc(board, out):
+    """KiCad's DRC through kicad-cli: in KiCad 10, WriteDRCReport asserts outside the KiCad application. The JSON
+    schema is checked, and kicad-cli's own totals must equal what was read, or the format has changed (review 5, 4).
+    PCB_KICAD_CLI names another kicad-cli (the adapter cases use it to change the format)."""
+    import os
+    import subprocess
+    cli = os.environ.get("PCB_KICAD_CLI", "kicad-cli")
+    r = subprocess.run([cli, "pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "--all-track-errors",
+                        "--refill-zones", "-o", out, board], capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        raise SystemExit(f"kicad-cli DRC failed (exit {r.returncode}): {r.stderr[-500:]}{r.stdout[-500:]}")
+    d = json.load(open(out))
+    if d.get("$schema") != DRC_SCHEMA or d.get("coordinate_units") != "mm":
+        raise SystemExit(f"DRC report not understood: schema {d.get('$schema')!r}, units {d.get('coordinate_units')!r}")
+    items = []
+    for key in ("violations", "unconnected_items"):
+        for v in d.get(key) or []:
+            if "type" not in v or not isinstance(v.get("items"), list):
+                raise SystemExit(f"DRC report not understood: a {key} entry has no type or items")
+            locs = [{"x": float(i["pos"]["x"]), "y": float(i["pos"]["y"]), "item": i["description"]} for i in v["items"]]
+            items.append({"type": v["type"], "message": v.get("description", ""), "severity": v.get("severity", ""), "at": locs})
+    found = sum(int(n) for n in re.findall(r"^Found (\d+) ", r.stdout, re.M))
+    if found != len(items):
+        raise SystemExit(f"DRC report not understood: kicad-cli counts {found}, {len(items)} read")
+    return {"ok": True, "items": items, "found": found}
+
+
 def main():
     cmd, path = sys.argv[1], sys.argv[2]
     if cmd == "selftest":
@@ -96,24 +125,7 @@ def main():
         ok = pcbnew.ExportSpecctraDSN(b, sys.argv[3])
         print(json.dumps({"ok": bool(ok), "dsn": sys.argv[3]}))
     elif cmd == "drc":
-        rpt = sys.argv[3]
-        # fills as they would be now, in memory only: a stale fill gives false clearance and connection results
-        if len(b.Zones()):
-            b.BuildConnectivity()
-            pcbnew.ZONE_FILLER(b).Fill(b.Zones())
-        ok = pcbnew.WriteDRCReport(b, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
-        text = open(rpt).read()
-        items = []
-        for m in re.finditer(r"^\[(\w+)\]: ([^\n]*)\n((?:    [^\n]*\n)+)", text, re.M):
-            body = m.group(3)
-            sev = re.search(r"Severity: (\w+)", body)
-            locs = [{"x": float(a), "y": float(b_), "item": it.strip()} for a, b_, it in re.findall(r"@\((-?[\d.]+) mm, (-?[\d.]+) mm\): ([^\n]*)", body)]
-            items.append({"type": m.group(1), "message": m.group(2), "severity": sev.group(1) if sev else "", "at": locs})
-        # the report's own totals must equal what was parsed, or the format has changed (review 5, 4)
-        found = sum(int(n) for n in re.findall(r"^\*\* Found (\d+) ", text, re.M))
-        if not ok or found != len(items):
-            raise SystemExit(f"DRC report not understood: ok={ok}, the report counts {found}, {len(items)} parsed")
-        print(json.dumps({"ok": bool(ok), "items": items, "found": found}))
+        print(json.dumps(drc(path, sys.argv[3])))
     elif cmd == "fill":
         # connectivity first: the filler uses it to find and remove unconnected islands
         b.BuildConnectivity()

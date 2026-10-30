@@ -31,6 +31,9 @@ import tempfile
 import tomllib
 
 import pcbnew
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+import kisexp  # noqa: E402
 from shapely.affinity import rotate, translate
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
@@ -40,18 +43,8 @@ IU = 1e6
 
 
 def drc_counts(path):
-    """KiCad DRC by kind and the nets involved, zones refilled in memory. Run in its own process."""
-    b_ = pcbnew.LoadBoard(path)
-    if len(b_.Zones()):
-        b_.BuildConnectivity()
-        pcbnew.ZONE_FILLER(b_).Fill(b_.Zones())
-    rpt = tempfile.mktemp(suffix=".rpt")
-    pcbnew.WriteDRCReport(b_, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
-    c = collections.Counter()
-    for m in re.finditer(r"^\[(\w+)\]:[^\n]*\n((?:    [^\n]*\n)+)", open(rpt).read(), re.M):
-        c[m.group(1) + " " + " ".join(sorted(set(re.findall(r"\[([^\]]*)\]", m.group(2)))))] += 1
-    os.unlink(rpt)
-    return c
+    """KiCad DRC by kind and the nets involved, zones refilled in memory (kicad-cli, tests/lib/kisexp.py)."""
+    return kisexp.drc_counts(path)
 
 
 if sys.argv[1] == "--drc":
@@ -104,7 +97,7 @@ coil_tracks, coil_vias = [], []
 if tie:
     coil_tracks = sorted((xy(t.GetStart()), xy(t.GetEnd()), t.GetWidth(), t.GetLayerName()) for t in base.GetTracks() if t.GetNetname() == tie["former_net"] and t.GetClass() != "PCB_VIA")
     coil_tracks = sorted(tuple(sorted((a, c))) + (w, l) for a, c, w, l in coil_tracks)
-    coil_vias = sorted((xy(t.GetPosition()), t.GetWidth(), t.GetDrillValue()) for t in base.GetTracks() if t.GetNetname() == tie["former_net"] and t.GetClass() == "PCB_VIA")
+    coil_vias = sorted((xy(t.GetPosition()), t.GetWidth(pcbnew.F_Cu), t.GetDrillValue()) for t in base.GetTracks() if t.GetNetname() == tie["former_net"] and t.GetClass() == "PCB_VIA")
 del base
 
 b = pcbnew.LoadBoard(zoned_p)
@@ -135,12 +128,11 @@ if tie:
     if any(t.GetNetname() == tie["former_net"] for t in b.GetTracks()):
         fails.append(f"A: {tie['former_net']} copper left on the board")
     # the pad groups are not readable from Python: read them from the footprint's block in the file
-    text = open(zoned_p).read()
-    i = text.index(f'(property "Reference" "{tie["footprint"]}"') if f'(property "Reference" "{tie["footprint"]}"' in text else text.index(f'(fp_text reference "{tie["footprint"]}"')
-    start = text.rindex("\n  (footprint ", 0, i)
-    blk = text[start:text.index("\n  )\n", i)]
-    groups = re.findall(r'\(net_tie_pad_groups((?: "[^"]*")+)\)', blk)
-    got = re.findall(r'"([^"]*)"', groups[0]) if groups else []
+    got = []
+    for fp_ in kisexp.parse(open(zoned_p).read()).find_all("footprint"):
+        if any(pr.arg(1) == "Reference" and pr.arg(2) == tie["footprint"] for pr in fp_.find_all("property")):
+            g_ = fp_.find("net_tie_pad_groups")
+            got = g_.items[1:] if g_ else []
     if got != [tie["group"]]:
         fails.append(f"A: {tie['footprint']} tie groups are {got}, the fixture says [{tie['group']!r}]")
 
@@ -181,7 +173,7 @@ for layer in Z["planes"]["layers"]:
             if not plane.contains(p):
                 fails.append(f"C: {plane_net} via at {xy(t.GetPosition())} misses the {layer} plane")
         else:
-            d = plane.distance(p) - t.GetWidth() / IU / 2
+            d = plane.distance(p) - t.GetWidth(b.GetLayerID(layer)) / IU / 2
             if d < min_gap - 1e-3:
                 fails.append(f"E: {t.GetNetname()} via at {xy(t.GetPosition())} is {d:.3f} mm from the {layer} plane")
     for f in b.GetFootprints():
@@ -212,7 +204,7 @@ for t in b.GetTracks():
     for name, lid in L.items():
         if t.IsOnLayer(lid):
             if t.GetClass() == "PCB_VIA":
-                items[(t.GetNetname(), name)].append(Point(t.GetPosition().x / IU, t.GetPosition().y / IU).buffer(t.GetWidth() / IU / 2))
+                items[(t.GetNetname(), name)].append(Point(t.GetPosition().x / IU, t.GetPosition().y / IU).buffer(t.GetWidth(lid) / IU / 2))
             else:
                 line = LineString([(t.GetStart().x / IU, t.GetStart().y / IU), (t.GetEnd().x / IU, t.GetEnd().y / IU)])
                 items[(t.GetNetname(), name)].append(line.buffer(t.GetWidth() / IU / 2))
@@ -236,7 +228,8 @@ if spoke_min:
             fails.append(f"D: zone {z.GetZoneName()} has {z.GetThermalReliefSpokeWidth() / IU} mm spokes, under {spoke_min}")
     for f in b.GetFootprints():
         for pd in f.Pads():
-            w_ = pd.GetLocalThermalSpokeWidthOverride() if hasattr(pd, "GetLocalThermalSpokeWidthOverride") else pd.GetThermalSpokeWidth()
+            # KiCad 10: an optional override, None when the pad takes the zone's spoke width
+            w_ = pd.GetLocalThermalSpokeWidthOverride() or 0
             if pd.GetNetname() == plane_net and 0 < w_ / IU < spoke_min - 1e-6:
                 fails.append(f"D: pad {f.GetReference()}.{pd.GetNumber()} has {w_ / IU} mm spokes, under {spoke_min}")
 

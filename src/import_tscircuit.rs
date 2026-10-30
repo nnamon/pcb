@@ -1,4 +1,4 @@
-//! `pcb import-tscircuit`: write a KiCad 7 board from a tscircuit circuit JSON (the badge carrier's routed design).
+//! `pcb import-tscircuit`: write a KiCad 10 board from a tscircuit circuit JSON (the badge carrier's routed design).
 //!
 //! Carried over: the outline, nets, every footprint with its pads, holes and courtyard, the footprint type, the LCSC
 //! code and do-not-place flag, every trace segment and via, and the mounting holes. Not carried over: silkscreen,
@@ -8,7 +8,7 @@
 //!
 //! Coordinates: tscircuit is millimetres, y up. KiCad is millimetres, y down. The board's top-left corner lands at
 //! (MARGIN, MARGIN): X = x - cx + w/2 + MARGIN, Y = cy - y + h/2 + MARGIN, with (cx, cy) the board centre.
-//! Pads are written at absolute angle 0 with their board-frame size (KiCad 7 pad angles are absolute), at the
+//! Pads are written at absolute angle 0 with their board-frame size (KiCad pad angles are absolute, in 10 as in 7), at the
 //! footprint-local position obtained by undoing the footprint rotation.
 //!
 //! Back-side footprints: tscircuit places a bottom part as translate * rotate(rot) * mirror(x). KiCad's flipped
@@ -345,15 +345,16 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         Ok((num, name, net))
     };
 
-    // pads carry (net N "name"); segments and vias carry only (net N)
+    // KiCad 10 names the net on every pad, segment and via, and has no net table; a pad on no net has no (net)
     let netref = |nm: &str| -> String {
         match net_index.get(nm) {
-            Some(i) => format!(" (net {i} {})", q(nm)),
+            Some(_) => format!(" (net {})", q(nm)),
             None => String::new(),
         }
     };
     let netnum = |nm: &str| -> Result<String> {
-        Ok(format!(" (net {})", net_index.get(nm).with_context(|| format!("net {nm} not indexed"))?))
+        net_index.get(nm).with_context(|| format!("net {nm} not indexed"))?;
+        Ok(format!(" (net {})", q(nm)))
     };
 
     // group pads, holes and courtyards by component
@@ -371,20 +372,17 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
     }
 
     let mut o = String::new();
-    o.push_str("(kicad_pcb (version 20221018) (generator pcb)\n");
+    o.push_str("(kicad_pcb (version 20260206) (generator \"pcb\") (generator_version \"10.0\")\n");
     let _ = writeln!(o, "  (general (thickness {}))", n(f(board, "thickness").unwrap_or(1.6)));
+    // KiCad 10 layer ids: F.Cu 0, B.Cu 2, inner copper 4, 6, ...; listed in stack order as KiCad writes them
     o.push_str("  (paper \"A3\")\n  (layers\n    (0 \"F.Cu\" signal)\n");
     if layers == 4 {
-        o.push_str("    (1 \"In1.Cu\" power)\n    (2 \"In2.Cu\" power)\n");
+        o.push_str("    (4 \"In1.Cu\" power)\n    (6 \"In2.Cu\" power)\n");
     }
     o.push_str(
-        "    (31 \"B.Cu\" signal)\n    (32 \"B.Adhes\" user \"B.Adhesive\")\n    (33 \"F.Adhes\" user \"F.Adhesive\")\n    (34 \"B.Paste\" user)\n    (35 \"F.Paste\" user)\n    (36 \"B.SilkS\" user \"B.Silkscreen\")\n    (37 \"F.SilkS\" user \"F.Silkscreen\")\n    (38 \"B.Mask\" user)\n    (39 \"F.Mask\" user)\n    (40 \"Dwgs.User\" user \"User.Drawings\")\n    (41 \"Cmts.User\" user \"User.Comments\")\n    (44 \"Edge.Cuts\" user)\n    (45 \"Margin\" user)\n    (46 \"B.CrtYd\" user \"B.Courtyard\")\n    (47 \"F.CrtYd\" user \"F.Courtyard\")\n    (48 \"B.Fab\" user)\n    (49 \"F.Fab\" user)\n  )\n",
+        "    (2 \"B.Cu\" signal)\n    (9 \"F.Adhes\" user \"F.Adhesive\")\n    (11 \"B.Adhes\" user \"B.Adhesive\")\n    (13 \"F.Paste\" user)\n    (15 \"B.Paste\" user)\n    (5 \"F.SilkS\" user \"F.Silkscreen\")\n    (7 \"B.SilkS\" user \"B.Silkscreen\")\n    (1 \"F.Mask\" user)\n    (3 \"B.Mask\" user)\n    (17 \"Dwgs.User\" user \"User.Drawings\")\n    (19 \"Cmts.User\" user \"User.Comments\")\n    (25 \"Edge.Cuts\" user)\n    (27 \"Margin\" user)\n    (31 \"F.CrtYd\" user \"F.Courtyard\")\n    (29 \"B.CrtYd\" user \"B.Courtyard\")\n    (35 \"F.Fab\" user)\n    (33 \"B.Fab\" user)\n  )\n",
     );
     o.push_str("  (setup (pad_to_mask_clearance 0))\n");
-    o.push_str("  (net 0 \"\")\n");
-    for (nm, i) in &net_index {
-        let _ = writeln!(o, "  (net {i} {})", q(nm));
-    }
 
     // outline as straight Edge.Cuts segments (tscircuit already polygonised the corner arcs); a repeated closing
     // point is dropped (review 1, N5)
@@ -453,10 +451,10 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         }
         let silk = if side == "F.Cu" { "F.SilkS" } else { "B.SilkS" };
         let fab = if side == "F.Cu" { "F.Fab" } else { "B.Fab" };
-        let _ = writeln!(o, "    (fp_text reference {} (at 0 0 {}) (layer {}) hide (effects (font (size 0.6 0.6) (thickness 0.1))))", q(reference), n(phi), q(silk));
-        let _ = writeln!(o, "    (fp_text value {} (at 0 0 {}) (layer {}) hide (effects (font (size 0.6 0.6) (thickness 0.1))))", q(&value), n(phi), q(fab));
+        let _ = writeln!(o, "    (property \"Reference\" {} (at 0 0 {}) (layer {}) (hide yes) (effects (font (size 0.6 0.6) (thickness 0.1))))", q(reference), n(phi), q(silk));
+        let _ = writeln!(o, "    (property \"Value\" {} (at 0 0 {}) (layer {}) (hide yes) (effects (font (size 0.6 0.6) (thickness 0.1))))", q(&value), n(phi), q(fab));
         if !lcsc.is_empty() {
-            let _ = writeln!(o, "    (property \"LCSC\" {})", q(lcsc));
+            let _ = writeln!(o, "    (property \"LCSC\" {} (at 0 0 {}) (layer {}) (hide yes) (effects (font (size 0.6 0.6) (thickness 0.1))))", q(lcsc), n(phi), q(fab));
         }
         let crt = if side == "F.Cu" { "F.CrtYd" } else { "B.CrtYd" };
         // review 2, 8: one number per pin (mechanical "MP" pads may repeat)
@@ -643,8 +641,8 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         let (hx, hy) = x.pt(f(e, "x").context("x")?, f(e, "y").context("y")?);
         let _ = writeln!(o, "  (footprint {} (layer \"F.Cu\") (at {} {})", q(&format!("badge:MountingHole_{}mm", n(hd))), n(hx), n(hy));
         o.push_str("    (attr exclude_from_pos_files exclude_from_bom)\n");
-        let _ = writeln!(o, "    (fp_text reference {} (at 0 0) (layer \"F.SilkS\") hide (effects (font (size 0.6 0.6) (thickness 0.1))))", q(&format!("H{hn}")));
-        o.push_str("    (fp_text value \"MountingHole\" (at 0 0) (layer \"F.Fab\") hide (effects (font (size 0.6 0.6) (thickness 0.1))))\n");
+        let _ = writeln!(o, "    (property \"Reference\" {} (at 0 0) (layer \"F.SilkS\") (hide yes) (effects (font (size 0.6 0.6) (thickness 0.1))))", q(&format!("H{hn}")));
+        o.push_str("    (property \"Value\" \"MountingHole\" (at 0 0) (layer \"F.Fab\") (hide yes) (effects (font (size 0.6 0.6) (thickness 0.1))))\n");
         let _ = writeln!(o, "    (pad \"\" np_thru_hole circle (at 0 0) (size {} {}) (drill {}) (layers \"*.Cu\" \"*.Mask\"))", n(hd), n(hd), n(hd));
         o.push_str("  )\n");
         st.footprints += 1;
@@ -855,7 +853,7 @@ mod tests {
             {{"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"}},{{"route_type":"wire","x":1,"y":0,"width":0.2,"layer":"top"}}]}},
             {{"type":"pcb_via","pcb_via_id":"v","x":1,"y":0,"outer_diameter":0.6,"hole_diameter":0.3}}]"#);
         let (text, _) = convert(&j, Some(2), &[]).unwrap();
-        assert!(text.contains("(drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1))"), "{text}");
+        assert!(text.contains("(drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net \"A\"))"), "{text}");
         let lonely = format!(r#"[{BOARD},{{"type":"pcb_via","pcb_via_id":"v","x":3,"y":3,"outer_diameter":0.6,"hole_diameter":0.3}}]"#);
         assert!(convert(&lonely, Some(2), &[]).is_err());
     }

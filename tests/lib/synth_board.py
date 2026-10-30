@@ -6,7 +6,7 @@ import pcbnew
 
 variant, out = sys.argv[1:3]
 mm = pcbnew.FromMM
-b = pcbnew.BOARD()
+b = pcbnew.NewBoard(out)  # with a project, so SaveBoard writes the design rules to .kicad_pro (KiCad 10)
 b.SetCopperLayerCount(4 if variant == "four" else 2)
 nets = {}
 names = ["W", "L", "S", "N", "GND", "Q"] + (["Ωmega"] if variant == "nonascii" else [])
@@ -127,7 +127,7 @@ if variant == "gzone":
 ds = b.GetDesignSettings()
 if variant == "tight":
     ds.m_TrackMinWidth = mm(0.3)
-nc = ds.m_NetSettings.m_DefaultNetClass
+nc = ds.m_NetSettings.GetDefaultNetclass()
 nc.SetTrackWidth(mm(0.2))
 nc.SetClearance(mm(0.2))
 pcbnew.SaveBoard(out, b)

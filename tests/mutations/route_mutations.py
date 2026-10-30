@@ -14,7 +14,8 @@ os.makedirs(work, exist_ok=True)
 src = open(routed).read()
 r = [float(v) for v in region.split(",")]
 here = os.path.dirname(os.path.abspath(__file__))
-nets = {m.group(2): m.group(1) for m in re.finditer(r'^  \(net (\d+) "([^"]*)"\)', src, re.M)}
+# net name -> how an item names it; KiCad 10 names nets on each item and has no net table
+nets = {n: f'"{n}"' for n in dict.fromkeys(re.findall(r'\(net "([^"]*)"\)', src))}
 target = targets.split(",")[0]
 
 
@@ -107,8 +108,8 @@ def m_narrow_new(t):
 
 def m_shared_id(t):
     a, b = added_lines(t)[:2]
-    t = t.replace(a, a[:-1] + " (tstamp 00000000-0000-0000-0000-00000000beef))", 1)
-    return t.replace(b, b[:-1] + " (tstamp 00000000-0000-0000-0000-00000000beef))", 1)
+    t = t.replace(a, a[:-1] + ' (uuid "00000000-0000-0000-0000-00000000beef"))', 1)
+    return t.replace(b, b[:-1] + ' (uuid "00000000-0000-0000-0000-00000000beef"))', 1)
 
 
 def m_unlock(t):
@@ -117,7 +118,7 @@ def m_unlock(t):
         xs, ys = [float(m.group(i)) for i in (1, 3)], [float(m.group(i)) for i in (2, 4)]
         if all(r[0] < x < r[2] for x in xs) and all(r[1] < y < r[3] for y in ys) and m.group(0) in open(orig).read():
             line = m.group(0)
-            return ("ORIG", open(orig).read().replace(line, line.replace("(segment ", "(segment locked ", 1), 1), t)
+            return ("ORIG", open(orig).read().replace(line, line.replace("(segment ", "(segment (locked yes) ", 1), 1), t)
     raise SystemExit("no track inside the region")
 
 

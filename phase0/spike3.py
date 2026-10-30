@@ -50,14 +50,13 @@ for i, v in enumerate(sorted(vias, key=lambda v: v.GetPosition().x)):
     p.SetNumber(str(3 + i))
     p.SetAttribute(pcbnew.PAD_ATTRIB_PTH)
     p.SetShape(pcbnew.PAD_SHAPE_CIRCLE)
-    p.SetSize(pcbnew.VECTOR2I(v.GetWidth(), v.GetWidth()))
+    p.SetSize(pcbnew.VECTOR2I(v.GetWidth(pcbnew.F_Cu), v.GetWidth(pcbnew.F_Cu)))
     p.SetDrillSize(pcbnew.VECTOR2I(v.GetDrillValue(), v.GetDrillValue()))
     p.SetLayerSet(pcbnew.PAD.PTHMask())
-    p.SetPosition(v.GetPosition())
-    # the saved position is the footprint-local one
-    p.SetPos0(v.GetPosition() - l601.GetPosition())
     p.SetNet(ac1)
     l601.Add(p)
+    # KiCad 10: the board position, after Add; KiCad keeps the footprint-local one from it
+    p.SetPosition(v.GetPosition())
     b.Remove(v)
 for t in coil_tracks:
     if t.GetClass() == "PCB_VIA":
@@ -68,12 +67,10 @@ for t in coil_tracks:
         t.SetNet(ac1)
         bridge += 1
         continue
-    s_ = pcbnew.FP_SHAPE(l601)
+    s_ = pcbnew.PCB_SHAPE(l601)
     s_.SetShape(pcbnew.SHAPE_T_SEGMENT)
     s_.SetStart(t.GetStart())
     s_.SetEnd(t.GetEnd())
-    s_.SetStart0(t.GetStart() - l601.GetPosition())
-    s_.SetEnd0(t.GetEnd() - l601.GetPosition())
     s_.SetWidth(t.GetWidth())
     s_.SetLayer(t.GetLayer())
     l601.Add(s_)
@@ -100,7 +97,7 @@ def add_outline(z, poly):
 for name, poly in keepouts:
     z = pcbnew.ZONE(b)
     z.SetIsRuleArea(True)
-    z.SetDoNotAllowCopperPour(True)
+    z.SetDoNotAllowZoneFills(True)
     z.SetDoNotAllowTracks(False)
     z.SetDoNotAllowVias(False)
     z.SetDoNotAllowPads(False)
@@ -116,7 +113,7 @@ for name, poly in keepouts:
 
 # board outline
 outline = pcbnew.SHAPE_POLY_SET()
-b.GetBoardPolygonOutlines(outline)
+b.GetBoardPolygonOutlines(outline, False)  # KiCad 10: no inferred outline; the board has Edge.Cuts
 board_pts = [(outline.COutline(0).CPoint(i).x / IU, outline.COutline(0).CPoint(i).y / IU) for i in range(outline.COutline(0).PointCount())]
 board_poly = Polygon(board_pts)
 
@@ -161,13 +158,13 @@ def copper(net_name, layer):
         if t.GetNetname() != net_name or not t.IsOnLayer(layer):
             continue
         if t.GetClass() == "PCB_VIA":
-            parts.append(Point(t.GetPosition().x / IU, t.GetPosition().y / IU).buffer(t.GetWidth() / IU / 2))
+            parts.append(Point(t.GetPosition().x / IU, t.GetPosition().y / IU).buffer(t.GetWidth(layer) / IU / 2))
         else:
             parts.append(LineString([(t.GetStart().x / IU, t.GetStart().y / IU), (t.GetEnd().x / IU, t.GetEnd().y / IU)]).buffer(t.GetWidth() / IU / 2))
     for f in b.GetFootprints():
         for p in f.Pads():
             if p.GetNetname() == net_name and p.IsOnLayer(layer):
-                w, h = p.GetSize().x / IU, p.GetSize().y / IU
+                w, h = p.GetSize(layer).x / IU, p.GetSize(layer).y / IU
                 r = box(-w / 2, -h / 2, w / 2, h / 2)
                 r = rotate(r, -p.GetOrientationDegrees(), origin=(0, 0))
                 parts.append(translate(r, p.GetPosition().x / IU, p.GetPosition().y / IU))

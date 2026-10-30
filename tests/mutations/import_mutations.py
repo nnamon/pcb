@@ -19,14 +19,14 @@ here = os.path.dirname(os.path.abspath(__file__))
 
 
 def footprint_block(text, ref):
-    m = re.search(r'\n  \(footprint [^\n]*\n(?:    [^\n]*\n)*?    \(fp_text reference "' + re.escape(ref) + r'"', text)
+    m = re.search(r'\n  \(footprint [^\n]*\n(?:    [^\n]*\n)*?    \(property "Reference" "' + re.escape(ref) + r'"', text)
     start = m.start() + 1
     end = text.index("\n  )\n", start) + 5
     return start, end
 
 
 def first_ref(t, pred):
-    for m in re.finditer(r'\n  \(footprint "[^"]*" \(layer "([^"]+)"\) \(at [-\d.]+ [-\d.]+(?: ([-\d.]+))?\)[^\n]*\n(?:    [^\n]*\n)*?    \(fp_text reference "([^"]+)"', t):
+    for m in re.finditer(r'\n  \(footprint "[^"]*" \(layer "([^"]+)"\) \(at [-\d.]+ [-\d.]+(?: ([-\d.]+))?\)[^\n]*\n(?:    [^\n]*\n)*?    \(property "Reference" "([^"]+)"', t):
         if pred(m.group(1), float(m.group(2) or 0)) and "(pad " in t[m.end():t.index("\n  )\n", m.end())]:
             return m.group(3)
     raise SystemExit("no footprint fits the mutation")
@@ -90,7 +90,7 @@ def m_attr(t):
 
 
 def m_lcsc(t):
-    return re.sub(r'\(property "LCSC" "C\d+"\)', '(property "LCSC" "C1")', t, count=1)
+    return re.sub(r'\(property "LCSC" "C\d+"', '(property "LCSC" "C1"', t, count=1)
 
 
 def m_crtyd_side(t):
@@ -102,18 +102,22 @@ def m_crtyd_side(t):
 
 def m_via_net(t):
     # review 2, 6: a via written on another net (pcbnew would quietly take the net of its tracks)
-    m = re.search(r"^  \(via \(at [^\n]*\(net (\d+)\)\)", t, re.M)
-    other = "1" if m.group(1) != "1" else "2"
+    m = re.search(r'^  \(via \(at [^\n]*\(net "([^"]*)"\)\)', t, re.M)
+    other = next(n for n in net_names(t) if n != m.group(1))
     line = m.group(0)
-    return t.replace(line, line[: line.rindex("(net ")] + f"(net {other}))", 1)
+    return t.replace(line, line[: line.rindex("(net ")] + f'(net "{other}"))', 1)
+
+
+def net_names(t):
+    """The board's net names, in order of first use (KiCad 10 names nets on each item; there is no net table)."""
+    return list(dict.fromkeys(re.findall(r'\(net "([^"]+)"\)', t)))
 
 
 def m_pad_net(t):
     # one pad moved to another net
-    m = re.search(r'(\(pad "[^"]+" smd [^\n]*?\(net )(\d+) ("[^"]*")\)', t)
-    nums = re.findall(r'^  \(net (\d+) ("[^"]*")\)', t, re.M)
-    other = next((n, nm) for n, nm in nums if n != m.group(2) and n != "0")
-    return t[:m.start()] + m.group(1) + f"{other[0]} {other[1]})" + t[m.end():]
+    m = re.search(r'(\(pad "[^"]+" smd [^\n]*?\(net )"([^"]*)"\)', t)
+    other = next(n for n in net_names(t) if n != m.group(2))
+    return t[:m.start()] + m.group(1) + f'"{other}")' + t[m.end():]
 
 
 def first_line(t, pattern):
@@ -165,9 +169,8 @@ def m_pad_kind(t):
 
 
 def m_rename_net(t):
-    m = first_line(t, r'^  \(net (\d+) "([^"]+)"\)')
-    name = m.group(2)
-    return t.replace(f'"{name}")', f'"{name}_X")')
+    name = net_names(t)[0]
+    return t.replace(f'(net "{name}")', f'(net "{name}_X")')
 
 
 def m_blind_via(t):
@@ -195,8 +198,8 @@ def m_polygon(t):
 
 
 def m_hole_renamed(t):
-    m = first_line(t, r'\(fp_text reference "H1"')
-    return t[:m.start()] + '(fp_text reference "H9"' + t[m.end():]
+    m = first_line(t, r'\(property "Reference" "H1"')
+    return t[:m.start()] + '(property "Reference" "H9"' + t[m.end():]
 
 
 # mutation -> words the check it targets prints (review 5, 6: caught by its own check, not by any)

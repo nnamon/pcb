@@ -8,6 +8,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | --- | --- | --- | --- |
 | `usage` | refused | The command line is wrong | Read the message and `pcb <command> --help` |
 | `refused` | refused | The input has something the command does not handle; the message names it | Change the input, or extend the command with a test |
+| `old-kicad-format` | refused | The board file is from a KiCad older than 10; pcb reads and writes KiCad 10 files only | Convert a copy with `kicad-cli pcb upgrade <file>` and check it in KiCad |
 | `unknown-net` | refused | A net named in `--nets` or `--rip` is not on the board | Check the name with `pcb info --net` |
 | `non-ascii-net` | refused | A net name has non-ASCII characters, which Freerouting cannot take | Rename the net |
 | `arc-unsupported` | refused | The board has track arcs, which `pcb route` does not handle yet | Replace the arcs with segments, or route by hand |

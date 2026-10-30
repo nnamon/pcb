@@ -1,7 +1,8 @@
 """Independent check of a `pcb route` result against the board it started from.
 
-It reads both boards with KiCad's own pcbnew (not pcb's parser) and fails unless:
-  A. everything that is not a track or via is byte-identical;
+It reads both boards with KiCad's own pcbnew and kicad-cli, and the files with tests/lib/kisexp.py (not pcb's parser),
+and fails unless:
+  A. every top-level item that is not a track or via is byte-identical (zone fills aside);
   B. every track and via not wholly inside the region is byte-identical, except a track split where new copper
      joins it, whose pieces must rebuild it exactly with every cut inside the region;
   C. every added or removed item lies inside the region (0.01 mm slack) and is on an allowed net;
@@ -22,58 +23,47 @@ import math
 import os
 import re
 import sys
-import tempfile
 
 import pcbnew
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+import kisexp  # noqa: E402
 
 TOL = 0.01
 
 
 def items(path):
-    """Tracks and vias as (kind, key, text line), keyed by geometry."""
-    text = open(path).read()
-    lines = text.split("\n")
-    out = []
-    for ln in lines:
-        s = ln.strip()
-        # "(via " with the space: KiCad-saved boards also carry a "(viasonmask ...)" line (review 4, R1)
-        if s.startswith("(segment ") or s.startswith("(via "):
-            out.append(s)
-    rest = [ln for ln in lines if not (ln.strip().startswith("(segment ") or ln.strip().startswith("(via "))]
-    # zone fills are recomputed by KiCad after a route, across the whole board (review 4, R2): compare the zone
-    # definitions, not their filled polygons
-    out_rest, skip = [], None
-    for ln in rest:
-        if skip is not None:
-            if ln.startswith(skip + ")"):
-                skip = None
+    """(tracks and vias, everything else): each a list of top-level item texts, exactly as in the file. Zone fills
+    are recomputed by KiCad after a route, across the whole board (review 4, R2), so a zone's text leaves out its
+    filled polygons and whether it is filled."""
+    src = open(path).read()
+    root = kisexp.parse(src)
+    copper, rest = [], []
+    for n in root.items[1:]:
+        if not isinstance(n, kisexp.Node):
+            rest.append(n)
             continue
-        st = ln.lstrip()
-        if st.startswith("(filled_polygon"):
-            skip = ln[: len(ln) - len(st)]
-            if st.rstrip().endswith(")") and st.count("(") == st.count(")"):
-                skip = None
+        t = n.text(src)
+        if n.head in ("segment", "via"):
+            copper.append(t)
             continue
-        # whether a zone is filled is the fill's result too
-        out_rest.append(ln.replace("(fill yes ", "(fill "))
-    rest = out_rest
-    return out, rest
+        if n.head == "zone":
+            for f in sorted(n.find_all("filled_polygon"), key=lambda f: -f.span[0]):
+                t = t[: f.span[0] - n.span[0]] + t[f.span[1] - n.span[0]:]
+            t = re.sub(r"\(fill\s+yes\b", "(fill", t)
+            t = re.sub(r"\s+", " ", t)
+        rest.append(t)
+    return copper, rest
 
 
-def geom(line, nets):
-    num = lambda k: [float(v) for v in re.search(r"\(" + k + r" ([-\d.]+) ([-\d.]+)\)", line).groups()]
-    net = nets[int(re.search(r"\(net (\d+)\)", line).group(1))]
-    if line.startswith("(segment"):
-        a, c = num("start"), num("end")
-        layer = re.search(r'\(layer "([^"]+)"\)', line).group(1)
-        width = float(re.search(r"\(width ([\d.]+)\)", line).group(1))
-        return {"kind": "segment", "a": a, "c": c, "layer": layer, "width": width, "net": net, "locked": " locked" in line[:16]}
-    p = num("at")
-    return {"kind": "via", "a": p, "c": p, "net": net}
-
-
-def net_table(path):
-    return {int(m.group(1)): m.group(2) for m in re.finditer(r'^  \(net (\d+) "([^"]*)"\)', open(path).read(), re.M)}
+def geom(text):
+    n = kisexp.parse(text)
+    net = n.find("net").arg(1) if n.find("net") else ""
+    locked = bool(n.find("locked") and n.find("locked").arg(1) == "yes") or "locked" in n.items[1:]
+    if n.head == "segment":
+        return {"kind": "segment", "a": n.nums("start"), "c": n.nums("end"), "layer": n.find("layer").arg(1), "width": n.nums("width")[0], "net": net, "locked": locked}
+    p = n.nums("at")
+    return {"kind": "via", "a": p, "c": p, "net": net, "locked": locked}
 
 
 def inside(r, p):
@@ -167,19 +157,9 @@ def dangling(board):
     return d
 
 
-def drc(board, path):
-    """Violations counted by type and the nets involved, after refilling zones in memory."""
-    if len(board.Zones()):
-        board.BuildConnectivity()
-        pcbnew.ZONE_FILLER(board).Fill(board.Zones())
-    rpt = tempfile.mktemp(suffix=".rpt")
-    pcbnew.WriteDRCReport(board, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
-    c = collections.Counter()
-    for m in re.finditer(r"^\[(\w+)\]:[^\n]*\n((?:    [^\n]*\n)+)", open(rpt).read(), re.M):
-        nets = sorted(set(re.findall(r"\[([^\]]*)\]", m.group(2))))
-        c[m.group(1) + " " + " ".join(nets)] += 1
-    os.unlink(rpt)
-    return c
+def drc(path):
+    """Violations counted by type and the nets involved, zones refilled in memory (kicad-cli)."""
+    return kisexp.drc_counts(path)
 
 
 def measure_in_child(path):
@@ -192,7 +172,7 @@ def measure_in_child(path):
 
 def measure(path):
     b = pcbnew.LoadBoard(path)
-    print(json.dumps({"groups": pad_groups(b), "dangling": dangling(b), "drc": drc(b, path)}))
+    print(json.dumps({"groups": pad_groups(b), "dangling": dangling(b), "drc": drc(path)}))
 
 
 def main():
@@ -210,14 +190,13 @@ def main():
     if [ln for ln in o_rest if ln.strip()] != [ln for ln in n_rest if ln.strip()]:
         fails.append("A: something other than tracks and vias changed")
     # B, C
-    o_nets, n_nets = net_table(orig_p), net_table(routed_p)
     o_set, n_set = collections.Counter(o_items), collections.Counter(n_items)
     removed = list((o_set - n_set).elements())
     added = list((n_set - o_set).elements())
-    added_g = [geom(x, n_nets) for x in added]
+    added_g = [geom(x) for x in added]
     used = set()
     for line in removed:
-        g = geom(line, o_nets)
+        g = geom(line)
         if not (allow_all or g["net"] in allowed):
             fails.append(f"C: removed item on a net not allowed: {line[:90]}")
         if wholly_inside(r, g):
@@ -259,17 +238,17 @@ def main():
 
     # G
     for line in removed:
-        if " locked" in line[:16]:
+        if geom(line)["locked"]:
             fails.append(f"G: locked item removed or changed: {line[:90]}")
     # H
-    ids = collections.Counter(m.group(1) for x in n_items for m in [re.search(r"\((?:tstamp|uuid) ([^)\s]+)\)", x)] if m)
+    ids = collections.Counter(u.arg(1) for x in n_items for u in [kisexp.parse(x).find("uuid") or kisexp.parse(x).find("tstamp")] if u)
     dup = [k for k, v in ids.items() if v > 1]
     if dup:
         fails.append(f"H: {len(dup)} ids shared by several tracks or vias, e.g. {dup[0]}")
     # I
     widths = collections.defaultdict(collections.Counter)
     for x in o_items:
-        g = geom(x, o_nets)
+        g = geom(x)
         if g["kind"] == "segment":
             widths[g["net"]][g["width"]] += 1
     for i, g in enumerate(added_g):

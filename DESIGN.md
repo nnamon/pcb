@@ -161,14 +161,23 @@ Every command:
   - KiCad S-expressions are parsed and written by the crate itself (lossless round trip, so hand edits survive).
   - Gerber and Excellon reading for the fabrication checks is in Rust.
   - Geometry uses the `geo` crate (polygons, buffers, distances).
-- **KiCad 7 through its Python module (`pcbnew`)** for the operations only KiCad does well:
-  - zone fill;
-  - DRC;
-  - Specctra DSN export.
+- **KiCad 10 (10.0.8, from the KiCad PPA)** for the operations only KiCad does well:
+  - zone fill, through its Python module (`pcbnew`);
+  - DRC, through `kicad-cli pcb drc --format json`;
+  - Specctra DSN export, through `pcbnew`.
 
-  Phase 0 (`phase0/probe.py`, KiCad 7.0.11) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
+  KiCad 10 replaced 7.0.11 on 30 Oct 2026. What changed for `pcb`:
+  - **File format.** Version 20260206. Nets are named on each pad, track, via and zone (`(net "VBAT")`), with no net table. Locks are `(locked yes)`. Copper layer ids are F.Cu 0, B.Cu 2, In1.Cu 4, In2.Cu 6, listed in stack order. Footprint text is `(property "Reference" ...)`. `pcb` reads and writes only this format; an older file is refused (`old-kicad-format`) with the `kicad-cli pcb upgrade` command to convert a copy.
+  - **DRC.** `pcbnew.WriteDRCReport` asserts outside the KiCad application, so DRC runs through `kicad-cli`, whose JSON has a published schema (`drc.v1`). The helper checks the schema and that kicad-cli's own totals equal what it read.
+  - **Project files.** `pcbnew.BOARD()` has no project, so `SaveBoard` writes no `.kicad_pro` and design rules set from Python are lost. Boards made in Python start from `pcbnew.NewBoard(path)`.
+  - **Python API.** `PAD.SetPos0` is gone (use `SetFPRelativePosition` after adding the pad); `Flip` takes `FLIP_DIRECTION_TOP_BOTTOM`; `FP_SHAPE` is `PCB_SHAPE`; `PCB_VIA.GetWidth` and `PAD.GetSize` take a layer; rule areas use `SetDoNotAllowZoneFills`; `GetBoardPolygonOutlines` needs `aInferOutlineIfNecessary`; footprint fields are read with `GetFieldText`.
+  - **Unchanged and checked by `pcb doctor`:** pad angles still include the footprint's rotation; a flipped footprint's pad lands where it did on 7.0.11; a zone given two outlines from Python still saves only the first.
+  - **Stricter DRC.** Copper inside a net-tie footprint is now checked against the footprint's own pads, which exposes review 4's Z6 (the coil turn 0.075 mm from its inner via).
+  - **Checked against 7.0.11.** The old CI image (KiCad 7.0.11) run on the last KiCad 7 commit gives the same 34 power fills per net and layer as KiCad 10. Fill areas differ between runs on either version, because the prototype's overlapping fills share one priority (review 4, Z11).
 
-  `pcb` runs `python3 -c` with a fixed helper script and reads its JSON; the agent never calls KiCad directly.
+  Phase 0 (`phase0/probe.py`, KiCad 7.0.11, kept as it ran) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
+
+  `pcb` runs a fixed helper script (`src/kicad_helper.py`, embedded in the binary) with python3 and reads its JSON; the agent never calls KiCad directly.
 
   Each DRC run is in its own process. In one process with two boards loaded, the first board's DRC was seen to skip the clearance tests.
 - **`kicad-cli`** for the Gerber, drill, position and PDF exports.
@@ -223,7 +232,7 @@ After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB
 Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/verify_zones.py`, whose sensitivity is shown by `tests/zone_mutations.py` (7 of 7 caught).
 
 - **NFC coil:** the 49 spiral segments became copper inside L601, a net tie for pads 1 and 3. The two coil vias became L601 pads 3 and 4, and the bottom bridge and top link stay NFC_AC1 tracks. The coil copper is unchanged (same ends and widths). KiCad DRC's 4 coil clearance errors and 2 mask bridges are gone.
-- **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 35 power fills grown from each power net's copper; GND pours on both outer layers. Copper areas differ from the old scripts' pours by up to −47 % (BAT_RAW top) and +71 % (VBAT bottom); the top GND pour is 21 % smaller (review 4, Z3). The bottom-layer exclusion under the power stage is missing (Z4).
+- **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 34 power fills grown from each power net's copper (35 in the first run, before later import changes); GND pours on both outer layers. Copper areas differ from the old scripts' pours by up to −47 % (BAT_RAW top) and +71 % (VBAT bottom); the top GND pour is 21 % smaller (review 4, Z3). The bottom-layer exclusion under the power stage is missing (Z4).
 - **KiCad DRC:** 335 → 215 violations (the KiCad-saved base). Dangling vias 115 → 1, clearance 8 → 4 (the LED_A4 via at BT101, known), GND unconnected 2 → 1 (U501 pad 21, known), plus ILM. One new item: a starved thermal on J102 pad 4, which needs a pad override or a design-rule exception.
 - **Fill time:** about 2 s.
 - **KiCad traps found:** zones created and filled in one process kept islands that DRC then calls isolated, so filling is a separate step; a zone given several outlines from Python saved only the first, so each polygon is its own zone; footprint pads and shapes need their local positions set; rule areas must name only the board's own copper layers.

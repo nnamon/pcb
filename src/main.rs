@@ -39,7 +39,7 @@ enum Cmd {
         #[arg(long)]
         net: Option<String>,
     },
-    /// Write a KiCad 7 board from a tscircuit circuit JSON (outline, nets, footprints, tracks, vias).
+    /// Write a KiCad 10 board from a tscircuit circuit JSON (outline, nets, footprints, tracks, vias).
     ImportTscircuit {
         circuit_json: String,
         /// Copper layers to write (default: the circuit JSON's num_layers).
@@ -87,7 +87,7 @@ enum Cmd {
         #[arg(long, short)]
         out: Option<String>,
     },
-    /// Check the pinned tool versions (KiCad 7.0.11, Freerouting 2.5.0 on Java 25) and the tool behaviours pcb relies on.
+    /// Check the pinned tool versions (KiCad 10.0.8, Freerouting 2.5.0 on Java 25) and the tool behaviours pcb relies on.
     Doctor {
         /// Freerouting jar.
         #[arg(long, env = "PCB_FREEROUTING_JAR")]
@@ -240,11 +240,11 @@ fn run(cli: Cli) -> Result<Reply> {
             let locked = b.tracks.iter().filter(|t| t.locked).count();
             let h = format!(
                 "{board}: {:.1} x {:.1} mm, {} copper layers, {} footprints, {} nets, {} tracks ({} locked), {} vias, {} zones",
-                x1 - x0, y1 - y0, b.copper_layers.len(), b.footprints.len(), b.nets.len().saturating_sub(1), b.tracks.len(), locked, b.vias.len(), b.zones.len()
+                x1 - x0, y1 - y0, b.copper_layers.len(), b.footprints.len(), b.nets.len(), b.tracks.len(), locked, b.vias.len(), b.zones.len()
             );
             emit(cli.json, true, h, json!({
                 "size_mm": [x1 - x0, y1 - y0], "origin": [x0, y0], "copper_layers": b.copper_layers,
-                "footprints": b.footprints.len(), "nets": b.nets.len().saturating_sub(1), "tracks": b.tracks.len(),
+                "footprints": b.footprints.len(), "nets": b.nets.len(), "tracks": b.tracks.len(),
                 "locked_tracks": locked, "vias": b.vias.len(), "zones": b.zones.len()
             }))
         }

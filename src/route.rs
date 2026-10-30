@@ -102,10 +102,14 @@ fn inside(r: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
     x >= r.0 && x <= r.2 && y >= r.1 && y <= r.3
 }
 
-/// Board text with the segment or via at `span` marked locked (KiCad 7 writes `(segment locked ...`).
+/// Board text with the segment or via at `span` marked locked (KiCad 10 writes a `(locked yes)` child). An item
+/// already locked is left as it is.
 fn lock(edits: &mut Edits, src: &str, span: (usize, usize)) {
+    if sexpr::parse(&src[span.0..span.1]).map(|n| n.find("locked").is_some()).unwrap_or(false) {
+        return;
+    }
     let head_end = src[span.0..].find(|c: char| c.is_whitespace()).map(|i| span.0 + i).unwrap_or(span.0);
-    edits.insert(head_end, " locked");
+    edits.insert(head_end, " (locked yes)");
 }
 
 /// Remove a top-level item and the newline after it.
@@ -447,7 +451,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     {
         let b0 = Board::load(board_path)?;
         for nm in &o.nets {
-            if !b0.nets.values().any(|s| s == nm) {
+            if !b0.nets.contains(nm) {
                 return Err(refused("unknown-net", format!("no net {nm} on this board")));
             }
         }
@@ -462,7 +466,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let o = &Opts { nets, ..o.clone() };
     {
         let b0 = Board::load(board_path)?;
-        let known: std::collections::BTreeSet<&str> = b0.nets.values().map(|s| s.as_str()).collect();
+        let known: std::collections::BTreeSet<&str> = b0.nets.iter().map(|s| s.as_str()).collect();
         let named = o.nets.iter().chain(match &o.rip {
             Rip::Nets(v) => v.iter(),
             _ => [].iter(),
@@ -560,7 +564,6 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             existing.insert(seg_key((t.x0, t.y0), (t.x1, t.y1), &t.layer));
         }
     }
-    let netnum: BTreeMap<&str, u32> = b.nets.iter().map(|(i, s)| (s.as_str(), *i)).collect();
     let want = |net: &str| o.nets.is_empty() || o.nets.iter().any(|x| x == net);
     let tol = 0.01;
     let rr = (r.0 - tol, r.1 - tol, r.2 + tol, r.3 + tol);
@@ -589,7 +592,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                 rep.dropped_duplicates += 1;
                 continue;
             }
-            netnum.get(w.net.as_str()).with_context(|| format!("router used unknown net {}", w.net))?;
+            anyhow::ensure!(b.nets.contains(&w.net), "router used unknown net {}", w.net);
             segs.push(Seg { a, c, layer: w.layer.clone(), net: w.net.clone(), width: w.width, origin: Origin::New, prunable: true });
         }
     }
@@ -615,7 +618,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             rep.dropped_duplicates += 1;
             continue;
         }
-        netnum.get(v.net.as_str()).with_context(|| format!("router used unknown net {}", v.net))?;
+        anyhow::ensure!(b.nets.contains(&v.net), "router used unknown net {}", v.net);
         new_vias.push((v.net.clone(), v.x, v.y, v.size.unwrap_or(via_size)));
     }
 
@@ -722,10 +725,9 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     for (i, sg) in segs.iter().enumerate() {
         match sg.origin {
             Origin::New if alive[i] => {
-                let num = netnum[sg.net.as_str()];
                 new_text.push_str(&format!(
-                    "  (segment (start {} {}) (end {} {}) (width {}) (layer {}) (net {num}))\n",
-                    n(sg.a.0), n(sg.a.1), n(sg.c.0), n(sg.c.1), n(sg.width), sexpr::quote(&sg.layer)
+                    "  (segment (start {} {}) (end {} {}) (width {}) (layer {}) (net {}))\n",
+                    n(sg.a.0), n(sg.a.1), n(sg.c.0), n(sg.c.1), n(sg.width), sexpr::quote(&sg.layer), sexpr::quote(&sg.net)
                 ));
                 rep.added_segments += 1;
                 *rep.nets_routed.entry(sg.net.clone()).or_default() += 1;
@@ -750,10 +752,9 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     }
     let outer: Vec<String> = [b.copper_layers.first(), b.copper_layers.last()].iter().flatten().map(|l| sexpr::quote(l)).collect();
     for (net, x, y, sz) in &new_vias {
-        let num = netnum[net.as_str()];
         new_text.push_str(&format!(
-            "  (via (at {} {}) (size {}) (drill {}) (layers {}) (net {num}))\n",
-            n(*x), n(*y), n(sz.0), n(sz.1), outer.join(" ")
+            "  (via (at {} {}) (size {}) (drill {}) (layers {}) (net {}))\n",
+            n(*x), n(*y), n(sz.0), n(sz.1), outer.join(" "), sexpr::quote(net)
         ));
         rep.added_vias += 1;
     }
@@ -820,11 +821,11 @@ mod tests {
 
     #[test]
     fn split_keeps_other_fields() {
-        let s = "(segment locked (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5) (uuid \"abc\"))";
+        let s = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (locked yes) (net \"N\") (uuid \"abc\"))";
         let a = with_ends(s, (0.0, 0.0), (4.0, 0.0)).unwrap();
-        assert_eq!(a, "(segment locked (start 0 0) (end 4 0) (width 0.3) (layer \"F.Cu\") (net 5))");
-        let s2 = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5))";
-        assert_eq!(with_ends(s2, (4.0, 0.0), (10.0, 0.0)).unwrap(), "(segment (start 4 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5))");
+        assert_eq!(a, "(segment (start 0 0) (end 4 0) (width 0.3) (layer \"F.Cu\") (locked yes) (net \"N\"))");
+        let s2 = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net \"N\"))";
+        assert_eq!(with_ends(s2, (4.0, 0.0), (10.0, 0.0)).unwrap(), "(segment (start 4 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net \"N\"))");
     }
 
     #[test]
@@ -882,8 +883,8 @@ mod tests {
 
     #[test]
     fn split_drops_ids() {
-        let s = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5) (tstamp 7692ae2f-0000))";
-        assert_eq!(with_ends(s, (0.0, 0.0), (4.0, 0.0)).unwrap(), "(segment (start 0 0) (end 4 0) (width 0.3) (layer \"F.Cu\") (net 5))");
+        let s = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net \"N\") (uuid \"7692ae2f-0000\"))";
+        assert_eq!(with_ends(s, (0.0, 0.0), (4.0, 0.0)).unwrap(), "(segment (start 0 0) (end 4 0) (width 0.3) (layer \"F.Cu\") (net \"N\"))");
     }
 
     #[test]

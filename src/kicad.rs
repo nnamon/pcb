@@ -1,4 +1,4 @@
-//! The KiCad adapter: every call into KiCad 7.0.11 goes through here. `kicad_helper.py` is embedded in the binary
+//! The KiCad adapter: every call into KiCad 10.0.8 goes through here. `kicad_helper.py` is embedded in the binary
 //! and run with python3 in its own process per board, because within one process KiCad's DRC was seen to skip the
 //! clearance tests and pcbnew holds one project (design rules) at a time.
 
@@ -24,7 +24,7 @@ pub fn helper(work: &Path, args: &[&str]) -> Result<serde_json::Value> {
 
 /// KiCad DRC violations counted by type and the nets involved, e.g. "unconnected_items PMUX_ILM".
 pub fn drc_counts(work: &Path, board: &str, name: &str) -> Result<BTreeMap<String, usize>> {
-    let rpt = work.join(format!("{name}.rpt"));
+    let rpt = work.join(format!("{name}.json"));
     let h = helper(work, &["drc", board, rpt.to_str().unwrap()])?;
     let mut m = BTreeMap::new();
     for it in h["items"].as_array().context("DRC gave no items")? {
