@@ -42,6 +42,7 @@ enum Cmd {
         out: String,
     },
     /// Route inside one region with Freerouting; everything outside it is locked and left byte-identical.
+    /// KiCad DRC runs before and after; any new violation fails the command (the board is still written).
     Route {
         board: String,
         /// x0,y0,x1,y1 in mm (KiCad coordinates).
@@ -58,9 +59,13 @@ enum Cmd {
         /// Work directory for the DSN, session and logs.
         #[arg(long, default_value = "pcb_work")]
         work: String,
-        /// Keep unlocked copper inside the region instead of re-routing it.
-        #[arg(long)]
-        keep_inside: bool,
+        /// Nets whose unlocked copper wholly inside the region is removed and routed again: a comma-separated
+        /// list, "all" or "none". Ripped nets are always kept from the result.
+        #[arg(long, default_value = "none")]
+        rip: String,
+        /// Copper layers the router may use.
+        #[arg(long, default_value = "F.Cu,B.Cu")]
+        layers: String,
         /// Seconds before Freerouting is stopped.
         #[arg(long, default_value_t = 900)]
         timeout: u64,
@@ -179,23 +184,29 @@ fn run(cli: Cli) -> Result<()> {
                 json!({ "out": out, "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN, "warnings": st.warnings }),
             )
         }
-        Cmd::Route { board, region, nets, passes, freerouting, work, keep_inside, timeout, out } => {
+        Cmd::Route { board, region, nets, passes, freerouting, work, rip, layers, timeout, out } => {
             let o = route::Opts {
                 region: parse_region(&region)?,
                 nets: nets.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
                 passes,
                 fr_jar: std::fs::canonicalize(&freerouting).with_context(|| format!("Freerouting jar {freerouting}"))?,
                 work: std::path::PathBuf::from(&work),
-                keep_inside,
+                rip: match rip.as_str() {
+                    "none" | "" => route::Rip::None,
+                    "all" => route::Rip::All,
+                    l => route::Rip::Nets(l.split(',').filter(|s| !s.is_empty()).map(String::from).collect()),
+                },
+                layers: layers.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
                 timeout_s: timeout,
             };
             let out = out.unwrap_or_else(|| board.clone());
             let rep = route::run(&board, &out, &o)?;
             let h = format!(
-                "routed {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates",
-                out, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates
+                "routed {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates\nDRC {} -> {}\nfixed:\n  {}\nregressions:\n  {}",
+                out, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates,
+                rep.drc_total_before, rep.drc_total_after, rep.fixed.join("\n  "), rep.regressions.join("\n  ")
             );
-            emit(cli.json, true, h, serde_json::to_value(&rep)?)
+            emit(cli.json, rep.regressions.is_empty(), h, serde_json::to_value(&rep)?)
         }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;

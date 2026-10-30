@@ -157,8 +157,14 @@ Every command:
   Phase 0 (`phase0/probe.py`, KiCad 7.0.11) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
 
   `pcb` runs `python3 -c` with a fixed helper script and reads its JSON; the agent never calls KiCad directly.
+
+  Each DRC run is in its own process. In one process with two boards loaded, the first board's DRC was seen to skip the clearance tests.
 - **`kicad-cli`** for the Gerber, drill, position and PDF exports.
-- **Freerouting** stays a Java jar, run headless.
+- **Freerouting** stays a Java jar, run headless. Freerouting 1.9 traps found in spike 2, each handled by `pcb route`:
+  - any import warning (a non-ASCII character, a net with copper but no pads) opens a dialog that waits for a click, so the run hangs. `pcb` writes ASCII values, declares pinless nets in the DSN, and stops Freerouting after `--timeout`;
+  - a `wire_keepout` on a layer also blocks vias, so a layer the router must not use is marked a plane layer instead;
+  - the router joins tracks in their middle and leaves dangling ends; `pcb` splits the joined tracks and prunes the ends;
+  - copper is ripped only 1 mm inside the region, so the ends the router must reach are clear of the keep-outs.
 - **EasyEDA footprints:** converted to `.kicad_mod` by `pcb`, cached under `parts/`, and checked against the pin names in `design.toml` at sync. A pin-name mismatch is an error, which closes the XC6206 trap.
 - **Determinism:** the same inputs give byte-identical outputs, so a diff shows exactly what a command changed.
 
@@ -175,3 +181,17 @@ Every command:
 | 6 | Port the badge carrier 0.5.0: `design.toml` from its netlist, placement and r36 routing imported, Gate 2 on the new files, release | 0.5.0 released from `pcb` |
 
 The project's Python scripts stay in the repository until phase 6 replaces their use on this board.
+
+## Spike 2: region routing on r36a (30 Oct 2026)
+
+Exit criteria: VBUS_F and U106's ILM pin connected; nothing outside the region changed; no new KiCad DRC violation; time recorded; checked by `tests/verify_route.py`, whose sensitivity is shown by `tests/route_mutations.py` (9 of 9 caught).
+
+| Run | Region | Ripped | Result | Time |
+| --- | --- | --- | --- | --- |
+| A | 40,20.5,60,36 | none | VBUS_F connected; DRC 336 → 335; no regression | 28 s |
+| E | same | USB_SENSE | rerouted; no change in DRC | 36 s |
+| G | 44,25,54,35 | USB_SENSE, GND | rerouted; 4 dangling GND vias fixed | 36 s |
+| F | 40,20.5,60,36 | USB_SENSE, GND | ILM connected, but GND split into 3 more groups; refused | 77 s |
+
+- **VBUS_F: met.** `verify_route.py` agrees with the command's own DRC comparison on every run.
+- **ILM: not met.** U106 pin 10 is boxed in on the top layer by C116 pad 1, a GND via and the USB_SENSE via, with no room for a via of its own. The only routes Freerouting found need GND re-routed as tracks, which splits GND elsewhere. `pcb route` refused those results itself. This moves to spike 3: with GND as a plane, its vias stitch to the plane instead of needing tracks, and the area can be re-routed.
