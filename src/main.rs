@@ -1,6 +1,7 @@
 //! `pcb`: board tooling for agents. See DESIGN.md.
 
 mod board;
+mod import_tscircuit;
 mod render;
 mod sexpr;
 
@@ -30,6 +31,14 @@ enum Cmd {
         reference: Option<String>,
         #[arg(long)]
         net: Option<String>,
+    },
+    /// Write a KiCad 7 board from a tscircuit circuit JSON (outline, nets, footprints, tracks, vias).
+    ImportTscircuit {
+        circuit_json: String,
+        #[arg(long, default_value_t = 4)]
+        layers: u32,
+        #[arg(long, short)]
+        out: String,
     },
     /// PNG of the board or a region, nets labelled.
     Render {
@@ -109,6 +118,17 @@ fn main() -> Result<()> {
                 "footprints": b.footprints.len(), "nets": b.nets.len().saturating_sub(1), "tracks": b.tracks.len(),
                 "locked_tracks": locked, "vias": b.vias.len(), "zones": b.zones.len()
             }))
+        }
+        Cmd::ImportTscircuit { circuit_json, layers, out } => {
+            let src = std::fs::read_to_string(&circuit_json)?;
+            let (text, st) = import_tscircuit::convert(&src, layers)?;
+            std::fs::write(&out, &text)?;
+            emit(
+                cli.json,
+                true,
+                format!("wrote {out}: {} footprints, {} pads, {} nets, {} segments, {} vias", st.footprints, st.pads, st.nets, st.segments, st.vias),
+                json!({ "out": out, "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
+            )
         }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;
