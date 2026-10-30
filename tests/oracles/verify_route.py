@@ -54,7 +54,8 @@ def items(path):
             if st.rstrip().endswith(")") and st.count("(") == st.count(")"):
                 skip = None
             continue
-        out_rest.append(ln)
+        # whether a zone is filled is the fill's result too
+        out_rest.append(ln.replace("(fill yes ", "(fill "))
     rest = out_rest
     return out, rest
 

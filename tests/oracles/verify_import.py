@@ -53,14 +53,50 @@ def err(msg):
     report["error_count"] = report.get("error_count", 0) + 1
 
 
-# nets from the circuit JSON (independent derivation)
+# nets from the circuit JSON (independent derivation): every source_trace joins its ports and nets; a group that holds
+# a source net carries its name; a group of ports alone gets a KiCad-chosen name, which must be one name per group
 sn = {e["source_net_id"]: e["name"] for e in d if e["type"] == "source_net"}
+parent = {}
+
+
+def find(x):
+    parent.setdefault(x, x)
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+for t in d:
+    if t["type"] == "source_trace":
+        ids = list(t.get("connected_source_port_ids", [])) + list(t.get("connected_source_net_ids", []))
+        for a_, b_ in zip(ids, ids[1:]):
+            parent[find(a_)] = find(b_)
+group_name = {}
+for nid, name in sn.items():
+    group_name.setdefault(find(nid), name)
 port_net = {}
 for t in d:
     if t["type"] == "source_trace":
-        for p in t["connected_source_port_ids"]:
-            for n in t.get("connected_source_net_ids", []):
-                port_net.setdefault(p, sn.get(n))
+        for p in t.get("connected_source_port_ids", []):
+            r_ = find(p)
+            port_net[p] = group_name.get(r_, ("anon", r_))
+trace_by_id = {t["source_trace_id"]: t for t in d if t["type"] == "source_trace"}
+anon_map = {}   # anonymous group -> the KiCad net name it got
+
+
+def same_net(want, got):
+    """want: a net name, or ("anon", group) for a group of ports with no source net."""
+    if isinstance(want, tuple):
+        if want in anon_map:
+            return anon_map[want] == got
+        if not got or got in sn.values() or got in anon_map.values():
+            return False
+        anon_map[want] = got
+        return True
+    return want == got
+
+
 pp = {e["pcb_port_id"]: e for e in d if e["type"] == "pcb_port"}
 sport = {e["source_port_id"]: e for e in d if e["type"] == "source_port"}
 sc = {e["source_component_id"]: e for e in d if e["type"] == "source_component"}
@@ -72,12 +108,6 @@ def cj_net(e):
     return port_net.get(p["source_port_id"], "") if p else ""
 
 
-cj_nets = set(sn.values()) | {e.get("net_name") for e in d if e["type"] in ("pcb_trace", "pcb_via") and e.get("net_name")}
-kc_nets = {str(n) for n in b.GetNetsByName().keys()} - {""}   # net 0 is KiCad's "no net"
-report["nets"] = {"circuit_json": len(cj_nets), "kicad": len(kc_nets), "only_in_cj": sorted(cj_nets - kc_nets),
-                  "only_in_kicad": sorted(kc_nets - cj_nets)}
-if cj_nets != kc_nets:
-    err(f"net sets differ: {report['nets']['only_in_cj']} / {report['nets']['only_in_kicad']}")
 
 # footprints
 fps = {f.GetReference(): f for f in b.GetFootprints()}
@@ -199,7 +229,8 @@ for e in d:
     if t != "pcb_hole":
         port = pp.get(e.get("pcb_port_id"))
         spt = sport.get(port["source_port_id"]) if port else None
-        want_num = None
+        # a pad with no port is mechanical: number MP (review 2, 9)
+        want_num = "MP" if port is None else None
         if spt is not None and spt.get("pin_number") is not None:
             want_num = str(spt["pin_number"])
         if want_num is None:
@@ -220,7 +251,7 @@ for e in d:
         if abs(k["area"] - area) > max(0.002, area * 0.01):
             err(f"{ref} polygon pad at {X:.3f},{Y:.3f}: copper area {k['area']:.4f} != {area:.4f} mm2")
     want_net = "" if t == "pcb_hole" else cj_net(e)
-    if k["net"] != want_net:
+    if not same_net(want_net, k["net"]):
         err(f"{ref} pad at {X:.3f},{Y:.3f}: net {k['net']!r} != {want_net!r}")
     if t == "pcb_plated_hole":
         if e["shape"] == "circle" or "hole_diameter" in e and "hole_width" not in e:
@@ -242,17 +273,48 @@ for k in extra[:10]:
 
 # tracks and vias: matched by distance (within TOL), not by rounded keys, which split values on a rounding boundary
 names = {"top": "F.Cu", "bottom": "B.Cu"}
+
+
+def trace_net_of(t):
+    """A trace's net: its net_name, else its source trace's group, else its end ports' group."""
+    if t.get("net_name"):
+        return t["net_name"]
+    st = trace_by_id.get(t.get("source_trace_id"))
+    if st:
+        ids = st.get("connected_source_port_ids", []) + st.get("connected_source_net_ids", [])
+        if ids:
+            r_ = find(ids[0])
+            return group_name.get(r_, ("anon", r_))
+    for k_ in ("start_pcb_port_id", "end_pcb_port_id"):
+        if t.get(k_) in pp:
+            return port_net.get(pp[t[k_]]["source_port_id"], "")
+    return ""
+
+
 cj_segs = []
+route_vias = []   # via route points: (position in KiCad mm, net)
+point_net = []
 for t in d:
     if t["type"] != "pcb_trace":
         continue
-    r = t["route"]
-    for a, c in zip(r, r[1:]):
-        if a.get("route_type") == "wire" and c.get("route_type") == "wire" and a["layer"] == c["layer"]:
-            A, C = T(a["x"], a["y"]), T(c["x"], c["y"])
-            if abs(A[0] - C[0]) < 1e-9 and abs(A[1] - C[1]) < 1e-9:
-                continue
-            cj_segs.append((A, C, names[a["layer"]], a["width"], t.get("net_name") or ""))
+    net_t = trace_net_of(t)
+    prev = None   # (x, y, layer, width)
+    for a in t["route"]:
+        point_net.append(((a["x"], a["y"]), net_t))
+        if a.get("route_type") == "wire":
+            if prev is not None and prev[2] == a["layer"]:
+                A, C = T(prev[0], prev[1]), T(a["x"], a["y"])
+                if not (abs(A[0] - C[0]) < 1e-9 and abs(A[1] - C[1]) < 1e-9):
+                    cj_segs.append((A, C, names[a["layer"]], prev[3], net_t))
+            prev = (a["x"], a["y"], a["layer"], a["width"])
+        elif a.get("route_type") == "via":
+            # the incoming wire runs to the via; the next wire starts there on the via's far layer
+            if prev is not None:
+                A, C = T(prev[0], prev[1]), T(a["x"], a["y"])
+                if not (abs(A[0] - C[0]) < 1e-9 and abs(A[1] - C[1]) < 1e-9):
+                    cj_segs.append((A, C, names[prev[2]], prev[3], net_t))
+            route_vias.append((a["x"], a["y"], net_t))
+            prev = (a["x"], a["y"], a.get("to_layer"), prev[3] if prev else 0.15)
 kc_segs, kc_vias = [], []
 # review 2, 6: pcbnew reassigns a via's net from its tracks on load, so via nets come from the file text
 _netname = {int(m.group(1)): m.group(2) for m in re.finditer(r'^  \(net (\d+) "([^"]*)"\)', open(pcb_path).read(), re.M)}
@@ -265,6 +327,10 @@ for tr in b.GetTracks():
         kc_vias.append((pos, mm(tr.GetWidth()), mm(tr.GetDrillValue()), _via_text.get((round(pos[0], 4), round(pos[1], 4)), "?")))
     else:
         kc_segs.append(((mm(tr.GetStart().x), mm(tr.GetStart().y)), (mm(tr.GetEnd().x), mm(tr.GetEnd().y)), tr.GetLayerName(), mm(tr.GetWidth()), tr.GetNetname()))
+
+
+# nets of KiCad items compared through same_net, so a group with no source net may carry KiCad's own name
+
 
 
 def near(p, q):
@@ -308,7 +374,7 @@ def seg_pos(sg):
 
 def seg_same(c, k):
     ends = (near(c[0], k[0]) and near(c[1], k[1])) or (near(c[0], k[1]) and near(c[1], k[0]))
-    return ends and c[2] == k[2] and abs(c[3] - k[3]) <= TOL and c[4] == k[4]
+    return ends and c[2] == k[2] and abs(c[3] - k[3]) <= TOL and same_net(c[4], k[4])
 
 
 miss, extra = match(cj_segs, kc_segs, seg_pos, seg_same)
@@ -318,10 +384,17 @@ for k in miss[:5]:
 for k in extra[:5]:
     err(f"extra segment in KiCad: {k}")
 cj_vias = []
+via_size = next(((v["outer_diameter"], v["hole_diameter"]) for v in d if v["type"] == "pcb_via"), (0.6, 0.3))
 for v in d:
     if v["type"] == "pcb_via":
-        cj_vias.append((T(v["x"], v["y"]), v["outer_diameter"], v["hole_diameter"], v.get("net_name") or ""))
-miss, extra = match(cj_vias, kc_vias, lambda v: v[0], lambda c, k: near(c[0], k[0]) and abs(c[1] - k[1]) <= TOL and abs(c[2] - k[2]) <= TOL and c[3] == k[3])
+        # a via's net: its net_name, else the net of the traces with a route point there (review 2, 3)
+        net_v = v.get("net_name") or next((n_ for (px, py), n_ in point_net if abs(px - v["x"]) < 1e-3 and abs(py - v["y"]) < 1e-3), "")
+        cj_vias.append((T(v["x"], v["y"]), v["outer_diameter"], v["hole_diameter"], net_v))
+for x_, y_, n_ in route_vias:
+    # a via route point with no pcb_via there gets a via of the board's usual size (review 2, 1)
+    if not any(v["type"] == "pcb_via" and abs(v["x"] - x_) < 1e-3 and abs(v["y"] - y_) < 1e-3 for v in d):
+        cj_vias.append((T(x_, y_), via_size[0], via_size[1], n_))
+miss, extra = match(cj_vias, kc_vias, lambda v: v[0], lambda c, k: near(c[0], k[0]) and abs(c[1] - k[1]) <= TOL and abs(c[2] - k[2]) <= TOL and same_net(c[3], k[3]))
 report["vias"] = {"circuit_json": len(cj_vias), "kicad": len(kc_vias), "only_cj": len(miss), "only_kicad": len(extra)}
 for k in miss[:5]:
     err(f"via missing in KiCad: {k}")
@@ -419,6 +492,13 @@ for part, spec in fx.get("import", {}).get("back_side", {}).items():
             bt_err += 1
             err(f"{part} library pad {pd.GetNumber()} flipped at the imported orientation lands at {got_p}, JSON pad at {want_bt[pd.GetNumber()]}")
     report["back_side_convention"][part] = {"pads": len(lib), "mismatches": bt_err}
+
+# net sets: the source nets plus one KiCad name per anonymous group that has copper
+kc_nets = {str(n) for n in b.GetNetsByName().keys()} - {""}   # net 0 is KiCad's "no net"
+cj_nets = set(sn.values()) | {t_.get("net_name") for t_ in d if t_["type"] in ("pcb_trace", "pcb_via") and t_.get("net_name")} | set(anon_map.values())
+report["nets"] = {"circuit_json": len(cj_nets), "kicad": len(kc_nets), "only_in_cj": sorted(cj_nets - kc_nets), "only_in_kicad": sorted(kc_nets - cj_nets)}
+if cj_nets != kc_nets:
+    err(f"net sets differ: {report['nets']['only_in_cj']} / {report['nets']['only_in_kicad']}")
 
 report["ok"] = not report.get("error_count")
 print(json.dumps(report, indent=1))

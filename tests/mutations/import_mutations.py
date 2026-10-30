@@ -107,7 +107,15 @@ def m_via_net(t):
     return t.replace(line, line[: line.rindex("(net ")] + f"(net {other}))", 1)
 
 
-MUT = [m_crtyd_side, m_via_net, m_back_part_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
+def m_pad_net(t):
+    # one pad moved to another net
+    m = re.search(r'(\(pad "[^"]+" smd [^\n]*?\(net )(\d+) ("[^"]*")\)', t)
+    nums = re.findall(r'^  \(net (\d+) ("[^"]*")\)', t, re.M)
+    other = next((n, nm) for n, nm in nums if n != m.group(2) and n != "0")
+    return t[:m.start()] + m.group(1) + f"{other[0]} {other[1]})" + t[m.end():]
+
+
+MUT = [m_pad_net, m_crtyd_side, m_via_net, m_back_part_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
 results = {}
 base = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, board, fixture], capture_output=True)
 results["unmutated passes"] = base.returncode == 0
