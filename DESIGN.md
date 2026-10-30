@@ -152,7 +152,9 @@ Every command:
 - **KiCad 7 through its Python module (`pcbnew`)** for the operations only KiCad does well:
   - zone fill;
   - DRC;
-  - Specctra DSN export and SES import.
+  - Specctra DSN export.
+
+  Phase 0 (`phase0/probe.py`, KiCad 7.0.11) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
 
   `pcb` runs `python3 -c` with a fixed helper script and reads its JSON; the agent never calls KiCad directly.
 - **`kicad-cli`** for the Gerber, drill, position and PDF exports.
