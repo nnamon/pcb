@@ -54,7 +54,10 @@ pub fn run(java: &Path, jar: &Path, work: &Path, dsn: &Path, ses: &Path, passes:
 
 /// Log lines where Freerouting says it ignored a setting pcb gave it.
 fn settings_not_applied(log: &str) -> Vec<String> {
-    const SIGNS: [&str; 3] = ["Failed to apply CLI router setting", "Unknown command line argument", "specified in ignoreNetClasses (not present on board)"];
+    // 2.5.0 logs nothing for an ignored net class missing from the board (review 7, C4), so that cannot be caught
+    // here; pcb names only classes it wrote, and a class not applied costs run time, not copper (route keeps only
+    // the requested nets' wires)
+    const SIGNS: [&str; 2] = ["Failed to apply CLI router setting", "Unknown command line argument"];
     log.lines().filter(|l| SIGNS.iter().any(|s| l.contains(s))).map(|l| l.trim().to_string()).collect()
 }
 
@@ -65,7 +68,7 @@ mod tests {
     #[test]
     fn ignored_settings_are_found() {
         let log = "2026-10-30 INFO   started\n2026-10-30 WARN   [x] Failed to apply CLI router setting: router.layers.routable: bad\n2026-10-30 WARN   Unknown net class 'pcb_not_routed_0' specified in ignoreNetClasses (not present on board)\n2026-10-30 WARN   Unknown command line argument: --router.nosuch\n2026-10-30 WARN   Layer 'In1.Cu' is declared as a power layer";
-        assert_eq!(settings_not_applied(log).len(), 3);
+        assert_eq!(settings_not_applied(log).len(), 2);
         assert!(settings_not_applied("INFO all fine").is_empty());
     }
 }

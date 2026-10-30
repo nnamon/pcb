@@ -38,6 +38,32 @@ sys.exit(r.returncode)
     os.chmod(cli, 0o755)
     r = subprocess.run([sys.executable, helper, "drc", board, os.path.join(work, f"c{i}.json")], capture_output=True, text=True, env=dict(os.environ, PCB_KICAD_CLI=cli))
     results[name] = "ok" if r.returncode != 0 and "not understood" in r.stderr else f"exit {r.returncode}: {r.stdout[-300:]}{r.stderr[-300:]}"
+# review 6, K3 and review 7, C1/C6: nets with brackets, quotes, spaces, KiCad escapes ({slash}), names that look like
+# "<no net>" or like item text, and copper text on no net. Every clearance item must carry the right nets, in the
+# helper and in the oracles' own reader (tests/lib/kisexp.py).
+sys.path.insert(0, os.path.join(here, "..", "lib"))
+import kisexp  # noqa: E402
+nb = os.path.join(work, "names.kicad_pcb")
+subprocess.run([sys.executable, os.path.join(here, "..", "lib", "names_board.py"), nb], check=True, capture_output=True)
+truth = {float(k): v for k, v in json.load(open(nb + ".truth.json")).items()}
+r = subprocess.run([sys.executable, helper, "drc", nb, os.path.join(work, "names.json")], capture_output=True, text=True)
+wrong = []
+if r.returncode != 0:
+    wrong.append(r.stderr[-300:])
+else:
+    seen = set()
+    for it in json.loads(r.stdout.splitlines()[-1])["items"]:
+        if it["type"] != "clearance":
+            continue
+        row = min(truth, key=lambda t: abs(t - it["at"][0]["y"]))
+        seen.add(row)
+        if sorted(a["net"] for a in it["at"]) != sorted(truth[row]):
+            wrong.append(f"row {row}: {sorted(a['net'] for a in it['at'])} != {sorted(truth[row])}")
+    wrong += [f"row {row}: no clearance item" for row in truth if row not in seen]
+results["helper reads awkward net names"] = "ok" if not wrong else "; ".join(wrong[:4])
+want_keys = {kisexp.key("clearance", sorted(v)) for v in truth.values()}
+got_keys = {k for k in kisexp.drc_counts(nb) if k.startswith("clearance ")}
+results["oracle reads awkward net names"] = "ok" if got_keys == want_keys else f"missing {sorted(want_keys - got_keys)[:3]}, extra {sorted(got_keys - want_keys)[:3]}"
 bad = {k: v for k, v in results.items() if v != "ok"}
 print(json.dumps({"ok": not bad, "cases": len(results), "failed": bad}, indent=1))
 sys.exit(0 if not bad else 1)

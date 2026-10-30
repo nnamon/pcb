@@ -94,26 +94,40 @@ for z in b.Zones():
     if not z.GetIsRuleArea() and z.GetNetname() == {fx(plane)}:
         z.SetThermalReliefSpokeWidth(260000)
 """, True),
-    # review 6, K2: a new violation of a DRC kind the fixture allows; the allowance has a count, so check I fires.
-    # A short tie-net track beside a coil turn, 0.05 mm clear of it (the rule is 0.15), on the turn's layer.
+    # review 6, K2 and review 7, C2: more violations of a DRC kind the fixture allows, and nothing else, so only
+    # the allowance's count can catch it: a tie-net V at the minimum width (0.15 mm) from pad 2 to 0.05 mm short of
+    # the nearest coil turn and back into the pad, connected at both ends
     "allowed_kind_exceeded": (f"""
 f = b.FindFootprintByReference({fx(tie['footprint'])})
-g = max((g for g in f.GraphicalItems() if g.GetLayerName().endswith('.Cu') and g.GetShape() == pcbnew.SHAPE_T_SEGMENT),
-        key=lambda g: (g.GetEnd() - g.GetStart()).EuclideanNorm())
-a, c = g.GetStart(), g.GetEnd()
-d = c - a
-n = d.EuclideanNorm()
-off = g.GetWidth() // 2 + 50000 + 50000
-nx, ny = int(-d.y * off / n), int(d.x * off / n)
-mid = pcbnew.VECTOR2I((a.x + c.x) // 2, (a.y + c.y) // 2)
-step = pcbnew.VECTOR2I(int(d.x * 1000000 / n), int(d.y * 1000000 / n))
-t = pcbnew.PCB_TRACK(b)
-t.SetStart(mid - step + pcbnew.VECTOR2I(nx, ny))
-t.SetEnd(mid + step + pcbnew.VECTOR2I(nx, ny))
-t.SetWidth(100000)
-t.SetLayer(g.GetLayer())
-t.SetNet(b.FindNet({fx(tie['pads'].get('2', ''))}))
-b.Add(t)
+pad = next(p for p in f.Pads() if p.GetNumber() == "2")
+c = pad.GetPosition()
+best = None
+for g in f.GraphicalItems():
+    if g.GetLayer() != pad.GetPrincipalLayer() or g.GetShape() != pcbnew.SHAPE_T_SEGMENT:
+        continue
+    a, e = g.GetStart(), g.GetEnd()
+    d = e - a
+    L2 = d.x * d.x + d.y * d.y
+    u = max(0.0, min(1.0, ((c.x - a.x) * d.x + (c.y - a.y) * d.y) / L2)) if L2 else 0.0
+    q = pcbnew.VECTOR2I(int(a.x + u * d.x), int(a.y + u * d.y))
+    dist = (q - c).EuclideanNorm()
+    if best is None or dist < best[0]:
+        best = (dist, q, g.GetWidth())
+dist, q, w = best
+# stop where the loop's edge is 0.05 mm from the turn's edge
+back = (w // 2 + 50000 + 75000) / dist
+tip = pcbnew.VECTOR2I(int(q.x + (c.x - q.x) * back), int(q.y + (c.y - q.y) * back))
+# back to a second point inside the pad, 0.15 mm aside, so the two legs do not lie on each other
+nx, ny = (c.y - q.y) / dist, -(c.x - q.x) / dist
+c2 = pcbnew.VECTOR2I(int(c.x + nx * 150000), int(c.y + ny * 150000))
+for s_, e_ in ((c, tip), (tip, c2)):
+    t = pcbnew.PCB_TRACK(b)
+    t.SetStart(s_)
+    t.SetEnd(e_)
+    t.SetWidth(150000)
+    t.SetLayer(pad.GetPrincipalLayer())
+    t.SetNet(pad.GetNet())
+    b.Add(t)
 """, True),
     "stale_fill_short": (f"""
 z = next(z for z in b.Zones() if not z.GetIsRuleArea() and z.GetNetname() == {fx(plane)} and z.IsOnLayer(pcbnew.B_Cu))

@@ -45,11 +45,12 @@ def selftest(work):
     res["zone_outlines_after_save"] = max((zz.Outline().OutlineCount() for zz in b2.Zones()), default=0)
     # probe boards for doctor's own DRC and Freerouting runs, each in a fresh process (see kicad.rs)
     # the DRC probe's nets have brackets and a space, as bus nets do (review 6, K3); the route probe's are plain
-    for name, short in (("drc_probe", True), ("route_probe", False)):
+    # the layer probe adds a locked net B wall across F.Cu between P1 and P2, so net A can cross only on B.Cu
+    for name, short in (("drc_probe", True), ("route_probe", False), ("layer_probe", False)):
         pb = pcbnew.NewBoard(os.path.join(work, name + ".kicad_pcb"))
         pb.SetCopperLayerCount(2)
         nets = {}
-        for n, real in (("A", "D[0]" if short else "A"), ("B", "D[0] x" if short else "B")):
+        for n, real in (("A", "D[0]" if short else "A"), ("B", "D[0]{slash} x" if short else "B")):
             ni = pcbnew.NETINFO_ITEM(pb, real)
             pb.Add(ni)
             nets[n] = ni
@@ -82,6 +83,15 @@ def selftest(work):
             t.SetWidth(pcbnew.FromMM(0.25))
             t.SetLayer(pcbnew.F_Cu)
             t.SetNet(nets["B"])
+            pb.Add(t)
+        if name == "layer_probe":
+            t = pcbnew.PCB_TRACK(pb)
+            t.SetStart(pcbnew.VECTOR2I(pcbnew.FromMM(20), pcbnew.FromMM(0.5)))
+            t.SetEnd(pcbnew.VECTOR2I(pcbnew.FromMM(20), pcbnew.FromMM(19.5)))
+            t.SetWidth(pcbnew.FromMM(0.5))
+            t.SetLayer(pcbnew.F_Cu)
+            t.SetNet(nets["B"])
+            t.SetLocked(True)
             pb.Add(t)
         pb.Save(os.path.join(work, name + ".kicad_pcb"))
     # KiCad's DRC listing limits (review 6, K1): 600 tracks of alternating nets, 0.05 mm apart and under the minimum
@@ -123,14 +133,35 @@ DRC_SCHEMA = "https://schemas.kicad.org/drc.v1.json"
 REPORT_LIMITS = (199, 499)
 
 
-def item_net(desc, names):
-    """The net KiCad names in an item description ("Pad 1 [VBUS] of R1 on F.Cu"): the longest board net name that
-    appears in brackets, so "D[0]x" is not read as "D[0" (review 6, K3); "" for "<no net>" or none."""
-    hits = [n for n in names if f"[{n}]" in desc]
-    return max(hits, key=len) if hits else ""
+# KiCad stores some characters of a net name escaped ("/TX{slash}RX") but shows them plain in DRC text (review 7, C1)
+ESCAPES = {"{slash}": "/", "{backslash}": "\\", "{lt}": "<", "{gt}": ">", "{colon}": ":", "{dblquote}": '"',
+           "{quote}": "'", "{space}": " ", "{tab}": "\t", "{return}": "\n", "{linefeed}": "\n", "{comma}": ","}
 
 
-def drc(board, out, names):
+def unescape(name):
+    for k, v in ESCAPES.items():
+        name = name.replace(k, v)
+    return name
+
+
+def item_net(item, board, names):
+    """The net of a DRC item, as the board file names it; "" for none. By the item's uuid in the loaded board when
+    KiCad can resolve it (a connected item gives its net, anything else, such as text, none: review 7, C6). Items
+    without a stored uuid get a new one on every load, so for those the description is matched against the board's
+    net names, unescaped, longest first (review 6, K3)."""
+    it = board.ResolveItem(pcbnew.KIID(item.get("uuid", "")), True) if item.get("uuid") else None
+    if it is not None:
+        try:
+            it = it.Cast()
+        except TypeError:
+            return ""   # a class Cast does not know (a footprint field): not copper on a net
+        return it.GetNetname() if hasattr(it, "GetNetname") else ""
+    desc = item["description"]
+    hits = [n for n in names if f"[{unescape(n)}]" in desc]
+    return max(hits, key=lambda n: len(unescape(n))) if hits else ""
+
+
+def drc(board, out, b):
     """KiCad's DRC through kicad-cli: in KiCad 10, WriteDRCReport asserts outside the KiCad application. The JSON
     schema is checked, and kicad-cli's own totals must equal what was read, or the format has changed (review 5, 4).
     Each item carries its net, matched against the board's net names. Types at KiCad's report limit are returned as
@@ -145,12 +176,13 @@ def drc(board, out, names):
     d = json.load(open(out))
     if d.get("$schema") != DRC_SCHEMA or d.get("coordinate_units") != "mm":
         raise SystemExit(f"DRC report not understood: schema {d.get('$schema')!r}, units {d.get('coordinate_units')!r}")
+    names = sorted({str(n) for n in b.GetNetsByName().keys() if str(n)})
     items = []
     for key in ("violations", "unconnected_items"):
         for v in d.get(key) or []:
             if "type" not in v or not isinstance(v.get("items"), list):
                 raise SystemExit(f"DRC report not understood: a {key} entry has no type or items")
-            locs = [{"x": float(i["pos"]["x"]), "y": float(i["pos"]["y"]), "item": i["description"], "net": item_net(i["description"], names)} for i in v["items"]]
+            locs = [{"x": float(i["pos"]["x"]), "y": float(i["pos"]["y"]), "item": i["description"], "net": item_net(i, b, names)} for i in v["items"]]
             items.append({"type": v["type"], "message": v.get("description", ""), "severity": v.get("severity", ""), "at": locs})
     found = sum(int(n) for n in re.findall(r"^Found (\d+) ", r.stdout, re.M))
     if found != len(items):
@@ -170,8 +202,7 @@ def main():
         ok = pcbnew.ExportSpecctraDSN(b, sys.argv[3])
         print(json.dumps({"ok": bool(ok), "dsn": sys.argv[3]}))
     elif cmd == "drc":
-        names = sorted({str(n) for n in b.GetNetsByName().keys() if str(n)})
-        print(json.dumps(drc(path, sys.argv[3], names)))
+        print(json.dumps(drc(path, sys.argv[3], b)))
     elif cmd == "fill":
         # connectivity first: the filler uses it to find and remove unconnected islands
         b.BuildConnectivity()

@@ -62,11 +62,11 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
     let probe = work.join("drc_probe.kicad_pcb");
     match kicad::drc_counts(work, probe.to_str().unwrap_or(""), "doctor_drc") {
         Ok(m) => {
-            // nets "D[0]" and "D[0] x": a bracket or space in a name must not change which net is read (review 6, K3)
-            let nets = ["D[0]".to_string(), "D[0] x".to_string()];
+            // nets "D[0]" and "D[0]{slash} x": a bracket, an escape or a space in a name must not change which net is read (review 6, K3; {slash} is how KiCad stores "/", review 7, C1)
+            let nets = ["D[0]".to_string(), "D[0]{slash} x".to_string()];
             let short = m.contains_key(&kicad::drc_key("shorting_items", &nets)) || m.contains_key(&kicad::drc_key("clearance", &nets));
             let open = m.contains_key(&kicad::drc_key("unconnected_items", &nets[..1]));
-            checks.push(check("kicad drc sees a short and an open", short && open, format!("{:?}", m.keys().collect::<Vec<_>>()), "shorting_items or clearance \"D[0]\" \"D[0] x\", and unconnected_items \"D[0]\""));
+            checks.push(check("kicad drc sees a short and an open", short && open, format!("{:?}", m.keys().collect::<Vec<_>>()), "shorting_items or clearance \"D[0]\" \"D[0]{slash} x\", and unconnected_items \"D[0]\""));
         }
         Err(e) => checks.push(check("kicad drc sees a short and an open", false, format!("{e:#}"), "a DRC report")),
     }
@@ -105,6 +105,20 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
                     checks.push(check("freerouting routes a probe", n > 0, format!("{n} wires on net A"), "at least one"));
                 }
                 Err(e) => checks.push(check("freerouting routes a probe", false, format!("{e:#}").chars().take(400).collect::<String>(), "a session with net A routed")),
+            }
+            // the layer limit (review 7, C4): a locked wall on F.Cu leaves net A only B.Cu, which is not routable, so
+            // nothing may be laid there; a jar that ignores --router.layers.routable routes A on B.Cu. DSN: F.Cu, B.Cu.
+            let dsn = work.join("layer_probe.dsn");
+            let ses = work.join("layer_probe.ses");
+            let routed = kicad::helper(work, &["dsn", work.join("layer_probe.kicad_pcb").to_str().unwrap_or(""), dsn.to_str().unwrap_or("")])
+                .and_then(|_| crate::freerouting::run(Path::new(java), jar, work, &dsn, &ses, 3, &[], &[true, false], &[], 120))
+                .and_then(|_| crate::route::read_ses(&std::fs::read_to_string(&ses)?));
+            match routed {
+                Ok((wires, vias)) => {
+                    let on_b = wires.iter().filter(|w| !w.fixed && w.layer == "B.Cu").count() + vias.iter().filter(|v| !v.fixed).count();
+                    checks.push(check("freerouting keeps off a non-routable layer", on_b == 0, format!("{on_b} new wires or vias on B.Cu"), "none"));
+                }
+                Err(e) => checks.push(check("freerouting keeps off a non-routable layer", false, format!("{e:#}").chars().take(400).collect::<String>(), "a session")),
             }
         }
         Some(jar) => checks.push(check("freerouting 2.5.0 jar", false, format!("{} not found", jar.display()), "the jar")),

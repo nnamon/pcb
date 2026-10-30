@@ -36,15 +36,16 @@ pub fn copy_rules(from_board: &Path, to_board: &Path) -> Result<()> {
 }
 
 /// A violation key: its type and the sorted nets of its items, e.g. "unconnected_items PMUX_ILM" or
-/// "clearance <no net> NFC_AC1". A net name with a space, quote, bracket or backslash, or that is empty, is written
-/// quoted, so `key_parts` reads every key back exactly (review 6, K3).
+/// "clearance <no net> NFC_AC1". An item on no net is "" and is written `<no net>`; a net name with a space, quote,
+/// bracket or backslash is written quoted (so a net really named "<no net>" is too: review 7, C6), and `key_parts`
+/// reads every key back exactly (review 6, K3).
 pub fn drc_key(kind: &str, nets: &[String]) -> String {
     let mut k = kind.to_string();
     for n in nets {
         k.push(' ');
-        if n == NO_NET {
-            k.push_str(n);
-        } else if n.is_empty() || n.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '\\' | '[' | ']')) {
+        if n.is_empty() {
+            k.push_str(NO_NET);
+        } else if n.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '\\' | '[' | ']')) {
             k.push_str(&serde_json::to_string(n).unwrap_or_default());
         } else {
             k.push_str(n);
@@ -53,7 +54,7 @@ pub fn drc_key(kind: &str, nets: &[String]) -> String {
     k
 }
 
-/// An item on no net, as keys write it (unquoted, though it has a space).
+/// How a key writes an item on no net (unquoted, though it has a space).
 pub const NO_NET: &str = "<no net>";
 
 /// The type and nets of a key written by `drc_key`.
@@ -62,7 +63,7 @@ pub fn key_parts(key: &str) -> (String, Vec<String>) {
     let mut nets = vec![];
     while !rest.is_empty() {
         if let Some(r) = rest.strip_prefix(NO_NET).filter(|r| r.is_empty() || r.starts_with(' ')) {
-            nets.push(NO_NET.to_string());
+            nets.push(String::new());
             rest = r.trim_start();
         } else if rest.starts_with('"') {
             let mut de = serde_json::Deserializer::from_str(rest).into_iter::<String>();
@@ -100,7 +101,7 @@ pub fn drc_counts(work: &Path, board: &str, name: &str) -> Result<BTreeMap<Strin
             .as_array()
             .into_iter()
             .flatten()
-            .map(|a| a["net"].as_str().map(|n| if n.is_empty() { NO_NET.to_string() } else { n.to_string() }).unwrap_or_default())
+            .map(|a| a["net"].as_str().map(|n| n.to_string()).unwrap_or_default())
             .collect();
         nets.sort();
         nets.dedup();
@@ -115,11 +116,12 @@ mod tests {
 
     #[test]
     fn keys_read_back() {
-        for nets in [vec![], vec!["GND".to_string()], vec!["<no net>".into(), "NFC_AC1".into()], vec!["D[0]".into(), "D[0]x".into()], vec!["Net A".into(), "\"q\"".into(), "".into()]] {
+        for nets in [vec![], vec!["GND".to_string()], vec!["".into(), "NFC_AC1".into()], vec!["D[0]".into(), "D[0]x".into()], vec!["Net A".into(), "\"q\"".into(), "<no net>".into(), "".into()]] {
             let k = drc_key("clearance", &nets);
             assert_eq!(key_parts(&k), ("clearance".to_string(), nets.clone()), "{k}");
         }
-        assert_eq!(drc_key("clearance", &["<no net>".into(), "NFC_AC1".into()]), "clearance <no net> NFC_AC1");
+        assert_eq!(drc_key("clearance", &["".into(), "NFC_AC1".into()]), "clearance <no net> NFC_AC1");
+        assert_eq!(drc_key("clearance", &["<no net>".into()]), "clearance \"<no net>\"");
         assert_eq!(drc_key("clearance", &["D[0]".into()]), "clearance \"D[0]\"");
     }
 }

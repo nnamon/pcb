@@ -137,7 +137,7 @@ pub(crate) struct SesVia {
     net: String,
     x: f64,
     y: f64,
-    fixed: bool,
+    pub fixed: bool,
     /// Outer diameter and drill from the padstack name, when it follows KiCad's pattern.
     size: Option<(f64, f64)>,
 }

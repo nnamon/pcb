@@ -71,12 +71,34 @@ REPORT_LIMITS = (199, 499)  # KiCad lists at most this many of a type (499: clea
 
 
 def key(kind, nets):
-    """Violation key: the type, then the sorted nets; a name with a space, quote, bracket or backslash, or an empty
-    one, is written as a JSON string so the key reads back unambiguously."""
+    """Violation key: the type, then the sorted nets. "" (an item on no net) is written <no net>; a name with a space,
+    quote, bracket or backslash is written as a JSON string, so the key reads back unambiguously."""
     out = [kind]
     for n in nets:
-        out.append(n if n == "<no net>" else json.dumps(n, ensure_ascii=False) if (not n or re.search(r'[\s"\\\[\]]', n)) else n)
+        out.append("<no net>" if n == "" else json.dumps(n, ensure_ascii=False) if re.search(r'[\s"\\\[\]]', n) else n)
     return " ".join(out)
+
+
+# KiCad writes these characters of a net name escaped in the file but plain in DRC text
+_ESC = {"{slash}": "/", "{backslash}": "\\", "{lt}": "<", "{gt}": ">", "{colon}": ":", "{dblquote}": '"', "{quote}": "'",
+        "{space}": " ", "{tab}": "\t", "{return}": "\n", "{linefeed}": "\n", "{comma}": ","}
+
+
+def _plain(name):
+    for k, v in _ESC.items():
+        name = name.replace(k, v)
+    return name
+
+
+def uuid_nets(board_path):
+    """{uuid: net} for every item in the file that has a uuid: its own (net "...") child, or "" for none."""
+    m = {}
+    for n in _walk(parse(open(board_path).read())):
+        u = n.find("uuid") if n.head not in ("uuid",) else None
+        if u is not None and u.arg(1):
+            net = n.find("net")
+            m[u.arg(1)] = net.arg(1) if net is not None and net.arg(1) else ""
+    return m
 
 
 def board_nets(board_path):
@@ -111,6 +133,7 @@ def drc_counts(board_path, kicad_cli="kicad-cli"):
         os.unlink(out)
     assert d.get("$schema") == "https://schemas.kicad.org/drc.v1.json", d.get("$schema")
     names = board_nets(board_path)
+    by_uuid = uuid_nets(board_path)
     vs = (d.get("violations") or []) + (d.get("unconnected_items") or [])
     per_type = collections.Counter(v["type"] for v in vs)
     capped = {t: n for t, n in per_type.items() if n in REPORT_LIMITS}
@@ -120,8 +143,13 @@ def drc_counts(board_path, kicad_cli="kicad-cli"):
     for v in vs:
         nets = set()
         for it in v["items"]:
-            hits = [n for n in names if f"[{n}]" in it["description"]]
-            nets.add(max(hits, key=len) if hits else "<no net>")
+            # by the item's uuid in the file; an item written without one gets a new uuid on each load, so for
+            # those the description is matched against the net names, shown unescaped, longest first
+            if it.get("uuid") in by_uuid:
+                nets.add(by_uuid[it["uuid"]])
+                continue
+            hits = [n for n in names if f"[{_plain(n)}]" in it["description"]]
+            nets.add(max(hits, key=lambda n: len(_plain(n))) if hits else "")
         c[key(v["type"], sorted(nets))] += 1
     total = sum(int(n) for n in re.findall(r"^Found (\d+) ", r.stdout, re.M))
     assert total == sum(c.values()), f"kicad-cli counts {total}, {sum(c.values())} read"
