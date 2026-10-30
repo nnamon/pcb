@@ -524,10 +524,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let scratch_pcb = o.work.join("route_scratch.kicad_pcb");
     std::fs::write(&scratch_pcb, scratch.apply(src)?)?;
     // a project file next to the board carries its design rules into the export
-    let pro = Path::new(board_path).with_extension("kicad_pro");
-    if pro.exists() {
-        std::fs::copy(&pro, scratch_pcb.with_extension("kicad_pro"))?;
-    }
+    kicad::copy_rules(Path::new(board_path), &scratch_pcb)?;
 
     // 2-3. DSN with keep-outs outside the region
     let dsn = o.work.join("route.dsn");
@@ -750,7 +747,8 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             final_edits.replace(b.tracks[t].span, ps.join("\n  "));
         }
     }
-    let outer: Vec<String> = [b.copper_layers.first(), b.copper_layers.last()].iter().flatten().map(|l| sexpr::quote(l)).collect();
+    // through vias, F.Cu to B.Cu by name: the layer list's order is not the stack order in every file (review 6, K8)
+    let outer: Vec<String> = ["F.Cu", "B.Cu"].iter().map(|l| sexpr::quote(l)).collect();
     for (net, x, y, sz) in &new_vias {
         new_text.push_str(&format!(
             "  (via (at {} {}) (size {}) (drill {}) (layers {}) (net {}))\n",
@@ -770,8 +768,9 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     rep.drc_total_after = g.total_after;
     // requested nets KiCad still reports as not connected
     for (k, v) in &g.after {
-        if let Some(nets) = k.strip_prefix("unconnected_items ") {
-            for net in nets.split(' ') {
+        let (kind, nets) = kicad::key_parts(k);
+        if kind == "unconnected_items" {
+            for net in &nets {
                 if o.nets.iter().any(|x| x == net) && !rep.still_open.contains(&net.to_string()) && *v > 0 {
                     rep.still_open.push(net.to_string());
                 }

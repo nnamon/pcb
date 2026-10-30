@@ -13,6 +13,8 @@ use std::process::Command;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(java: &Path, jar: &Path, work: &Path, dsn: &Path, ses: &Path, passes: u32, plane_nets: &[String], routable: &[bool], ignored_classes: &[String], timeout_s: u64) -> Result<String> {
+    // Java runs inside `work`, so a path relative to the caller would point elsewhere (review 6, K12)
+    let (dsn, ses) = (&std::path::absolute(dsn)?, &std::path::absolute(ses)?);
     let _ = std::fs::remove_file(ses);
     let out = Command::new("timeout")
         .arg(timeout_s.to_string())
@@ -38,9 +40,32 @@ pub fn run(java: &Path, jar: &Path, work: &Path, dsn: &Path, ses: &Path, passes:
     if out.status.code() == Some(124) {
         return Err(failed("freerouting-timeout", format!("Freerouting did not finish within {timeout_s} s")));
     }
+    // 2.5 logs a setting it could not apply and routes with its default instead (review 6, K5)
+    let bad = settings_not_applied(&log);
+    if !bad.is_empty() {
+        return Err(failed("freerouting-settings", format!("Freerouting did not apply pcb's settings:\n{}", bad.join("\n"))));
+    }
     if !ses.exists() {
         let tail: Vec<&str> = log.lines().filter(|l| l.contains(" WARN ") || l.contains(" ERROR ")).collect();
         return Err(failed("freerouting", format!("Freerouting wrote no session (exit {:?}):\n{}", out.status.code(), tail.join("\n"))));
     }
     Ok(log)
+}
+
+/// Log lines where Freerouting says it ignored a setting pcb gave it.
+fn settings_not_applied(log: &str) -> Vec<String> {
+    const SIGNS: [&str; 3] = ["Failed to apply CLI router setting", "Unknown command line argument", "specified in ignoreNetClasses (not present on board)"];
+    log.lines().filter(|l| SIGNS.iter().any(|s| l.contains(s))).map(|l| l.trim().to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignored_settings_are_found() {
+        let log = "2026-10-30 INFO   started\n2026-10-30 WARN   [x] Failed to apply CLI router setting: router.layers.routable: bad\n2026-10-30 WARN   Unknown net class 'pcb_not_routed_0' specified in ignoreNetClasses (not present on board)\n2026-10-30 WARN   Unknown command line argument: --router.nosuch\n2026-10-30 WARN   Layer 'In1.Cu' is declared as a power layer";
+        assert_eq!(settings_not_applied(log).len(), 3);
+        assert!(settings_not_applied("INFO all fine").is_empty());
+    }
 }

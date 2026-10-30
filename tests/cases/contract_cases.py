@@ -28,14 +28,31 @@ runs = {
     "doctor_wrong_jar_refused": ["doctor", "--work", os.path.join(work, "doctor"), "--freerouting", board],
     "render_too_large_refused": ["render", board, "--scale", "100000", "-o", os.path.join(work, "big.png")],
     "render_unwritable_fails": ["render", board, "-o", os.path.join(work, "no-such-dir", "x.png")],
+    # review 6, K12: a relative --work (the default is one), from another directory
+    "doctor_relative_work": ["doctor", "--work", "rel_doctor"],
+    # review 6, K9: KiCad 7 and future formats are refused, not read
+    "old_format_refused": ["info", os.path.join(work, "old.kicad_pcb")],
+    "new_format_refused": ["info", os.path.join(work, "new.kicad_pcb")],
+    # review 6, K1: past KiCad's listing limit the DRC is incomplete; the gate refuses to compare
+    "drc_truncated_refused": ["route", os.path.join(work, "flood.kicad_pcb"), "--region", "10,5,50,35", "--nets", "N", "--freerouting", os.path.join(work, "never-run.jar"), "--work", os.path.join(work, "flood_w"), "-o", os.path.join(work, "flood.out.kicad_pcb")],
 }
+open(os.path.join(work, "old.kicad_pcb"), "w").write('(kicad_pcb (version 20221018) (generator pcbnew) (net 0 ""))\n')
+open(os.path.join(work, "new.kicad_pcb"), "w").write(open(board).read().replace("(version 20260206)", "(version 20270101)", 1))
+subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), "flood", os.path.join(work, "flood.kicad_pcb")], check=True, capture_output=True)
+# the gate refuses before Freerouting would run, so the jar is a placeholder
+open(os.path.join(work, "never-run.jar"), "w").write("")
+cwd = {"doctor_relative_work": work}
+words = {"old_format_refused": "kicad-cli pcb upgrade", "new_format_refused": "newer KiCad format", "drc_truncated_refused": "clearance 499"}
 want = {"missing_file_fails": "failed", "usage_error_refused": "refused", "doctor_wrong_jar_refused": "refused",
-        "render_too_large_refused": "refused", "render_unwritable_fails": "failed"}
+        "render_too_large_refused": "refused", "render_unwritable_fails": "failed", "old_format_refused": "refused",
+        "new_format_refused": "refused", "drc_truncated_refused": "refused"}
 for name, args in runs.items():
-    r = subprocess.run([pcb, "--json", *args], capture_output=True, text=True)
+    r = subprocess.run([os.path.abspath(pcb), "--json", *args], capture_output=True, text=True, cwd=cwd.get(name))
     d, problems = check(r.stdout, r.returncode)
     if not problems and d["outcome"] != want.get(name, "done"):
         problems.append(f"outcome {d['outcome']}, want {want.get(name, 'done')}")
+    if not problems and name in words and words[name] not in d.get("error", {}).get("message", ""):
+        problems.append(f"message does not say {words[name]!r}: {d.get('error', {}).get('message', '')[:200]}")
     results[name] = "; ".join(problems) or "ok"
 
 # sensitivity: broken outputs the checker must flag

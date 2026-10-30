@@ -32,7 +32,12 @@ CASES = {
     # limit has to reach it as --router.layers.routable)
     "layers_outer_only": ("four", ["--nets", "N"], "done", None, ("", "N")),
     "layers_inner_allowed": ("four", ["--nets", "N", "--layers", "F.Cu,In1.Cu,In2.Cu,B.Cu"], "done", None, ("", "N")),
+    # review 6, K4: the board's custom rules file says N is at least 0.5 mm wide; the router lays it at 0.2, so the
+    # gate, checking by the same rules, must reject the result
+    "custom_rules_kept": ("base", ["--nets", "N"], "rejected", None, None),
 }
+# custom rules files (.kicad_dru) written beside a case's board
+DRU = {"custom_rules_kept": '(version 1)\n(rule "N wide"\n  (condition "A.NetName == \'N\'")\n  (constraint track_width (min 0.5mm)))\n'}
 # case: (copper layers new N tracks may use, whether N must end connected)
 LAYER_CHECKS = {
     "layers_outer_only": ({"F.Cu", "B.Cu"}, False),
@@ -60,6 +65,8 @@ if __name__ == "__main__":
         if name == "rejected_onto_input_refused":
             board = os.path.join(work, f"{name}.out.rejected.kicad_pcb")
         subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), variant, board], check=True, capture_output=True)
+        if name in DRU:
+            open(os.path.splitext(board)[0] + ".kicad_dru", "w").write(DRU[name])
         before = sha(board)
         out = os.path.join(work, f"{name}.out.kicad_pcb")
         r = subprocess.run([pcb, "--json", "route", board, "--region", REGION, "--freerouting", jar, "--work", os.path.join(work, name + "_w"), "-o", out, *args], capture_output=True, text=True)

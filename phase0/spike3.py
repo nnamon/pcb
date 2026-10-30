@@ -191,8 +191,25 @@ print(f"power fills: {fills} zones")
 for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
     zone("GND", layer, 1, 0.25, 0.25, pcbnew.ZONE_CONNECTION_THERMAL, gap=0.3, spoke=0.5)
 
-# 6. fill and save
 # 6. save unfilled; KiCad fills in a fresh process (kicad_helper.py fill). Filled here, right after the zones are
 # created, KiCad kept islands its own DRC then reported as isolated copper; loaded fresh, it removes them.
 b.Save(out)
-print(f"saved {out} with {len(b.Zones())} zones, unfilled")
+# Zone ids from their names, then a re-save in a fresh process, so KiCad's zone order (by id) and with it the fill
+# are the same on every run. The power fills share one priority and overlap, so with random ids the net that got an
+# overlap changed between runs (review 4, Z11). Which net gets it is still arbitrary; `pcb zone` (M2) sets priorities.
+import re as _re
+import subprocess as _sp
+import uuid as _uuid
+_txt = open(out).read()
+
+
+def _zone_id(m):
+    blk = m.group(0)
+    name = _re.search(r'\(name "([^"]*)"\)', blk).group(1)
+    return _re.sub(r'\(uuid "[^"]*"\)', f'(uuid "{_uuid.uuid5(_uuid.NAMESPACE_URL, "pcb-zone:" + name)}")', blk, count=1)
+
+
+_txt = _re.sub(r"\n\t\(zone\n.*?\n\t\)", _zone_id, _txt, flags=_re.S)
+open(out, "w").write(_txt)
+_sp.run([sys.executable, "-c", f"import pcbnew; b = pcbnew.LoadBoard({out!r}); b.Save({out!r})"], check=True, capture_output=True)
+print(f"saved {out} with {len(b.Zones())} zones, unfilled, ids from zone names")

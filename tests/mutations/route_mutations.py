@@ -69,6 +69,12 @@ def m_drop_outside_via(t):
     raise SystemExit("no via outside the region")
 
 
+def m_one_stub_inside(t):
+    # review 6, K7: a single free stub on the target net; the count per net may not move, the added-track test must
+    x, y = r[0] + 0.5, r[1] + 0.5
+    return add(t, f'  (segment (start {x} {y}) (end {x + 0.3} {y}) (width 0.15) (layer "B.Cu") (net {nets[target]}))\n')
+
+
 def m_dangling_inside(t):
     # a stub from a target-net pad... simplest: a short free segment on the target net, inside the region
     # two free stubs on the target net, inside the region: the route may have fixed one dangling end of that net,
@@ -135,7 +141,7 @@ def m_drc_swap(t):
 
 # mutation -> the check it targets, which must be among those that fire (review 5, 6)
 MUT = {m_narrow_new: "I", m_shared_id: "H", m_unlock: "G", m_move_outside: "B", m_add_outside: "C", m_drop_new: "D",
-       m_footprint: "A", m_other_net_inside: "C", m_drop_outside_via: "B", m_dangling_inside: "E", m_clearance: "F",
+       m_footprint: "A", m_other_net_inside: "C", m_drop_outside_via: "B", m_dangling_inside: "E", m_one_stub_inside: "E", m_clearance: "F",
        m_split_outside: "B", m_drc_swap: "F"}
 
 

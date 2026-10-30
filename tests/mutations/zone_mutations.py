@@ -94,6 +94,27 @@ for z in b.Zones():
     if not z.GetIsRuleArea() and z.GetNetname() == {fx(plane)}:
         z.SetThermalReliefSpokeWidth(260000)
 """, True),
+    # review 6, K2: a new violation of a DRC kind the fixture allows; the allowance has a count, so check I fires.
+    # A short tie-net track beside a coil turn, 0.05 mm clear of it (the rule is 0.15), on the turn's layer.
+    "allowed_kind_exceeded": (f"""
+f = b.FindFootprintByReference({fx(tie['footprint'])})
+g = max((g for g in f.GraphicalItems() if g.GetLayerName().endswith('.Cu') and g.GetShape() == pcbnew.SHAPE_T_SEGMENT),
+        key=lambda g: (g.GetEnd() - g.GetStart()).EuclideanNorm())
+a, c = g.GetStart(), g.GetEnd()
+d = c - a
+n = d.EuclideanNorm()
+off = g.GetWidth() // 2 + 50000 + 50000
+nx, ny = int(-d.y * off / n), int(d.x * off / n)
+mid = pcbnew.VECTOR2I((a.x + c.x) // 2, (a.y + c.y) // 2)
+step = pcbnew.VECTOR2I(int(d.x * 1000000 / n), int(d.y * 1000000 / n))
+t = pcbnew.PCB_TRACK(b)
+t.SetStart(mid - step + pcbnew.VECTOR2I(nx, ny))
+t.SetEnd(mid + step + pcbnew.VECTOR2I(nx, ny))
+t.SetWidth(100000)
+t.SetLayer(g.GetLayer())
+t.SetNet(b.FindNet({fx(tie['pads'].get('2', ''))}))
+b.Add(t)
+""", True),
     "stale_fill_short": (f"""
 z = next(z for z in b.Zones() if not z.GetIsRuleArea() and z.GetNetname() == {fx(plane)} and z.IsOnLayer(pcbnew.B_Cu))
 bb = z.GetBoundingBox()
@@ -113,8 +134,10 @@ b.Add(t)
 # what the mutation needs
 TARGET = {"tie_copper_moved": "A", "tie_track_dropped": "A", "tie_pad_wrong_net": "A", "tie_wrong_group": "A",
           "keepout_removed": "B", "plane_wrong_net": "C", "plane_solid_to_holes": "D", "plane_clearance_small": "E",
-          "islands_kept": "F", "power_fill_lost": "H", "outer_pours_lost": "H", "thin_spokes": "D", "stale_fill_short": "G"}
+          "islands_kept": "F", "power_fill_lost": "H", "outer_pours_lost": "H", "thin_spokes": "D", "stale_fill_short": "G",
+          "allowed_kind_exceeded": "I"}
 NEEDS = {k: bool(Z.get("net_tie")) for k in TARGET if k.startswith("tie_")}
+NEEDS["allowed_kind_exceeded"] = bool(Z.get("net_tie")) and bool(Z.get("drc_allowed"))
 NEEDS["keepout_removed"] = bool(Z.get("keepouts"))
 
 

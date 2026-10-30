@@ -8,7 +8,8 @@ and fails unless:
   C. every added or removed item lies inside the region (0.01 mm slack) and is on an allowed net;
   D. by KiCad's connectivity engine, no net has more separate pad groups than before, and each target net is
      whole;
-  E. no net has more dangling track ends than before (KiCad's own dangling test);
+  E. no net has more dangling track ends than before (KiCad's own dangling test), and no added track that is not a
+     piece of a split one dangles (review 6, K7: a count per net let one new stub hide behind one fixed);
   F. KiCad DRC (zones refilled) finds no more violations of any type, for any set of nets, than before;
   G. no locked track or via was removed or changed;
   H. no two tracks or vias share an id (tstamp or uuid);
@@ -147,14 +148,27 @@ def pad_groups(board):
 
 
 def dangling(board):
+    """({net: dangling tracks}, [geometry keys of the dangling tracks])."""
     board.BuildConnectivity()
     conn = board.GetConnectivity()
     d = collections.Counter()
+    where = []
     for t in board.GetTracks():
         # an end KiCad calls dangling, or a track joined to nothing at all, which that test passes (review 5, 6)
         if t.GetClass() == "PCB_TRACK" and (conn.TestTrackEndpointDangling(t, False) or (not conn.GetConnectedTracks(t) and not conn.GetConnectedPads(t))):
             d[t.GetNetname()] += 1
-    return d
+            where.append(track_key(t.GetNetname(), (mm(t.GetStart().x), mm(t.GetStart().y)), (mm(t.GetEnd().x), mm(t.GetEnd().y))))
+    return d, where
+
+
+def mm(v):
+    return v / 1e6
+
+
+def track_key(net, a, c):
+    """A track by net and its two ends, to 1 um, either way round."""
+    ends = sorted([(round(a[0], 3), round(a[1], 3)), (round(c[0], 3), round(c[1], 3))])
+    return f"{net}|{ends[0][0]},{ends[0][1]}|{ends[1][0]},{ends[1][1]}"
 
 
 def drc(path):
@@ -172,7 +186,8 @@ def measure_in_child(path):
 
 def measure(path):
     b = pcbnew.LoadBoard(path)
-    print(json.dumps({"groups": pad_groups(b), "dangling": dangling(b), "drc": drc(path)}))
+    dn, where = dangling(b)
+    print(json.dumps({"groups": pad_groups(b), "dangling": dn, "dangling_tracks": where, "drc": drc(path)}))
 
 
 def main():
@@ -232,6 +247,10 @@ def main():
     for net in sorted(set(do) | set(dn)):
         if dn[net] > do[net]:
             fails.append(f"E: {net} dangling track ends {do[net]} -> {dn[net]}")
+    new_dangling = set(mn["dangling_tracks"])
+    for i, g in enumerate(added_g):
+        if g["kind"] == "segment" and i not in used and track_key(g["net"], g["a"], g["c"]) in new_dangling:
+            fails.append(f"E: added track dangles: {added[i][:90]}")
     for k in sorted(set(co) | set(cn)):
         if cn[k] > co[k]:
             fails.append(f"F: DRC {k} {co[k]} -> {cn[k]}")

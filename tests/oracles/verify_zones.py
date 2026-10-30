@@ -271,11 +271,17 @@ def child_drc(path):
     return collections.Counter(json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("{")][-1]))
 
 
-allowed = {a["kind"] for a in Z.get("drc_allowed", [])}
+# each allowed kind names how many violations the zoned board may have of it (review 6, K2: a kind allowed without
+# a count let any number of new violations through)
+allowed = {}
+for a in Z.get("drc_allowed", []):
+    if not isinstance(a.get("max"), int):
+        raise SystemExit(f"drc_allowed {a['kind']!r} needs a max count")
+    allowed[a["kind"]] = a["max"]
 d0, d1 = child_drc(base_p), child_drc(zoned_p)
 for k in sorted(set(d0) | set(d1)):
-    if d1[k] > d0[k] and k not in allowed:
-        fails.append(f"I: DRC {k} {d0[k]} -> {d1[k]}")
+    if d1[k] > d0[k] and d1[k] > allowed.get(k, d0[k]):
+        fails.append(f"I: DRC {k} {d0[k]} -> {d1[k]}" + (f" (allowed {allowed[k]})" if k in allowed else ""))
 
 # area comparison with the old pours
 area = {k: round(v.area, 1) for k, v in fill.items()}

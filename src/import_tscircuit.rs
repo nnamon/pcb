@@ -745,14 +745,16 @@ fn value_of(sc: &Value) -> String {
 }
 
 /// The KiCad project file written next to an imported board: the project's JLCPCB rules (GUIDELINES.md table) as
-/// the default net class and board minimums (review 1, N1).
+/// the default net class and board minimums (review 1, N1). The footprint-library checks are off: imported footprints
+/// come from tscircuit and EasyEDA, not a KiCad library, so every footprint would fail them, and their 199 reports hit
+/// KiCad's listing limit, which makes the DRC incomplete (review 6, K1).
 pub fn project_file(name: &str) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "board": { "design_settings": { "rules": {
             "min_clearance": 0.15, "min_track_width": 0.15, "min_via_diameter": 0.6, "min_through_hole_diameter": 0.3,
             "min_via_annular_width": 0.15, "min_hole_to_hole": 0.5, "min_copper_edge_clearance": 0.3, "min_hole_clearance": 0.2,
             "min_silk_clearance": 0.0, "solder_mask_to_copper_clearance": 0.0
-        }}},
+        }, "rule_severities": { "lib_footprint_issues": "ignore", "lib_footprint_mismatch": "ignore" } }},
         "net_settings": { "classes": [{
             "name": "Default", "clearance": 0.15, "track_width": 0.15, "via_diameter": 0.6, "via_drill": 0.3,
             "microvia_diameter": 0.3, "microvia_drill": 0.1, "diff_pair_width": 0.2, "diff_pair_gap": 0.25, "diff_pair_via_gap": 0.25,

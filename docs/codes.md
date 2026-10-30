@@ -8,7 +8,8 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | --- | --- | --- | --- |
 | `usage` | refused | The command line is wrong | Read the message and `pcb <command> --help` |
 | `refused` | refused | The input has something the command does not handle; the message names it | Change the input, or extend the command with a test |
-| `old-kicad-format` | refused | The board file is from a KiCad older than 10; pcb reads and writes KiCad 10 files only | Convert a copy with `kicad-cli pcb upgrade <file>` and check it in KiCad |
+| `kicad-format` | refused | The board file is not in KiCad 10's format (version 20260206): older, or from a newer KiCad | Older: convert a copy with `kicad-cli pcb upgrade <file>` and check it in KiCad. Newer: test pcb on that KiCad first |
+| `drc-truncated` | refused | KiCad listed only its first 199 (clearance: 499) violations of a type, so the DRC is incomplete and changes from run to run | Fix the design rules or the board until every type is under the limit; turn off checks that cannot apply in the project file |
 | `unknown-net` | refused | A net named in `--nets` or `--rip` is not on the board | Check the name with `pcb info --net` |
 | `non-ascii-net` | refused | A net name has non-ASCII characters, which Freerouting cannot take | Rename the net |
 | `arc-unsupported` | refused | The board has track arcs, which `pcb route` does not handle yet | Replace the arcs with segments, or route by hand |
@@ -20,6 +21,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `panic` | failed | pcb itself crashed; the message holds where | Report it with the command line |
 | `kicad` | failed | KiCad's Python module failed (DSN export, fill, DRC) | Run `pcb doctor`; read the message's KiCad output |
 | `freerouting` | failed | Freerouting did not start, or wrote no session | Run `pcb doctor`; read the log in the message |
+| `freerouting-settings` | failed | Freerouting logged that it did not apply a setting pcb gave it (and would have routed with its default) | Read the lines in the message; the jar may not be the pinned 2.5.0, or the flag changed |
 | `freerouting-timeout` | failed | Freerouting ran past `--timeout`, often stuck on an import dialog | Read the warnings in the message |
 | `io` | failed | A file could not be read or written | Check the path and permissions |
 

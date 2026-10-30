@@ -167,8 +167,15 @@ impl Board {
         let version = root.find("version").and_then(|v| v.num(1)).unwrap_or(0.0) as u64;
         if version < FORMAT_VERSION {
             return Err(crate::contract::refused(
-                "old-kicad-format",
-                format!("the board is in an older KiCad format (version {version}); pcb reads KiCad 10 files (version {FORMAT_VERSION} or later). Convert a copy with: kicad-cli pcb upgrade <file>"),
+                "kicad-format",
+                format!("the board is in an older KiCad format (version {version}); pcb reads KiCad 10 files (version {FORMAT_VERSION}). Convert a copy with: kicad-cli pcb upgrade <file>"),
+            ));
+        }
+        // a newer KiCad's file may hold what this parser does not know (review 6, K9)
+        if version > FORMAT_VERSION {
+            return Err(crate::contract::refused(
+                "kicad-format",
+                format!("the board is in a newer KiCad format (version {version}) than pcb reads (version {FORMAT_VERSION}, KiCad 10); pcb must be tested on that KiCad first"),
             ));
         }
         let copper_layers = root
@@ -385,7 +392,9 @@ mod tests {
         assert_eq!((b.footprints[0].pads[0].net.as_str(), b.tracks[0].net.as_str(), b.tracks[0].locked, b.zones[0].net.as_str()), ("A", "B", true, "GND"));
         let old = Board::from_str(r#"(kicad_pcb (version 20221018) (net 0 ""))"#.to_string()).err().unwrap();
         let c = old.downcast_ref::<crate::contract::CodedError>().unwrap();
-        assert_eq!(c.code, "old-kicad-format");
+        assert_eq!(c.code, "kicad-format");
+        let new = Board::from_str(r#"(kicad_pcb (version 20270101))"#.to_string()).err().unwrap();
+        assert_eq!(new.downcast_ref::<crate::contract::CodedError>().unwrap().code, "kicad-format");
     }
 
     #[test]

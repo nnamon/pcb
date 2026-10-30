@@ -15,16 +15,23 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Image version
         id: v
         run: echo "version=$(sed -n 's/^ARG IMAGE_VERSION=//p' tools/pcb/ci/Dockerfile)" >> "$GITHUB_OUTPUT"
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      # an image version is published once; a changed Dockerfile needs a new IMAGE_VERSION (review 6, K11)
+      - name: Refuse to overwrite a published version
+        run: |
+          if docker manifest inspect "ghcr.io/${{ github.repository }}/pcb-ci:${{ steps.v.outputs.version }}" > /dev/null 2>&1; then
+            echo "pcb-ci:${{ steps.v.outputs.version }} is already published; bump IMAGE_VERSION in tools/pcb/ci/Dockerfile"
+            exit 1
+          fi
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: tools/pcb/ci
           push: true

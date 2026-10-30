@@ -62,11 +62,25 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
     let probe = work.join("drc_probe.kicad_pcb");
     match kicad::drc_counts(work, probe.to_str().unwrap_or(""), "doctor_drc") {
         Ok(m) => {
-            let short = m.keys().any(|k| k == "shorting_items A B" || k == "clearance A B");
-            let open = m.contains_key("unconnected_items A");
-            checks.push(check("kicad drc sees a short and an open", short && open, format!("{:?}", m.keys().collect::<Vec<_>>()), "shorting_items or clearance A B, and unconnected_items A"));
+            // nets "D[0]" and "D[0] x": a bracket or space in a name must not change which net is read (review 6, K3)
+            let nets = ["D[0]".to_string(), "D[0] x".to_string()];
+            let short = m.contains_key(&kicad::drc_key("shorting_items", &nets)) || m.contains_key(&kicad::drc_key("clearance", &nets));
+            let open = m.contains_key(&kicad::drc_key("unconnected_items", &nets[..1]));
+            checks.push(check("kicad drc sees a short and an open", short && open, format!("{:?}", m.keys().collect::<Vec<_>>()), "shorting_items or clearance \"D[0]\" \"D[0] x\", and unconnected_items \"D[0]\""));
         }
         Err(e) => checks.push(check("kicad drc sees a short and an open", false, format!("{e:#}"), "a DRC report")),
+    }
+    // KiCad lists at most 199 violations of a type (499 for clearance with --all-track-errors); pcb refuses a DRC at
+    // either limit as incomplete (review 6, K1), so the limits must be the ones it knows
+    let cap = work.join("drc_cap_probe.kicad_pcb");
+    let cap_json = work.join("doctor_drc_cap.json");
+    match kicad::helper(work, &["drc", cap.to_str().unwrap_or(""), cap_json.to_str().unwrap_or("")]) {
+        Ok(h) => {
+            let t = &h["truncated"];
+            let ok = t["clearance"] == 499 && t["track_width"] == 199;
+            checks.push(check("kicad drc listing limits", ok, t.to_string(), "{\"clearance\":499,\"track_width\":199}"));
+        }
+        Err(e) => checks.push(check("kicad drc listing limits", false, format!("{e:#}"), "a DRC report")),
     }
     // Freerouting 2.5 is built for Java 25
     let jv = Command::new(java).arg("-version").output().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
@@ -83,7 +97,7 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
             let dsn = work.join("route_probe.dsn");
             let ses = work.join("route_probe.ses");
             let routed = kicad::helper(work, &["dsn", work.join("route_probe.kicad_pcb").to_str().unwrap_or(""), dsn.to_str().unwrap_or("")])
-                .and_then(|_| crate::freerouting::run(Path::new(java), jar, work, &dsn, &ses, 5, &[], &[], &[], 120))
+                .and_then(|_| crate::freerouting::run(Path::new(java), jar, work, &dsn, &ses, 5, &[], &[true, true], &[], 120))
                 .and_then(|_| crate::route::read_ses(&std::fs::read_to_string(&ses)?));
             match routed {
                 Ok((wires, _)) => {

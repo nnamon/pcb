@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 pub struct Gate {
     work: PathBuf,
     input: PathBuf,
-    pro: PathBuf,
     pub before: BTreeMap<String, usize>,
 }
 
@@ -30,16 +29,14 @@ pub struct GateResult {
 impl Gate {
     pub fn begin(work: &Path, board: &str) -> Result<Gate> {
         let before = kicad::drc_counts(work, board, "drc_before")?;
-        Ok(Gate { work: work.to_path_buf(), input: PathBuf::from(board), pro: Path::new(board).with_extension("kicad_pro"), before })
+        Ok(Gate { work: work.to_path_buf(), input: PathBuf::from(board), before })
     }
 
     pub fn finish(&self, candidate: &str, out_path: &str, has_zones: bool) -> Result<GateResult> {
         let cand = self.work.join("candidate.kicad_pcb");
         std::fs::write(&cand, candidate)?;
-        // the design rules travel with the board: without the project file KiCad falls back to its defaults
-        if self.pro.exists() {
-            std::fs::copy(&self.pro, cand.with_extension("kicad_pro"))?;
-        }
+        // the design rules travel with the board: without them KiCad falls back to its defaults
+        kicad::copy_rules(&self.input, &cand)?;
         if has_zones {
             kicad::helper(&self.work, &["fill", cand.to_str().unwrap()])?;
         }
@@ -60,10 +57,7 @@ impl Gate {
             return Err(crate::contract::refused("output-in-work", format!("the output {dest} is pcb's own candidate file")));
         }
         std::fs::copy(&cand, &dest)?;
-        let dest_pro = Path::new(&dest).with_extension("kicad_pro");
-        if self.pro.exists() && std::fs::canonicalize(&self.pro).ok() != std::fs::canonicalize(&dest_pro).ok() {
-            std::fs::copy(&self.pro, &dest_pro)?;
-        }
+        kicad::copy_rules(&self.input, Path::new(&dest))?;
         Ok(GateResult { fixed, regressions, total_before: self.before.values().sum(), total_after: after.values().sum(), after, written: dest })
     }
 }

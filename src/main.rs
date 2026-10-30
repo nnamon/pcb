@@ -152,6 +152,13 @@ fn command_name(c: &Cmd) -> &'static str {
     }
 }
 
+/// Print to stdout; a closed stdout (piped into `head`) is not an error worth a panic, which would abort inside the
+/// panic hook (review 6, K10). The exit code still says what happened.
+fn out(text: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout(), "{text}");
+}
+
 fn main() {
     // a usage error keeps the contract too when --json was asked for
     let cli = match Cli::try_parse() {
@@ -163,7 +170,7 @@ fn main() {
             }
             let msg = e.to_string();
             let v = contract::envelope("usage", Outcome::Refused, None, &[], Some(("usage", msg.trim())), json!({}));
-            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            out(&serde_json::to_string_pretty(&v).unwrap_or_default());
             std::process::exit(Outcome::Refused.exit_code());
         }
     };
@@ -176,7 +183,7 @@ fn main() {
             let msg = format!("pcb panicked: {info}");
             if json_mode {
                 let v = contract::envelope(name, Outcome::Failed, None, &[], Some(("panic", &msg)), json!({}));
-                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                out(&serde_json::to_string_pretty(&v).unwrap_or_default());
             } else {
                 eprintln!("failed [panic]: {msg}");
             }
@@ -200,9 +207,9 @@ fn main() {
         }
     };
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+        out(&serde_json::to_string_pretty(&value).unwrap_or_default());
     } else if outcome == Outcome::Done {
-        println!("{human}");
+        out(&human);
     } else {
         eprintln!("{human}");
     }

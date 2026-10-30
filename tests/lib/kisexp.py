@@ -4,6 +4,7 @@ Rust parser (src/sexpr.rs), so a bug there is not repeated here.
 parse(text) gives the root Node. A Node is a list with .head (first atom), .items (atoms as str, lists as Node),
 .span (start, end) in the text, and helpers find(name), find_all(name), arg(i).
 """
+import json
 import re
 
 _TOKEN = re.compile(r'\s+|(\()|(\))|"((?:[^"\\]|\\.)*)"|([^\s()"]+)', re.S)
@@ -66,12 +67,35 @@ def parse(text):
     return root
 
 
+REPORT_LIMITS = (199, 499)  # KiCad lists at most this many of a type (499: clearance with --all-track-errors)
+
+
+def key(kind, nets):
+    """Violation key: the type, then the sorted nets; a name with a space, quote, bracket or backslash, or an empty
+    one, is written as a JSON string so the key reads back unambiguously."""
+    out = [kind]
+    for n in nets:
+        out.append(n if n == "<no net>" else json.dumps(n, ensure_ascii=False) if (not n or re.search(r'[\s"\\\[\]]', n)) else n)
+    return " ".join(out)
+
+
+def board_nets(board_path):
+    """Every net name used in the file: (net "NAME") on pads, tracks, vias and zones."""
+    return sorted({n.arg(1) for n in _walk(parse(open(board_path).read())) if n.head == "net" and n.arg(1)})
+
+
+def _walk(n):
+    yield n
+    for c in n.items:
+        if isinstance(c, Node):
+            yield from _walk(c)
+
+
 def drc_counts(board_path, kicad_cli="kicad-cli"):
-    """KiCad DRC through kicad-cli (zones refilled in memory, the file not saved), counted by violation type and the
-    sorted nets named in its items' descriptions, e.g. "clearance A B". KiCad 10's WriteDRCReport cannot run outside
-    the KiCad application."""
+    """KiCad DRC through kicad-cli (zones refilled in memory, the file not saved), counted by key(type, nets). An
+    item's net is the longest board net name that appears in brackets in its description ("<no net>" if none).
+    Fails if any type is at KiCad's listing limit: the list is then incomplete and differs from run to run."""
     import collections
-    import json
     import os
     import subprocess
     import tempfile
@@ -86,10 +110,19 @@ def drc_counts(board_path, kicad_cli="kicad-cli"):
     finally:
         os.unlink(out)
     assert d.get("$schema") == "https://schemas.kicad.org/drc.v1.json", d.get("$schema")
+    names = board_nets(board_path)
+    vs = (d.get("violations") or []) + (d.get("unconnected_items") or [])
+    per_type = collections.Counter(v["type"] for v in vs)
+    capped = {t: n for t, n in per_type.items() if n in REPORT_LIMITS}
+    if capped:
+        raise SystemExit(f"DRC of {board_path} is truncated at KiCad's listing limit: {capped}")
     c = collections.Counter()
-    for v in (d.get("violations") or []) + (d.get("unconnected_items") or []):
-        nets = sorted({n for it in v["items"] for n in re.findall(r"\[([^\]]*)\]", it["description"])})
-        c[v["type"] + " " + " ".join(nets)] += 1
+    for v in vs:
+        nets = set()
+        for it in v["items"]:
+            hits = [n for n in names if f"[{n}]" in it["description"]]
+            nets.add(max(hits, key=len) if hits else "<no net>")
+        c[key(v["type"], sorted(nets))] += 1
     total = sum(int(n) for n in re.findall(r"^Found (\d+) ", r.stdout, re.M))
     assert total == sum(c.values()), f"kicad-cli counts {total}, {sum(c.values())} read"
     return c

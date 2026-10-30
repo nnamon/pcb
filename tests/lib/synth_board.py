@@ -1,6 +1,7 @@
 """Synthetic boards (2 layers unless noted) for the route cases, built with pcbnew. Adapted from the review 4 reviewer's generator.
 variants: base (locked/width/split cases), arc, nonascii, gzone (GND zone), tight (DRC min width above netclass),
-four (4 layers: pads N1 and N2 split by locked Q walls on F.Cu and B.Cu, so N can only cross on an inner layer)"""
+four (4 layers: pads N1 and N2 split by locked Q walls on F.Cu and B.Cu, so N can only cross on an inner layer),
+flood (base plus 600 short W and L tracks 0.05 mm apart, past KiCad's 499 clearance listing limit)"""
 import sys
 import pcbnew
 
@@ -97,6 +98,9 @@ else:
     # N: plain unrouted pair
     fp("N1", 20, 15, "N")
     fp("N2", 40, 15, "N")
+if variant == "flood":
+    for i in range(600):
+        trk(1 + i * 0.09, 37, 1 + i * 0.09, 38.5, "W" if i % 2 else "L", w=0.04)
 if variant == "arc":
     a = pcbnew.PCB_ARC(b)
     a.SetStart(pcbnew.VECTOR2I(mm(20), mm(15)))

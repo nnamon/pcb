@@ -55,10 +55,10 @@ keepouts = [
 planes = { net = "GND", layers = ["In1.Cu", "In2.Cu"], clearance = 0.35 }
 # the net tie: footprint, its pad nets, and the pads its copper may join
 net_tie = { footprint = "L601", group = "1, 3", pads = { "1" = "NFC_AC0", "2" = "NFC_AC1", "3" = "NFC_AC1", "4" = "NFC_AC1" }, former_net = "NFC_COIL" }
-# DRC kinds the zoned board may add over its base, each with its reason
+# DRC kinds the zoned board may add over its base: the most it may have of each, and why
 drc_allowed = [
-  { kind = "starved_thermal GND", why = "J102 pad 4: one spoke; pad override planned (review 4, Z9 area)" },
-  { kind = "clearance <no net> NFC_AC1", why = "coil turn 0.075 mm from the inner via, now L601 pad 3 (review 4, Z6, open: M2); KiCad 10 reports it, KiCad 7 hid it inside the net tie" },
+  { kind = "starved_thermal GND", max = 2, why = "J102 pad 4: one spoke, pad override planned (review 4, Z9 area); J701 pad 2: its relief reaches only an island of the top GND pour, which depends on how the overlapping power fills fall (review 4, Z11; the plated hole still joins the GND planes)" },
+  { kind = "clearance <no net> NFC_AC1", max = 2, why = "coil turn 0.075 mm from the inner via, now L601 pad 3 (review 4, Z6, open: M2); KiCad 10 reports it, KiCad 7 hid it inside the net tie" },
 ]
 # minimum spoke width (mm) for thermal reliefs on every GND zone
 spoke_min = 0.5
