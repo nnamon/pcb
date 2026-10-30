@@ -27,8 +27,13 @@ W, H = board["width"], board["height"]
 TOL = 0.001
 
 
+CX = board.get("center", {}).get("x", 0.0)
+CY = board.get("center", {}).get("y", 0.0)
+
+
 def T(x, y):
-    return (x + W / 2 + MARGIN, H / 2 - y + MARGIN)
+    # review 2, 13: the board centre, as the importer uses it
+    return (x - CX + W / 2 + MARGIN, CY - y + H / 2 + MARGIN)
 
 
 def mm(v):
@@ -247,9 +252,15 @@ for t in d:
                 continue
             cj_segs.append((A, C, names[a["layer"]], a["width"], t.get("net_name") or ""))
 kc_segs, kc_vias = [], []
+# review 2, 6: pcbnew reassigns a via's net from its tracks on load, so via nets come from the file text
+_netname = {int(m.group(1)): m.group(2) for m in re.finditer(r'^  \(net (\d+) "([^"]*)"\)', open(pcb_path).read(), re.M)}
+_via_text = {}
+for m in re.finditer(r'^  \(via (?:locked )?\(at ([-\d.]+) ([-\d.]+)\)[^\n]*\(net (\d+)\)', open(pcb_path).read(), re.M):
+    _via_text[(round(float(m.group(1)), 4), round(float(m.group(2)), 4))] = _netname.get(int(m.group(3)), "")
 for tr in b.GetTracks():
     if tr.GetClass() == "PCB_VIA":
-        kc_vias.append(((mm(tr.GetPosition().x), mm(tr.GetPosition().y)), mm(tr.GetWidth()), mm(tr.GetDrillValue()), tr.GetNetname()))
+        pos = (mm(tr.GetPosition().x), mm(tr.GetPosition().y))
+        kc_vias.append((pos, mm(tr.GetWidth()), mm(tr.GetDrillValue()), _via_text.get((round(pos[0], 4), round(pos[1], 4)), "?")))
     else:
         kc_segs.append(((mm(tr.GetStart().x), mm(tr.GetStart().y)), (mm(tr.GetEnd().x), mm(tr.GetEnd().y)), tr.GetLayerName(), mm(tr.GetWidth()), tr.GetNetname()))
 
@@ -356,7 +367,8 @@ for e in d:
     # KiCad's own courtyard polygon, as DRC sees it (GetCorners() in KiCad 7 ignores the footprint's rotation)
     f.BuildCourtyardCaches()
     got = []
-    for lyr in (pcbnew.F_CrtYd, pcbnew.B_CrtYd):
+    # review 2, 5: only the courtyard layer of the footprint's own side counts
+    for lyr in ((pcbnew.B_CrtYd,) if f.IsFlipped() else (pcbnew.F_CrtYd,)):
         ps = f.GetCourtyard(lyr)
         for i in range(ps.OutlineCount()):
             o_ = ps.Outline(i)

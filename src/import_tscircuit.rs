@@ -142,10 +142,12 @@ fn point_in_poly(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
 }
 
 fn sanitize_lib(name: &str) -> String {
-    name.chars().map(|c| if c == ':' || c == '/' || c == '"' { '_' } else { c }).collect()
+    // characters KiCad rewrites in a library id (review 2, N6: `\`, `<` and `>` as well)
+    name.chars().map(|c| if ":/\"\\<>".contains(c) { '_' } else { c }).collect()
 }
 
-pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
+/// `layers`: copper layers to write; `None` takes the circuit JSON's `num_layers` (2 if absent).
+pub fn convert(cj: &str, layers: Option<u32>) -> Result<(String, Stats)> {
     let d: Vec<Value> = serde_json::from_str(cj).context("circuit JSON")?;
     let mut warnings = vec![];
     for e in &d {
@@ -161,8 +163,23 @@ pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
         cx: board.pointer("/center/x").and_then(|v| v.as_f64()).unwrap_or(0.0),
         cy: board.pointer("/center/y").and_then(|v| v.as_f64()).unwrap_or(0.0),
     };
+    let layers = layers.unwrap_or_else(|| f(board, "num_layers").map(|v| v as u32).unwrap_or(2));
     if layers != 2 && layers != 4 {
         bail!("only 2 or 4 layers");
+    }
+    // review 2, 7: tscircuit's own error elements (an unrouted connection, an overlap) are reported, not dropped
+    let mut errs: BTreeMap<&str, usize> = BTreeMap::new();
+    for e in d.iter() {
+        let t = s(e, "type");
+        if t.ends_with("_error") {
+            *errs.entry(t).or_default() += 1;
+        }
+    }
+    if let Some(n_) = errs.get("pcb_trace_error") {
+        bail!("circuit JSON has {n_} pcb_trace_error (unrouted connections)");
+    }
+    for (t, n_) in &errs {
+        warnings.push(format!("circuit JSON has {n_} {t}"));
     }
     if let Some(nl) = f(board, "num_layers") {
         if nl as u32 != layers {
@@ -259,18 +276,54 @@ pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
     for t in by(&d, "pcb_trace") {
         all_nets.insert(trace_net(t)?);
     }
-    for v in by(&d, "pcb_via") {
-        let nm = s(v, "net_name");
-        if nm.is_empty() {
-            bail!("via {} has no net", s(v, "pcb_via_id"));
+    // review 2, 3: a via's net is its net_name, or the net of the traces with a route point at the via
+    let mut point_nets: Vec<((f64, f64), String)> = vec![];
+    for t in by(&d, "pcb_trace") {
+        let net = trace_net(t)?;
+        for p in t.get("route").and_then(|v| v.as_array()).into_iter().flatten() {
+            if let (Some(px), Some(py)) = (f(p, "x"), f(p, "y")) {
+                point_nets.push(((px, py), net.clone()));
+            }
         }
-        all_nets.insert(nm.to_string());
+    }
+    let via_net = |v: &Value| -> Result<String> {
+        let (vx, vy) = (f(v, "x").context("via x")?, f(v, "y").context("via y")?);
+        let mut found: Vec<&String> = point_nets.iter().filter(|((px, py), _)| (px - vx).abs() < 1e-3 && (py - vy).abs() < 1e-3).map(|(_, n_)| n_).collect();
+        found.sort();
+        found.dedup();
+        let given = s(v, "net_name");
+        match (given.is_empty(), found.as_slice()) {
+            (_, [a, b, ..]) => bail!("via {} joins traces of nets {a} and {b}", s(v, "pcb_via_id")),
+            (false, [a]) if a.as_str() != given => bail!("via {} has net_name {given} but its traces are {a}", s(v, "pcb_via_id")),
+            (false, _) => Ok(given.to_string()),
+            (true, [a]) => Ok((*a).clone()),
+            (true, []) => bail!("via {} has no net_name and no trace ends at it", s(v, "pcb_via_id")),
+        }
+    };
+    for v in by(&d, "pcb_via") {
+        all_nets.insert(via_net(v)?);
+    }
+    // review 2, 4: a trace ending on a port of another net is written as given, with a warning
+    for t in by(&d, "pcb_trace") {
+        let net = trace_net(t)?;
+        let route = t.get("route").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        for p in [route.first(), route.last()].into_iter().flatten() {
+            let (Some(px), Some(py)) = (f(p, "x"), f(p, "y")) else { continue };
+            for pp in pcb_port.values() {
+                let (Some(qx), Some(qy)) = (f(pp, "x"), f(pp, "y")) else { continue };
+                let pn = port_net.get(s(pp, "source_port_id")).cloned().unwrap_or_default();
+                if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 && !pn.is_empty() && pn != net {
+                    warnings.push(format!("trace {} ({net}) ends on a port of net {pn}", s(t, "pcb_trace_id")));
+                }
+            }
+        }
     }
     let net_index: BTreeMap<String, usize> = all_nets.iter().enumerate().map(|(i, n)| (n.clone(), i + 1)).collect();
 
     // pad number, pin name, net of a pad from its pcb_port_id (review 1, S7: never an empty number)
     let pad_info = |e: &Value, reference: &str| -> Result<(String, String, String)> {
-        let Some(pp) = pcb_port.get(s(e, "pcb_port_id")) else { bail!("{reference}: pad without a port") };
+        // review 2, 9: a pad with no port is mechanical: no net, number "MP"
+        let Some(pp) = pcb_port.get(s(e, "pcb_port_id")) else { return Ok(("MP".to_string(), String::new(), String::new())) };
         let spid = s(pp, "source_port_id");
         let sp = src_port.get(spid);
         let num = sp
@@ -401,6 +454,22 @@ pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
             let _ = writeln!(o, "    (property \"LCSC\" {})", q(lcsc));
         }
         let crt = if side == "F.Cu" { "F.CrtYd" } else { "B.CrtYd" };
+        // review 2, 8: one number per pin (mechanical "MP" pads may repeat)
+        let mut seen_nums: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        for e in parts {
+            if matches!(s(e, "type"), "pcb_smtpad" | "pcb_plated_hole") {
+                let (num, _, net) = pad_info(e, reference)?;
+                if num == "MP" {
+                    warnings.push(format!("{reference}: pad with no port written as mechanical pad MP"));
+                    continue;
+                }
+                if let Some(prev) = seen_nums.insert(num.clone(), net.clone()) {
+                    if prev != net || s(e, "type") == "pcb_smtpad" {
+                        bail!("{reference}: two pads numbered {num}");
+                    }
+                }
+            }
+        }
         for e in parts {
             match s(e, "type") {
                 "pcb_smtpad" => {
@@ -413,6 +482,10 @@ pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
                         if f(e, k).map(|v| v.abs() > 1e-9).unwrap_or(false) {
                             bail!("{reference}: pad {k} is not handled");
                         }
+                    }
+                    // review 2, 11: a turned rect or pill pad is not handled
+                    if matches!(s(e, "shape"), "rect" | "pill") && f(e, "ccw_rotation").map(|r| norm_deg(r).abs() > 1e-6).unwrap_or(false) {
+                        bail!("{reference}: {} pad with ccw_rotation is not handled", s(e, "shape"));
                     }
                     match s(e, "shape") {
                         "rect" | "pill" => {
@@ -570,6 +643,8 @@ pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
 
     // tracks (review 1, S4): wires between consecutive wire points on one layer; a via point joins the wire before
     // it and the wire after it to the via's position; a layer change with no via stops the import
+    let mut via_pts: Vec<(f64, f64)> = by(&d, "pcb_via").filter_map(|v| Some((f(v, "x")?, f(v, "y")?))).collect();
+    let via_default = by(&d, "pcb_via").next().and_then(|v| Some((f(v, "outer_diameter")?, f(v, "hole_diameter")?))).unwrap_or((0.6, 0.3));
     for t in by(&d, "pcb_trace") {
         let net = trace_net(t)?;
         let route = t.get("route").and_then(|v| v.as_array()).context("route")?;
@@ -603,26 +678,39 @@ pub fn convert(cj: &str, layers: u32) -> Result<(String, Stats)> {
                             st.segments += 1;
                         }
                     }
-                    let to = layer(s(p, "to_layer")).ok().map(String::from);
+                    // review 2, 2: the layers must be known and follow on from the incoming wire
+                    let to = layer(s(p, "to_layer")).with_context(|| format!("trace {}: via point at ({px}, {py}) has no usable to_layer", s(t, "pcb_trace_id")))?.to_string();
+                    if let (Some((_, _, al, _)), Ok(fl)) = (&prev, layer(s(p, "from_layer"))) {
+                        if al != fl {
+                            bail!("trace {}: via point at ({px}, {py}) comes from {fl} but the wire is on {al}", s(t, "pcb_trace_id"));
+                        }
+                    }
+                    // review 2, 1: a via point with no pcb_via there gets a via of the board's usual size
+                    if !via_pts.iter().any(|(vx, vy)| (vx - px).abs() < 1e-3 && (vy - py).abs() < 1e-3) {
+                        let (b0, b1) = x.pt(px, py);
+                        let _ = writeln!(o, "  (via (at {} {}) (size {}) (drill {}) (layers \"F.Cu\" \"B.Cu\"){})", n(b0), n(b1), n(via_default.0), n(via_default.1), netnum(&net)?);
+                        st.vias += 1;
+                        via_pts.push((px, py));
+                    }
                     let w = prev.as_ref().map(|p| p.3).unwrap_or(0.15);
-                    prev = to.map(|l| (px, py, l, w));
+                    prev = Some((px, py, to, w));
                 }
                 other => bail!("trace {} has a route point of type {other}", s(t, "pcb_trace_id")),
             }
         }
     }
     for v in by(&d, "pcb_via") {
-        for k in ["from_layer", "to_layer"] {
-            let l = s(v, k);
-            if !l.is_empty() && l != "top" && l != "bottom" {
-                bail!("via {} goes to {l}: only through vias are handled", s(v, "pcb_via_id"));
-            }
+        let mut ls: Vec<&str> = ["from_layer", "to_layer"].iter().map(|k| s(v, k)).collect();
+        // review 2, 10: the layers list counts too
+        ls.extend(v.get("layers").and_then(|l| l.as_array()).into_iter().flatten().filter_map(|l| l.as_str()));
+        if let Some(l) = ls.iter().find(|l| !l.is_empty() && **l != "top" && **l != "bottom") {
+            bail!("via {} goes to {l}: only through vias are handled", s(v, "pcb_via_id"));
         }
         let (vx, vy) = x.pt(f(v, "x").context("x")?, f(v, "y").context("y")?);
         let _ = writeln!(
             o,
             "  (via (at {} {}) (size {}) (drill {}) (layers \"F.Cu\" \"B.Cu\"){})",
-            n(vx), n(vy), n(f(v, "outer_diameter").context("via od")?), n(f(v, "hole_diameter").context("via hole")?), netnum(s(v, "net_name"))?
+            n(vx), n(vy), n(f(v, "outer_diameter").context("via od")?), n(f(v, "hole_diameter").context("via hole")?), netnum(&via_net(v)?)?
         );
         st.vias += 1;
     }
@@ -720,14 +808,14 @@ mod tests {
     #[test]
     fn rejects_unknown_elements() {
         let j = r#"[{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]},{"type":"pcb_cutout"}]"#;
-        assert!(convert(j, 2).is_err());
+        assert!(convert(j, Some(2)).is_err());
     }
 
     #[test]
     fn rejects_layer_change_without_via() {
         let j = r#"[{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]},
             {"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"},{"route_type":"wire","x":1,"y":0,"width":0.2,"layer":"bottom"}]}]"#;
-        let e = convert(j, 2).err().unwrap().to_string();
+        let e = convert(j, Some(2)).err().unwrap().to_string();
         assert!(e.contains("without a via"), "{e}");
     }
 
@@ -735,7 +823,56 @@ mod tests {
     fn via_route_point_joins_both_sides() {
         let j = r#"[{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]},
             {"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"},{"route_type":"via","x":1,"y":0,"from_layer":"top","to_layer":"bottom"},{"route_type":"wire","x":2,"y":0,"width":0.2,"layer":"bottom"}]}]"#;
-        let (text, st) = convert(j, 2).unwrap();
+        let (text, st) = convert(j, Some(2)).unwrap();
         assert_eq!(st.segments, 2, "{text}");
+        // review 2, 1: the via point with no pcb_via gets a via
+        assert_eq!(st.vias, 1, "{text}");
+        assert!(text.contains("(via (at "), "{text}");
+    }
+
+    const BOARD: &str = r#"{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]}"#;
+
+    #[test]
+    fn via_point_needs_to_layer() {
+        let j = format!(r#"[{BOARD},
+            {{"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"}},{{"route_type":"via","x":1,"y":0}},{{"route_type":"wire","x":2,"y":0,"width":0.2,"layer":"bottom"}}]}}]"#);
+        let e = convert(&j, Some(2)).err().unwrap().to_string();
+        assert!(e.contains("to_layer"), "{e}");
+    }
+
+    #[test]
+    fn via_net_from_its_traces() {
+        let j = format!(r#"[{BOARD},
+            {{"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"}},{{"route_type":"wire","x":1,"y":0,"width":0.2,"layer":"top"}}]}},
+            {{"type":"pcb_via","pcb_via_id":"v","x":1,"y":0,"outer_diameter":0.6,"hole_diameter":0.3}}]"#);
+        let (text, _) = convert(&j, Some(2)).unwrap();
+        assert!(text.contains("(drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1))"), "{text}");
+        let lonely = format!(r#"[{BOARD},{{"type":"pcb_via","pcb_via_id":"v","x":3,"y":3,"outer_diameter":0.6,"hole_diameter":0.3}}]"#);
+        assert!(convert(&lonely, Some(2)).is_err());
+    }
+
+    #[test]
+    fn blind_via_by_layers_list() {
+        let j = format!(r#"[{BOARD},{{"type":"pcb_via","pcb_via_id":"v","x":3,"y":3,"outer_diameter":0.6,"hole_diameter":0.3,"net_name":"A","layers":["top","inner1"]}}]"#);
+        let e = convert(&j, Some(4)).err().unwrap().to_string();
+        assert!(e.contains("only through vias"), "{e}");
+    }
+
+    #[test]
+    fn trace_error_stops_import() {
+        let j = format!(r#"[{BOARD},{{"type":"pcb_trace_error","message":"unrouted"}}]"#);
+        assert!(convert(&j, Some(2)).err().unwrap().to_string().contains("pcb_trace_error"));
+    }
+
+    #[test]
+    fn lib_ids_sanitized() {
+        assert_eq!(sanitize_lib(r#"A:B/C"D\E<G>"#), "A_B_C_D_E_G_");
+    }
+
+    #[test]
+    fn layers_default_to_the_json() {
+        let j = r#"[{"type":"pcb_board","num_layers":4,"width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]}]"#;
+        let (text, st) = convert(j, None).unwrap();
+        assert!(text.contains("In1.Cu") && st.warnings.is_empty(), "{text}");
     }
 }

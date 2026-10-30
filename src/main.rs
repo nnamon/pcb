@@ -36,8 +36,9 @@ enum Cmd {
     /// Write a KiCad 7 board from a tscircuit circuit JSON (outline, nets, footprints, tracks, vias).
     ImportTscircuit {
         circuit_json: String,
-        #[arg(long, default_value_t = 4)]
-        layers: u32,
+        /// Copper layers to write (default: the circuit JSON's num_layers).
+        #[arg(long)]
+        layers: Option<u32>,
         #[arg(long, short)]
         out: String,
     },

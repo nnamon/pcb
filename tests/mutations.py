@@ -74,7 +74,22 @@ def m_lcsc(t):
     return re.sub(r'\(property "LCSC" "C\d+"\)', '(property "LCSC" "C1")', t, count=1)
 
 
-MUT = [m_bt101_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
+def m_crtyd_side(t):
+    # review 2, 5: BT101 (back) with its courtyard on the front courtyard layer
+    s_, e = footprint_block(t, "BT101")
+    blk = t[s_:e].replace('"B.CrtYd"', '"F.CrtYd"')
+    return t[:s_] + blk + t[e:]
+
+
+def m_via_net(t):
+    # review 2, 6: a via written on another net (pcbnew would quietly take the net of its tracks)
+    m = re.search(r"^  \(via \(at [^\n]*\(net (\d+)\)\)", t, re.M)
+    other = "1" if m.group(1) != "1" else "2"
+    line = m.group(0)
+    return t.replace(line, line[: line.rindex("(net ")] + f"(net {other}))", 1)
+
+
+MUT = [m_crtyd_side, m_via_net, m_bt101_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
 results = {}
 base = subprocess.run([sys.executable, os.path.join(here, "verify_import.py"), cj, board, tsx], capture_output=True)
 results["unmutated passes"] = base.returncode == 0
