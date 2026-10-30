@@ -10,9 +10,12 @@ Checks:
   vias: the set of vias (position, size, drill, net) is identical;
   nets: the set of net names is identical.
 Prints a JSON report; exit status 1 if anything differs.
-Usage: python3 verify_import.py circuit.json board.kicad_pcb [badge.tsx]
+Usage: python3 verify_import.py circuit.json board.kicad_pcb [fixture.toml]
+
+Board facts (hole names, a back-side part's library pads) come from the fixture file, never from this code.
 """
 import json
+import re
 import sys
 from collections import Counter
 
@@ -88,7 +91,7 @@ for cid, c in pc.items():
     side = "F.Cu" if c["layer"] == "top" else "B.Cu"
     if f.GetLayerName() != side:
         err(f"{ref} side {f.GetLayerName()} != {side}")
-    want_rot = c.get("rotation", 0) + (180 if side == "B.Cu" else 0)   # independently tested below for BT101
+    want_rot = c.get("rotation", 0) + (180 if side == "B.Cu" else 0)   # independently tested below for the fixture's back-side parts
     if abs(((f.GetOrientationDegrees() - want_rot) + 540) % 360 - 180) > 1e-6:
         err(f"{ref} rotation {f.GetOrientationDegrees()} != {want_rot}")
     # footprint type and DNP flags from the circuit JSON's pads and do_not_place
@@ -128,15 +131,11 @@ by_ref = {}
 for k in kpads:
     by_ref.setdefault(k["ref"], []).append(k)
 checked = Counter()
-# mounting holes named in the readable source: <hole name="H1" diameter="3.2mm" pcbX="-76mm" pcbY="51mm" />
+# board-level holes named as the fixture says (its [import.holes]: name = [x, y] in tscircuit coordinates)
 import os
-import re
-src_holes = {}
-tsx = os.path.join(os.path.dirname(os.path.abspath(cj_path)), "..", "..", "..", "source", "badge.tsx")
-if len(sys.argv) > 3:
-    tsx = sys.argv[3]
-for m in re.finditer(r'<hole name="(H\d+)" diameter="[\d.]+mm" pcbX="(-?[\d.]+)mm" pcbY="(-?[\d.]+)mm"', open(tsx).read()):
-    src_holes[(round(float(m.group(2)), 3), round(float(m.group(3)), 3))] = m.group(1)
+import tomllib
+fx = tomllib.load(open(sys.argv[3], "rb")) if len(sys.argv) > 3 else {}
+src_holes = {(round(float(x), 3), round(float(y), 3)): name for name, (x, y) in fx.get("import", {}).get("holes", {}).items()}
 report["source_holes"] = len(src_holes)
 for e in d:
     t = e["type"]
@@ -146,8 +145,10 @@ for e in d:
         # board-level hole: H<n> by position in the source (independent of the importer's naming)
         ref = src_holes.get((round(e["x"], 3), round(e["y"], 3)))
         if ref is None:
-            err(f"board hole at {e['x']},{e['y']} not named in the source")
-            continue
+            if src_holes:
+                err(f"board hole at {e['x']},{e['y']} not named in the fixture")
+                continue
+            ref = None
     else:
         ref = sc[pc[e["pcb_component_id"]]["source_component_id"]]["name"]
     if t == "pcb_smtpad" and e["shape"] == "polygon":
@@ -174,7 +175,8 @@ for e in d:
             if round(e.get("rect_ccw_rotation", 0)) % 180 == 90:
                 w, h = h, w
     X, Y = T(cx, cy)
-    cand = [k for k in by_ref.get(ref, []) if not k["used"] and abs(k["x"] - X) < TOL and abs(k["y"] - Y) < TOL]
+    pool = by_ref.get(ref, []) if ref is not None else kpads   # an unnamed board hole matches by position alone
+    cand = [k for k in pool if not k["used"] and abs(k["x"] - X) < TOL and abs(k["y"] - Y) < TOL]
     if not cand:
         err(f"{ref}: no KiCad pad at {X:.4f},{Y:.4f} for {t} {e.get('shape', e.get('hole_shape'))}")
         continue
@@ -381,44 +383,42 @@ for e in d:
     cy_checked += 1
 report["courtyards_checked"] = cy_checked
 
-# back-side convention (review 1, B2), independent of the importer: build BT101 from its library footprint
-# (source/parts/KEYSTONE_2464.tsx, tscircuit frame y up; KiCad library frame is y down), put its origin at the
-# JSON courtyard centre (the courtyard is symmetric about the library origin), flip it with KiCad's own Flip and
+# back-side convention (review 1, B2), independent of the importer: for each part the fixture names, build it from
+# its library pads (KiCad library frame, y down, origin at the courtyard centre), flip it with KiCad's own Flip and
 # turn it to the imported orientation; its pads must land on the JSON pads
-lib = {}
-ks = os.path.join(os.path.dirname(tsx), "parts", "KEYSTONE_2464.tsx")
-for m in re.finditer(r'portHints=\{\["pin(\d)"\]\} pcbX="(-?[\d.]+)mm" pcbY="(-?[\d.]+)mm"', open(ks).read()):
-    lib[m.group(1)] = (float(m.group(2)), -float(m.group(3)))
-bt = next(c for c in pc.values() if sc[c["source_component_id"]]["name"] == "BT101")
-cyo = next(e for e in d if e["type"] == "pcb_courtyard_outline" and e["pcb_component_id"] == bt["pcb_component_id"])
-# centre of the courtyard's bounding box (its outline repeats the first point, so a plain average is biased)
-ox = (min(p_["x"] for p_ in cyo["outline"]) + max(p_["x"] for p_ in cyo["outline"])) / 2
-oy = (min(p_["y"] for p_ in cyo["outline"]) + max(p_["y"] for p_ in cyo["outline"])) / 2
-tb = pcbnew.BOARD()
-fp = pcbnew.FOOTPRINT(tb)
-for num, (lx, ly) in lib.items():
-    pd = pcbnew.PAD(fp)
-    pd.SetNumber(num)
-    pd.SetPos0(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
-    pd.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
-    fp.Add(pd)
-tb.Add(fp)
-OX, OY = T(ox, oy)
-fp.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(OX), pcbnew.FromMM(OY)))
-fp.Flip(fp.GetPosition(), False)
-fp.SetOrientationDegrees(fps["BT101"].GetOrientationDegrees())
-want_bt = {}
-for e in d:
-    if e["type"] == "pcb_plated_hole" and e["pcb_component_id"] == bt["pcb_component_id"]:
-        spt = sport[pp[e["pcb_port_id"]]["source_port_id"]]
-        want_bt[str(spt["pin_number"])] = T(e["x"], e["y"])
-bt_err = 0
-for pd in fp.Pads():
-    got_p = (mm(pd.GetPosition().x), mm(pd.GetPosition().y))
-    if not near(got_p, want_bt[pd.GetNumber()]):
-        bt_err += 1
-        err(f"BT101 library pad {pd.GetNumber()} flipped at the imported orientation lands at {got_p}, JSON pad at {want_bt[pd.GetNumber()]}")
-report["back_side_convention"] = {"part": "BT101", "pads": len(lib), "mismatches": bt_err}
+report["back_side_convention"] = {}
+for part, spec in fx.get("import", {}).get("back_side", {}).items():
+    lib = {num: (float(x), float(y)) for num, (x, y) in spec["pads"].items()}
+    bt = next(c for c in pc.values() if sc[c["source_component_id"]]["name"] == part)
+    cyo = next(e for e in d if e["type"] == "pcb_courtyard_outline" and e["pcb_component_id"] == bt["pcb_component_id"])
+    # centre of the courtyard's bounding box (its outline repeats the first point, so a plain average is biased)
+    ox = (min(p_["x"] for p_ in cyo["outline"]) + max(p_["x"] for p_ in cyo["outline"])) / 2
+    oy = (min(p_["y"] for p_ in cyo["outline"]) + max(p_["y"] for p_ in cyo["outline"])) / 2
+    tb = pcbnew.BOARD()
+    fp = pcbnew.FOOTPRINT(tb)
+    for num, (lx, ly) in lib.items():
+        pd = pcbnew.PAD(fp)
+        pd.SetNumber(num)
+        pd.SetPos0(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
+        pd.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(lx), pcbnew.FromMM(ly)))
+        fp.Add(pd)
+    tb.Add(fp)
+    OX, OY = T(ox, oy)
+    fp.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(OX), pcbnew.FromMM(OY)))
+    fp.Flip(fp.GetPosition(), False)
+    fp.SetOrientationDegrees(fps[part].GetOrientationDegrees())
+    want_bt = {}
+    for e in d:
+        if e["type"] in ("pcb_plated_hole", "pcb_smtpad") and e.get("pcb_component_id") == bt["pcb_component_id"]:
+            spt = sport[pp[e["pcb_port_id"]]["source_port_id"]]
+            want_bt[str(spt["pin_number"])] = T(e["x"], e["y"])
+    bt_err = 0
+    for pd in fp.Pads():
+        got_p = (mm(pd.GetPosition().x), mm(pd.GetPosition().y))
+        if not near(got_p, want_bt[pd.GetNumber()]):
+            bt_err += 1
+            err(f"{part} library pad {pd.GetNumber()} flipped at the imported orientation lands at {got_p}, JSON pad at {want_bt[pd.GetNumber()]}")
+    report["back_side_convention"][part] = {"pads": len(lib), "mismatches": bt_err}
 
 report["ok"] = not report.get("error_count")
 print(json.dumps(report, indent=1))

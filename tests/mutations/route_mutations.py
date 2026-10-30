@@ -122,7 +122,7 @@ MUT = [m_narrow_new, m_shared_id, m_unlock, m_move_outside, m_add_outside, m_dro
 
 
 def verify(board, o=None):
-    return subprocess.run([sys.executable, os.path.join(here, "verify_route.py"), o or orig, board, region, targets, allowed], capture_output=True, text=True)
+    return subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_route.py"), o or orig, board, region, targets, allowed], capture_output=True, text=True)
 
 
 results = {"unmutated passes": verify(routed).returncode == 0}

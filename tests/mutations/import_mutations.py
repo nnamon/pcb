@@ -1,14 +1,17 @@
 """Sensitivity test for tests/verify_import.py (review 1, S8): each mutation below damages a copy of an imported
 board in one way, and the check must fail on every one. The unmutated board must pass.
 
-Usage: python3 mutations.py circuit.json board.kicad_pcb badge.tsx workdir
+Usage: python3 import_mutations.py circuit.json board.kicad_pcb fixture.toml workdir
+
+The parts mutated are picked from the board (the first back-side part, the first part turned 90 or 270 degrees),
+never named here.
 """
 import os
 import re
 import subprocess
 import sys
 
-cj, board, tsx, work = sys.argv[1:5]
+cj, board, fixture, work = sys.argv[1:5]
 os.makedirs(work, exist_ok=True)
 src = open(board).read()
 here = os.path.dirname(os.path.abspath(__file__))
@@ -21,9 +24,24 @@ def footprint_block(text, ref):
     return start, end
 
 
-def m_bt101_turned(t):
-    # the B2 fault: BT101 at orientation 180 off, pads moved in the footprint frame so the copper stays put
-    s, e = footprint_block(t, "BT101")
+def first_ref(t, pred):
+    for m in re.finditer(r'\n  \(footprint "[^"]*" \(layer "([^"]+)"\) \(at [-\d.]+ [-\d.]+(?: ([-\d.]+))?\)[^\n]*\n(?:    [^\n]*\n)*?    \(fp_text reference "([^"]+)"', t):
+        if pred(m.group(1), float(m.group(2) or 0)) and "(pad " in t[m.end():t.index("\n  )\n", m.end())]:
+            return m.group(3)
+    raise SystemExit("no footprint fits the mutation")
+
+
+def back_ref(t):
+    return first_ref(t, lambda layer, rot: layer == "B.Cu")
+
+
+def turned_ref(t):
+    return first_ref(t, lambda layer, rot: layer == "F.Cu" and round(rot) % 180 == 90)
+
+
+def m_back_part_turned(t):
+    # the B2 fault: a back-side part 180 degrees off, pads moved in the footprint frame so the copper stays put
+    s, e = footprint_block(t, back_ref(t))
     blk = t[s:e]
     at = re.search(r'\(at ([-\d.]+) ([-\d.]+) ([-\d.]+)\)', blk)
     rot = (float(at.group(3)) + 180) % 360
@@ -60,8 +78,8 @@ def m_slot_axis(t):
 
 
 def m_courtyard(t):
-    # a rotated part's courtyard back to unrotated: swap x and y of C101's polygon
-    s, e = footprint_block(t, "C101")
+    # a turned part's courtyard back to unturned: swap x and y of its polygon
+    s, e = footprint_block(t, turned_ref(t))
     blk = re.sub(r'\(xy ([-\d.]+) ([-\d.]+)\)', lambda m: f"(xy {m.group(2)} {m.group(1)})", t[s:e])
     return t[:s] + blk + t[e:]
 
@@ -75,8 +93,8 @@ def m_lcsc(t):
 
 
 def m_crtyd_side(t):
-    # review 2, 5: BT101 (back) with its courtyard on the front courtyard layer
-    s_, e = footprint_block(t, "BT101")
+    # review 2, 5: a back-side part with its courtyard on the front courtyard layer
+    s_, e = footprint_block(t, back_ref(t))
     blk = t[s_:e].replace('"B.CrtYd"', '"F.CrtYd"')
     return t[:s_] + blk + t[e:]
 
@@ -89,9 +107,9 @@ def m_via_net(t):
     return t.replace(line, line[: line.rindex("(net ")] + f"(net {other}))", 1)
 
 
-MUT = [m_crtyd_side, m_via_net, m_bt101_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
+MUT = [m_crtyd_side, m_via_net, m_back_part_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
 results = {}
-base = subprocess.run([sys.executable, os.path.join(here, "verify_import.py"), cj, board, tsx], capture_output=True)
+base = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, board, fixture], capture_output=True)
 results["unmutated passes"] = base.returncode == 0
 for mfn in MUT:
     out = mfn(src)
@@ -101,7 +119,7 @@ for mfn in MUT:
     pro = os.path.splitext(board)[0] + ".kicad_pro"
     if os.path.exists(pro):
         open(os.path.splitext(p)[0] + ".kicad_pro", "w").write(open(pro).read())
-    r = subprocess.run([sys.executable, os.path.join(here, "verify_import.py"), cj, p, tsx], capture_output=True)
+    r = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, p, fixture], capture_output=True)
     results[mfn.__name__ + " caught"] = r.returncode != 0
 for k, v in results.items():
     print(f"{'ok  ' if v else 'FAIL'} {k}")
