@@ -157,8 +157,14 @@ pub fn png(b: &Board, o: &Opts, out: &str) -> Result<()> {
     opt.fontdb_mut().load_system_fonts();
     let tree = resvg::usvg::Tree::from_str(&svg, &opt).context("building SVG")?;
     let size = tree.size().to_int_size();
+    // a bounded image: a huge --scale would otherwise abort the process (review 5, 10)
+    if (size.width() as u64) * (size.height() as u64) > 200_000_000 {
+        return Err(crate::contract::refused("image-too-large", format!("{} x {} pixels; lower --scale or choose a region", size.width(), size.height())));
+    }
     let mut pix = resvg::tiny_skia::Pixmap::new(size.width(), size.height()).context("pixmap")?;
     resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pix.as_mut());
-    pix.save_png(out).context("writing PNG")?;
+    // encoded here and written with std, so a write error stays an io::Error (outcome failed, code io)
+    let png = pix.encode_png().context("encoding PNG")?;
+    std::fs::write(out, png).with_context(|| format!("writing {out}"))?;
     Ok(())
 }

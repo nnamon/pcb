@@ -177,6 +177,14 @@ Every command:
   - a `wire_keepout` on a layer also blocks vias, so a layer the router must not use is marked a plane layer instead;
   - the router joins tracks in their middle and leaves dangling ends; `pcb` splits the joined tracks and prunes the ends;
   - copper is ripped only 1 mm inside the region, so the ends the router must reach are clear of the keep-outs.
+
+  Freerouting 2.5.0 (Java 25, 30 Oct 2026) replaces 1.9. It runs with `--gui.enabled=false`, so there are no dialogs, and it has new traps, each handled in `src/freerouting.rs` or `pcb route`:
+  - its fanout pre-pass lays 0.25 mm vias and may rip existing traces, so it is off (`--router.fanout.enabled=false`);
+  - automatic neckdown narrowed a 0.4 mm class to 0.3 mm, so it is off (`--router.automatic_neckdown=false`);
+  - its default plane nets are GND and VCC whatever the board has, so `--router.plane_nets` lists the board's zone nets;
+  - a DSN `(type power)` layer without a plane is turned back into a signal layer and routed on, so marking a layer as a plane no longer keeps the router off it. `pcb route` passes `--router.layers.routable` in DSN layer order instead. The route case `layers_outer_only` caught N routed on In2.Cu before this;
+  - it tries every open connection on the board, including the ones walled off outside the region. On the badge that ran for over 9 minutes where 1.9 took 29 s. `pcb route` moves every net it is not routing into a copy of that net's class (same rule) and passes the copies as `--router.autorouter.ignore_net_classes`; the badge reroute then takes 16 s. Freerouting still counts the skipped nets as unrouted, so it skips its optimizer;
+  - its "before" statistics count fixed wiring through a via as not connected. The first pass then finds the net complete without adding copper, so the count is wrong and the routing is not. `pcb` reads connectivity from KiCad's DRC, not from Freerouting's statistics.
 - **EasyEDA footprints:** converted to `.kicad_mod` by `pcb`, cached under `parts/`, and checked against the pin names in `design.toml` at sync. A pin-name mismatch is an error, which closes the XC6206 trap.
 - **Determinism:** the same inputs give byte-identical outputs, so a diff shows exactly what a command changed.
 

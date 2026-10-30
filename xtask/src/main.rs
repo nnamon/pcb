@@ -91,7 +91,8 @@ fn main() -> Result<()> {
     let pcb = s.pcb.to_string_lossy().to_string();
     let jar = s.jar.as_ref().map(|p| p.to_string_lossy().to_string());
     if !s.fast && jar.is_none() {
-        bail!("PCB_FREEROUTING_JAR must name the Freerouting 2.5.0 jar (or use --fast)");
+        s.steps.push(Step { name: "freerouting jar".into(), ok: false, seconds: 0.0, detail: "PCB_FREEROUTING_JAR must name the Freerouting 2.5.0 jar (or use --fast)".into() });
+        return finish(&s, t0);
     }
 
     // the pinned tools first: nothing else means anything on other versions
@@ -105,6 +106,7 @@ fn main() -> Result<()> {
         return finish(&s, t0);
     }
     s.py("output contract", "tests/cases/contract_cases.py", &[&pcb, &s.w("contract")]);
+    s.py("kicad adapter", "tests/cases/adapter_cases.py", &[&s.w("adapter")]);
     s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
@@ -119,7 +121,10 @@ fn main() -> Result<()> {
     let mut fixtures: Vec<_> = std::fs::read_dir(&fx_dir)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("fixture.toml").exists()).collect();
     fixtures.sort();
     for dir in fixtures {
-        fixture(&mut s, &dir, &pcb, jar.as_deref())?;
+        // a fixture that cannot even be read is a failed step, and the summary is still written
+        if let Err(e) = fixture(&mut s, &dir, &pcb, jar.as_deref()) {
+            s.steps.push(Step { name: format!("fixture {}", dir.display()), ok: false, seconds: 0.0, detail: format!("{e:#}") });
+        }
     }
     finish(&s, t0)
 }
@@ -169,10 +174,32 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         }
         let t0 = Instant::now();
         eprintln!("-- {label}");
+        let before = std::fs::read(&board)?;
         let o = Command::new(pcb).args(&args).output()?;
         let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(json!({}));
+        let contract = Command::new("python3")
+            .args(["-c", "import sys, json; sys.path.insert(0, 'tests/lib'); from contract_check import check; d, p = check(sys.stdin.read(), int(sys.argv[1])); print(json.dumps(p))", &o.status.code().unwrap_or(-1).to_string()])
+            .current_dir(&s.root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin.take().unwrap().write_all(&o.stdout)?;
+                c.wait_with_output()
+            })?;
         let want = case.get("expect").and_then(|x| x.as_str()).unwrap_or("done");
         let mut problems = vec![];
+        let cp = String::from_utf8_lossy(&contract.stdout).trim().to_string();
+        if cp != "[]" {
+            problems.push(format!("output contract: {cp}"));
+        }
+        if std::fs::read(&board)? != before {
+            problems.push("the input board changed".into());
+        }
+        if want == "done" && !Path::new(&out).exists() {
+            problems.push("done, but no output written".into());
+        }
         if v["outcome"] != want {
             problems.push(format!("outcome {} (want {want}): {}", v["outcome"], v["error"]));
         }
@@ -198,16 +225,15 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         }
     }
 
-    // zones (spike 3 prototype until pcb zone exists)
-    if let Some(z) = fx.get("zones") {
+    // zones: spike 3 is a badge-specific prototype until `pcb zone` (M2), so it runs only for a fixture that names it
+    if let Some(z) = fx.get("zones").filter(|z| z.get("prototype").and_then(|p| p.as_str()) == Some("spike3")) {
         let coil = dir.join(z["coil_json"].as_str().context("coil_json")?).to_string_lossy().to_string();
         let base = w("base.kicad_pcb");
         let zoned = w("zoned.kicad_pcb");
         std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&base).with_extension("kicad_pro"))?;
         std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&zoned).with_extension("kicad_pro"))?;
         let save = format!("import pcbnew; b = pcbnew.LoadBoard({board:?}); b.Save({base:?})");
-        s.run(&format!("{name}: zones base (KiCad save)"), "python3", &["-c", &save]);
-        if s.py(&format!("{name}: zones (spike 3)"), "phase0/spike3.py", &[&base, &coil, &zoned]) && s.py(&format!("{name}: zone fill"), "src/kicad_helper.py", &["fill", &zoned]) {
+        if s.run(&format!("{name}: zones base (KiCad save)"), "python3", &["-c", &save]) && s.py(&format!("{name}: zones (spike 3)"), "phase0/spike3.py", &[&base, &coil, &zoned]) && s.py(&format!("{name}: zone fill"), "src/kicad_helper.py", &["fill", &zoned]) {
             s.py(&format!("{name}: verify_zones"), "tests/oracles/verify_zones.py", &[&base, &zoned, &ftoml]);
             if s.fast {
                 s.skip(&format!("{name}: zone mutations"), "--fast");

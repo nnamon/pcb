@@ -6,6 +6,7 @@ Usage: python3 import_mutations.py circuit.json board.kicad_pcb fixture.toml wor
 The parts mutated are picked from the board (the first back-side part, the first part turned 90 or 270 degrees),
 never named here.
 """
+import json
 import os
 import re
 import subprocess
@@ -115,11 +116,122 @@ def m_pad_net(t):
     return t[:m.start()] + m.group(1) + f"{other[0]} {other[1]})" + t[m.end():]
 
 
-MUT = [m_pad_net, m_crtyd_side, m_via_net, m_back_part_turned, m_pad_to_back, m_renumber, m_outline, m_pinfunction, m_slot_axis, m_courtyard, m_attr, m_lcsc]
+def first_line(t, pattern):
+    m = re.search(pattern, t, re.M)
+    if not m:
+        raise SystemExit(f"no line matches {pattern}")
+    return m
+
+
+def m_drop_segment(t):
+    m = first_line(t, r"^  \(segment [^\n]*\n")
+    return t[:m.start()] + t[m.end():]
+
+
+def m_segment_width(t):
+    m = first_line(t, r"^  \(segment [^\n]*\(width ([\d.]+)\)")
+    w = m.group(1)
+    return t[:m.start()] + m.group(0).replace(f"(width {w})", f"(width {float(w) + 0.05:g})") + t[m.end():]
+
+
+def m_drop_footprint(t):
+    s_, e = footprint_block(t, turned_ref(t))
+    return t[:s_] + t[e:]
+
+
+def m_footprint_side(t):
+    s_, e = footprint_block(t, turned_ref(t))
+    blk = t[s_:e].replace('(layer "F.Cu")', '(layer "B.Cu")', 1)
+    return t[:s_] + blk + t[e:]
+
+
+def m_dnp(t):
+    return t.replace("(attr smd)", "(attr smd exclude_from_pos_files exclude_from_bom)", 1)
+
+
+def m_pad_angle(t):
+    m = first_line(t, r'^    \(pad "[^"]+" smd rect \(at ([-\d.]+) ([-\d.]+) 0\)')
+    return t[:m.start()] + m.group(0)[:-2] + "90)" + t[m.end():]
+
+
+def m_extra_pad(t):
+    m = first_line(t, r'^    \(pad "[^"]+" smd rect \(at ([-\d.]+) ([-\d.]+) 0\)[^\n]*\n')
+    extra = re.sub(r'\(pad "[^"]+"', '(pad "98"', m.group(0)).replace(f"(at {m.group(1)} {m.group(2)} 0)", f"(at {float(m.group(1)) + 5:g} {m.group(2)} 0)")
+    return t[:m.end()] + extra + t[m.end():]
+
+
+def m_pad_kind(t):
+    return t.replace('" smd rect (at', '" connect rect (at', 1)
+
+
+def m_rename_net(t):
+    m = first_line(t, r'^  \(net (\d+) "([^"]+)"\)')
+    name = m.group(2)
+    return t.replace(f'"{name}")', f'"{name}_X")')
+
+
+def m_blind_via(t):
+    m = first_line(t, r'^  \(via [^\n]*\(layers "F.Cu" "B.Cu"\)')
+    return t[:m.start()] + m.group(0).replace('(layers "F.Cu" "B.Cu")', '(layers "F.Cu" "In1.Cu")') + t[m.end():]
+
+
+def m_npth_drill(t):
+    m = first_line(t, r'np_thru_hole circle \(at [^)]*\) \(size ([\d.]+) [\d.]+\) \(drill ([\d.]+)\)')
+    d = m.group(2)
+    return t[:m.start()] + m.group(0).replace(f"(drill {d})", f"(drill {float(d) - 0.1:g})") + t[m.end():]
+
+
+def m_hole_one_layer(t):
+    return re.sub(r'(\(pad "[^"]+" thru_hole [^\n]*?)\(layers "\*\.Cu" "\*\.Mask"\)', r'\1(layers "F.Cu" "F.Mask")', t, count=1)
+
+
+def m_polygon(t):
+    # narrow one polygon pad to 80 % about its own centre: same place, less copper
+    m = first_line(t, r"\(primitives \(gr_poly \(pts ((?:\(xy [-\d.]+ [-\d.]+\) ?)+)\)")
+    pts = [(float(a), float(b)) for a, b in re.findall(r"\(xy ([-\d.]+) ([-\d.]+)\)", m.group(1))]
+    cx = (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
+    new = " ".join(f"(xy {cx + (x - cx) * 0.8:g} {y:g})" for x, y in pts)
+    return t[:m.start(1)] + new + t[m.end(1):]
+
+
+def m_hole_renamed(t):
+    m = first_line(t, r'\(fp_text reference "H1"')
+    return t[:m.start()] + '(fp_text reference "H9"' + t[m.end():]
+
+
+# mutation -> words the check it targets prints (review 5, 6: caught by its own check, not by any)
+MUT = {
+    m_pad_net: "net ",
+    m_crtyd_side: "courtyard",
+    m_via_net: "via missing",
+    m_back_part_turned: "rotation",
+    m_pad_to_back: "on front=",
+    m_renumber: "number",
+    m_outline: "outline differs",
+    m_pinfunction: "pinfunction",
+    m_slot_axis: "drill",
+    m_courtyard: "courtyard",
+    m_attr: "type attributes",
+    m_lcsc: "LCSC",
+    m_drop_segment: "segment missing",
+    m_segment_width: "segment missing",
+    m_drop_footprint: "missing footprint",
+    m_footprint_side: " side ",
+    m_dnp: "DNP flags",
+    m_pad_angle: "at angle",
+    m_extra_pad: "not in circuit JSON",
+    m_pad_kind: "kind",
+    m_rename_net: "net sets differ",
+    m_blind_via: "not through",
+    m_npth_drill: "NPTH at",
+    m_hole_one_layer: "not on both copper layers",
+    m_polygon: "polygon pad",
+    m_hole_renamed: "no KiCad pad",
+}
 results = {}
 base = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, board, fixture], capture_output=True)
 results["unmutated passes"] = base.returncode == 0
-for mfn in MUT:
+for mfn, words in MUT.items():
     out = mfn(src)
     assert out != src, f"{mfn.__name__} changed nothing"
     p = os.path.join(work, mfn.__name__ + ".kicad_pcb")
@@ -127,8 +239,15 @@ for mfn in MUT:
     pro = os.path.splitext(board)[0] + ".kicad_pro"
     if os.path.exists(pro):
         open(os.path.splitext(p)[0] + ".kicad_pro", "w").write(open(pro).read())
-    r = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, p, fixture], capture_output=True)
-    results[mfn.__name__ + " caught"] = r.returncode != 0
+    r = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, p, fixture], capture_output=True, text=True)
+    try:
+        errs = json.loads(r.stdout[r.stdout.index("{"):]).get("errors", [])
+    except ValueError:
+        errs = [r.stderr[-300:]]
+    hit = any(words in e for e in errs)
+    results[mfn.__name__ + f" caught by its check ({words.strip()})"] = r.returncode != 0 and hit
+    if not hit:
+        print(f"     {mfn.__name__}: {errs[:3]}")
 for k, v in results.items():
     print(f"{'ok  ' if v else 'FAIL'} {k}")
 sys.exit(0 if all(results.values()) else 1)

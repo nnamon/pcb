@@ -15,7 +15,21 @@
  "if": {
   "properties": {
    "outcome": {
-    "const": "done"
+    "enum": [
+     "done",
+     "refused"
+    ]
+   }
+  },
+  "not": {
+   "properties": {
+    "error": {
+     "properties": {
+      "code": {
+       "const": "usage"
+      }
+     }
+    }
    }
   }
  },
@@ -29,6 +43,7 @@
     "properties": {
      "checks": {
       "type": "array",
+      "minItems": 1,
       "items": {
        "type": "object",
        "required": [

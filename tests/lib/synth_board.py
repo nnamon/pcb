@@ -1,12 +1,13 @@
-"""Synthetic 2-layer boards for the route cases, built with pcbnew. Adapted from the review 4 reviewer's generator.
-variants: base (locked/width/split cases), arc, nonascii, gzone (GND zone), tight (DRC min width above netclass)"""
+"""Synthetic boards (2 layers unless noted) for the route cases, built with pcbnew. Adapted from the review 4 reviewer's generator.
+variants: base (locked/width/split cases), arc, nonascii, gzone (GND zone), tight (DRC min width above netclass),
+four (4 layers: pads N1 and N2 split by locked Q walls on F.Cu and B.Cu, so N can only cross on an inner layer)"""
 import sys
 import pcbnew
 
 variant, out = sys.argv[1:3]
 mm = pcbnew.FromMM
 b = pcbnew.BOARD()
-b.SetCopperLayerCount(2)
+b.SetCopperLayerCount(4 if variant == "four" else 2)
 nets = {}
 names = ["W", "L", "S", "N", "GND", "Q"] + (["Ωmega"] if variant == "nonascii" else [])
 for name in names:
@@ -62,32 +63,40 @@ def via(x, y, net, locked=False):
     b.Add(v)
 
 
-# region used by the tests: 10,5 - 50,35
-# W: wide net (0.4 mm), two tracks wholly inside the rip margin, plus a mixed-width neck (0.25) on one
-fp("W1", 15, 10, "W")
-fp("W2", 45, 10, "W")
-trk(15, 10, 30, 10, "W", w=0.4)
-trk(30, 10, 38, 10, "W", w=0.4)
-trk(38, 10, 45, 10, "W", w=0.25)
-trk(45, 10, 52, 10, "W", w=0.4)  # leaves the region; anchors the most common width
-fp("W3", 55, 10, "W")
-trk(52, 10, 55, 10, "W", w=0.4)
-# L: pad - locked stub - unlocked (ripped) - pad, plus a locked via at the stub's end on its own
-fp("L1", 15, 20, "L")
-fp("L2", 45, 20, "L")
-trk(15, 20, 20, 20, "L", locked=True)
-trk(20, 20, 45, 20, "L")
-via(20, 20, "L", locked=True)
-trk(20, 20, 20, 24, "L", layer=pcbnew.B_Cu, locked=True)  # locked tail ending in nothing but ripped... it ends at (20,24)
-trk(20, 24, 30, 24, "L", layer=pcbnew.B_Cu)  # unlocked, ripped
-# S: a track from outside (pad S1 at x 3) running into the region and ending at a pad S2; pad S3 inside, unconnected
-fp("S1", 3, 30, "S")
-fp("S2", 45, 30, "S")
-fp("S3", 30, 34, "S")
-trk(3, 30, 45, 30, "S")
-# N: plain unrouted pair
-fp("N1", 20, 15, "N")
-fp("N2", 40, 15, "N")
+if variant == "four":
+    fp("N1", 20, 15, "N")
+    fp("N2", 40, 15, "N")
+    fp("Q1", 30, 3, "Q")
+    for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+        trk(30, 3, 30, 38, "Q", w=0.5, layer=layer, locked=True)
+    via(30, 3, "Q", locked=True)
+else:
+    # region used by the tests: 10,5 - 50,35
+    # W: wide net (0.4 mm), two tracks wholly inside the rip margin, plus a mixed-width neck (0.25) on one
+    fp("W1", 15, 10, "W")
+    fp("W2", 45, 10, "W")
+    trk(15, 10, 30, 10, "W", w=0.4)
+    trk(30, 10, 38, 10, "W", w=0.4)
+    trk(38, 10, 45, 10, "W", w=0.25)
+    trk(45, 10, 52, 10, "W", w=0.4)  # leaves the region; anchors the most common width
+    fp("W3", 55, 10, "W")
+    trk(52, 10, 55, 10, "W", w=0.4)
+    # L: pad - locked stub - unlocked (ripped) - pad, plus a locked via at the stub's end on its own
+    fp("L1", 15, 20, "L")
+    fp("L2", 45, 20, "L")
+    trk(15, 20, 20, 20, "L", locked=True)
+    trk(20, 20, 45, 20, "L")
+    via(20, 20, "L", locked=True)
+    trk(20, 20, 20, 24, "L", layer=pcbnew.B_Cu, locked=True)  # locked tail ending in nothing but ripped... it ends at (20,24)
+    trk(20, 24, 30, 24, "L", layer=pcbnew.B_Cu)  # unlocked, ripped
+    # S: a track from outside (pad S1 at x 3) running into the region and ending at a pad S2; pad S3 inside, unconnected
+    fp("S1", 3, 30, "S")
+    fp("S2", 45, 30, "S")
+    fp("S3", 30, 34, "S")
+    trk(3, 30, 45, 30, "S")
+    # N: plain unrouted pair
+    fp("N1", 20, 15, "N")
+    fp("N2", 40, 15, "N")
 if variant == "arc":
     a = pcbnew.PCB_ARC(b)
     a.SetStart(pcbnew.VECTOR2I(mm(20), mm(15)))

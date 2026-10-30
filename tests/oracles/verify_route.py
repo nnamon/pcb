@@ -161,7 +161,8 @@ def dangling(board):
     conn = board.GetConnectivity()
     d = collections.Counter()
     for t in board.GetTracks():
-        if t.GetClass() == "PCB_TRACK" and conn.TestTrackEndpointDangling(t, False):
+        # an end KiCad calls dangling, or a track joined to nothing at all, which that test passes (review 5, 6)
+        if t.GetClass() == "PCB_TRACK" and (conn.TestTrackEndpointDangling(t, False) or (not conn.GetConnectedTracks(t) and not conn.GetConnectedPads(t))):
             d[t.GetNetname()] += 1
     return d
 

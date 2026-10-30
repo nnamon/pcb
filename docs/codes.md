@@ -13,6 +13,10 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `arc-unsupported` | refused | The board has track arcs, which `pcb route` does not handle yet | Replace the arcs with segments, or route by hand |
 | `bad-layer` | refused | A routing layer is not a copper layer of the board | Use the board's copper layer names |
 | `tools-mismatch` | refused | `pcb doctor` found a tool version or behaviour other than the pinned one | Install the pinned versions (tools/pcb/ci/Dockerfile) or re-test pcb on the new ones |
+| `rejected-onto-input` | refused | A rejected result's file name is the input board | Choose another `--out` |
+| `output-in-work` | refused | The output is pcb's own work file | Choose another `--out` |
+| `image-too-large` | refused | The render would exceed 200 million pixels | Lower `--scale` or render a region |
+| `panic` | failed | pcb itself crashed; the message holds where | Report it with the command line |
 | `kicad` | failed | KiCad's Python module failed (DSN export, fill, DRC) | Run `pcb doctor`; read the message's KiCad output |
 | `freerouting` | failed | Freerouting did not start, or wrote no session | Run `pcb doctor`; read the log in the message |
 | `freerouting-timeout` | failed | Freerouting ran past `--timeout`, often stuck on an import dialog | Read the warnings in the message |

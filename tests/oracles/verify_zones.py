@@ -193,8 +193,9 @@ for layer in Z["planes"]["layers"]:
                 continue
             shape = pad_poly(pd)
             if pd.GetNetname() == plane_net:
-                # the relief gap: 0.05-0.30 mm outside the pad, inside the plane's 0.35 mm thermal gap
-                ring = shape.buffer(0.30).difference(shape.buffer(0.05))
+                # the relief gap: a ring just outside the pad and inside the plane's thermal gap (review 5, 9)
+                gap = Z["planes"].get("thermal_gap", Z["planes"].get("clearance", 0.35))
+                ring = shape.buffer(gap * 6 / 7).difference(shape.buffer(gap / 7))
                 cov = plane.intersection(ring).area / ring.area
                 if cov == 0:
                     fails.append(f"C: {plane_net} pad {f.GetReference()}.{pd.GetNumber()} not joined to the {layer} plane")

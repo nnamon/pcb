@@ -404,6 +404,10 @@ for k in extra[:5]:
 for tr in b.GetTracks():
     if tr.GetClass() == "PCB_VIA" and (tr.TopLayer() != pcbnew.F_Cu or tr.BottomLayer() != pcbnew.B_Cu):
         err(f"via at {mm(tr.GetPosition().x):.3f},{mm(tr.GetPosition().y):.3f} is not through")
+# and in the file text, which pcbnew normalises on load (review 5, 7)
+for m in re.finditer(r'^  \(via [^\n]*?\(at ([-\d.]+) ([-\d.]+)\)[^\n]*?\(layers ([^)]*)\)', open(pcb_path).read(), re.M):
+    if m.group(3).split() != ['"F.Cu"', '"B.Cu"']:
+        err(f"via at {m.group(1)},{m.group(2)} is not through in the file: layers {m.group(3)}")
 
 # outline: the closed JSON outline, transformed, against the board's Edge.Cuts segments
 ol = [(p_["x"], p_["y"]) for p_ in board["outline"]]
@@ -438,7 +442,9 @@ for e in d:
                 for dx, dy in ((-w_ / 2, -h_ / 2), (w_ / 2, -h_ / 2), (w_ / 2, h_ / 2), (-w_ / 2, h_ / 2))]
     else:
         want = [T(p_["x"], p_["y"]) for p_ in e["outline"]]
-    f = fps[ref]
+    f = fps.get(ref)
+    if f is None:
+        continue   # reported as a missing footprint above
     # KiCad's own courtyard polygon, as DRC sees it (GetCorners() in KiCad 7 ignores the footprint's rotation)
     f.BuildCourtyardCaches()
     got = []

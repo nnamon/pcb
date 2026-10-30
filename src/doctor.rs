@@ -57,6 +57,17 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
         }
         Err(e) => checks.push(check("kicad python module", false, format!("{e:#}"), "pcbnew importable by python3")),
     }
+    // KiCad DRC, in its own process, must see the probe's short and its open (review 5, 4): if the report format
+    // or the DRC changed, the gate would pass everything
+    let probe = work.join("drc_probe.kicad_pcb");
+    match kicad::drc_counts(work, probe.to_str().unwrap_or(""), "doctor_drc") {
+        Ok(m) => {
+            let short = m.keys().any(|k| k == "shorting_items A B" || k == "clearance A B");
+            let open = m.contains_key("unconnected_items A");
+            checks.push(check("kicad drc sees a short and an open", short && open, format!("{:?}", m.keys().collect::<Vec<_>>()), "shorting_items or clearance A B, and unconnected_items A"));
+        }
+        Err(e) => checks.push(check("kicad drc sees a short and an open", false, format!("{e:#}"), "a DRC report")),
+    }
     // Freerouting 2.5 is built for Java 25
     let jv = Command::new(java).arg("-version").output().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
     let major = jv.lines().find(|l| l.contains(" version \"")).and_then(|l| l.split('"').nth(1)).and_then(|v| v.split('.').next()).and_then(|m| m.parse::<u32>().ok()).unwrap_or(0);
@@ -68,6 +79,19 @@ pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<C
         Some(jar) if jar.exists() => {
             let h = sha256_file(jar)?;
             checks.push(check("freerouting 2.5.0 jar", h == FREEROUTING_SHA256, h, FREEROUTING_SHA256));
+            // a real run on a two-pad probe: it must route net A (review 5, 5)
+            let dsn = work.join("route_probe.dsn");
+            let ses = work.join("route_probe.ses");
+            let routed = kicad::helper(work, &["dsn", work.join("route_probe.kicad_pcb").to_str().unwrap_or(""), dsn.to_str().unwrap_or("")])
+                .and_then(|_| crate::freerouting::run(Path::new(java), jar, work, &dsn, &ses, 5, &[], &[], &[], 120))
+                .and_then(|_| crate::route::read_ses(&std::fs::read_to_string(&ses)?));
+            match routed {
+                Ok((wires, _)) => {
+                    let n = wires.iter().filter(|w| w.net == "A" && !w.fixed).count();
+                    checks.push(check("freerouting routes a probe", n > 0, format!("{n} wires on net A"), "at least one"));
+                }
+                Err(e) => checks.push(check("freerouting routes a probe", false, format!("{e:#}").chars().take(400).collect::<String>(), "a session with net A routed")),
+            }
         }
         Some(jar) => checks.push(check("freerouting 2.5.0 jar", false, format!("{} not found", jar.display()), "the jar")),
         None => warnings.push(warn("no-freerouting", "no Freerouting jar given (--freerouting or PCB_FREEROUTING_JAR); pcb route will not run")),

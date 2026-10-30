@@ -26,8 +26,11 @@ runs = {
     "missing_file_fails": ["info", os.path.join(work, "no-such.kicad_pcb")],
     "doctor": ["doctor", "--work", os.path.join(work, "doctor")],
     "doctor_wrong_jar_refused": ["doctor", "--work", os.path.join(work, "doctor"), "--freerouting", board],
+    "render_too_large_refused": ["render", board, "--scale", "100000", "-o", os.path.join(work, "big.png")],
+    "render_unwritable_fails": ["render", board, "-o", os.path.join(work, "no-such-dir", "x.png")],
 }
-want = {"missing_file_fails": "failed", "usage_error_refused": "refused", "doctor_wrong_jar_refused": "refused"}
+want = {"missing_file_fails": "failed", "usage_error_refused": "refused", "doctor_wrong_jar_refused": "refused",
+        "render_too_large_refused": "refused", "render_unwritable_fails": "failed"}
 for name, args in runs.items():
     r = subprocess.run([pcb, "--json", *args], capture_output=True, text=True)
     d, problems = check(r.stdout, r.returncode)

@@ -25,7 +25,26 @@ CASES = {
     "unknown_net_refused": ("base", ["--nets", "NOPE"], "refused", "no net NOPE", None),
     "unknown_net_with_rip_all_refused": ("base", ["--rip", "all", "--nets", "NOPE"], "refused", "no net NOPE", None),
     "worse_result_rejected": ("tight", ["--nets", "N"], "rejected", None, None),
+    # review 5, 3: the input is named like the rejected result's file; the gate must refuse, not overwrite it
+    "rejected_onto_input_refused": ("tight", ["--nets", "N"], "refused", "is the input board", None),
+    # Q walls on F.Cu and B.Cu leave N only the inner layers: kept to the outer layers it must stay open, and
+    # allowed all four it must cross on an inner one (Freerouting 2.5 routes a DSN "power" layer, so the layer
+    # limit has to reach it as --router.layers.routable)
+    "layers_outer_only": ("four", ["--nets", "N"], "done", None, ("", "N")),
+    "layers_inner_allowed": ("four", ["--nets", "N", "--layers", "F.Cu,In1.Cu,In2.Cu,B.Cu"], "done", None, ("", "N")),
 }
+# case: (copper layers new N tracks may use, whether N must end connected)
+LAYER_CHECKS = {
+    "layers_outer_only": ({"F.Cu", "B.Cu"}, False),
+    "layers_inner_allowed": ({"F.Cu", "In1.Cu", "In2.Cu", "B.Cu"}, True),
+}
+LAYER_PROBE = """
+import json, sys, pcbnew
+b = pcbnew.LoadBoard(sys.argv[1])
+b.BuildConnectivity()
+layers = sorted({b.GetLayerName(t.GetLayer()) for t in b.GetTracks() if t.GetNetname() == "N" and t.GetClass() == "PCB_TRACK"})
+print(json.dumps({"layers": layers, "unrouted": b.GetConnectivity().GetUnconnectedCount(True)}))
+"""
 
 
 def sha(p):
@@ -38,6 +57,8 @@ if __name__ == "__main__":
     results = {}
     for name, (variant, args, want, words, verify) in CASES.items():
         board = os.path.join(work, f"{name}.kicad_pcb")
+        if name == "rejected_onto_input_refused":
+            board = os.path.join(work, f"{name}.out.rejected.kicad_pcb")
         subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), variant, board], check=True, capture_output=True)
         before = sha(board)
         out = os.path.join(work, f"{name}.out.kicad_pcb")
@@ -59,6 +80,16 @@ if __name__ == "__main__":
         elif want == "done" and verify:
             v = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_route.py"), board, out, REGION, *verify], capture_output=True, text=True)
             results[name] = "ok" if v.returncode == 0 else f"verify_route failed: {v.stdout[-600:]}{v.stderr[-300:]}"
+            if results[name] == "ok" and name in LAYER_CHECKS:
+                allowed, connected = LAYER_CHECKS[name]
+                p = subprocess.run([sys.executable, "-c", LAYER_PROBE, out], capture_output=True, text=True)
+                got_l = json.loads(p.stdout.strip().splitlines()[-1])
+                if not set(got_l["layers"]) <= allowed:
+                    results[name] = f"N was routed on {got_l['layers']}, outside {sorted(allowed)}"
+                elif connected and (got_l["unrouted"] or not set(got_l["layers"]) - {"F.Cu", "B.Cu"}):
+                    results[name] = f"N should cross on an inner layer: {got_l}"
+                elif not connected and not got_l["unrouted"]:
+                    results[name] = f"N cannot cross the walls on the outer layers, yet the board is fully connected: {got_l}"
         else:
             results[name] = "ok"
     bad = {k: v for k, v in results.items() if v != "ok"}

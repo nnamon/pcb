@@ -16,15 +16,20 @@ here = os.path.dirname(os.path.abspath(__file__))
 helper = os.path.join(here, "..", "..", "src", "kicad_helper.py")
 os.makedirs(work, exist_ok=True)
 Z = tomllib.load(open(fixture, "rb"))["zones"]
-tie = Z["net_tie"]
+tie = Z.get("net_tie")
 plane = Z["planes"]["net"]
-pl0, pl1 = Z["planes"]["layers"][:2]
-tie_pads = sorted(tie["pads"])
-tie_nets = sorted(set(tie["pads"].values()))
-# a pad of the tie on the second net, moved to the first: shorts the tie's nets through its tracks
-moved_pad = next(p for p in tie_pads if tie["pads"][p] == tie_nets[1] and p not in tie["group"].replace(" ", "").split(",")[:1])
-# a group naming the wrong pads: the first pad with a pad of the other net that the copper does not reach
-wrong_group = f"{tie_pads[0]}, {next(p for p in tie_pads if p not in tie['group'].replace(' ', '').split(',') )}"
+pl0 = Z["planes"]["layers"][0]
+pl1 = Z["planes"]["layers"][-1]
+if tie:
+    tie_pads = sorted(tie["pads"])
+    tie_nets = sorted(set(tie["pads"].values()))
+    # a pad of the tie on the second net, moved to the first: shorts the tie's nets through its tracks
+    moved_pad = next(p for p in tie_pads if tie["pads"][p] == tie_nets[1] and p not in tie["group"].replace(" ", "").split(",")[:1])
+    # a group naming the wrong pads: the first pad with a pad of the other net that the copper does not reach
+    wrong_group = f"{tie_pads[0]}, {next(p for p in tie_pads if p not in tie['group'].replace(' ', '').split(','))}"
+else:
+    tie = {"footprint": "", "pads": {}}
+    tie_nets, moved_pad, wrong_group = [""], "", ""
 power = next(e["net"] for e in Z["expect_fill"] if e["net"] != plane)
 fx = repr
 
@@ -38,7 +43,8 @@ g.SetEnd0(g.GetEnd0() + pcbnew.VECTOR2I(50000, 0))  # the saved end is the footp
     "tie_track_dropped": (f"""
 f = b.FindFootprintByReference({fx(tie['footprint'])})
 pads = [p.GetPosition() for p in f.Pads()]
-t = next(t for t in b.GetTracks() if t.GetClass() == 'PCB_TRACK' and t.GetNetname() in {fx(tie_nets)} and (t.GetStart() in pads or t.GetEnd() in pads))
+# a track of the tie itself: both ends on the tie footprint's pads
+t = next(t for t in b.GetTracks() if t.GetClass() == 'PCB_TRACK' and t.GetNetname() in {fx(tie_nets)} and t.GetStart() in pads and t.GetEnd() in pads)
 b.Remove(t)
 """, True),
     "tie_pad_wrong_net": (f"""
@@ -103,6 +109,15 @@ b.Add(t)
 }
 
 
+# mutation -> the check it targets, which must be among those that fire (review 5, 6), and whether the fixture has
+# what the mutation needs
+TARGET = {"tie_copper_moved": "A", "tie_track_dropped": "A", "tie_pad_wrong_net": "A", "tie_wrong_group": "A",
+          "keepout_removed": "B", "plane_wrong_net": "C", "plane_solid_to_holes": "D", "plane_clearance_small": "E",
+          "islands_kept": "F", "power_fill_lost": "H", "outer_pours_lost": "H", "thin_spokes": "D", "stale_fill_short": "G"}
+NEEDS = {k: bool(Z.get("net_tie")) for k in TARGET if k.startswith("tie_")}
+NEEDS["keepout_removed"] = bool(Z.get("keepouts"))
+
+
 def verify(path):
     return subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_zones.py"), base, path, fixture], capture_output=True, text=True)
 
@@ -117,6 +132,9 @@ def first_fail(v):
 results = {"unmutated passes": verify(zoned).returncode == 0}
 pro = os.path.splitext(zoned)[0] + ".kicad_pro"
 for name, (code, refill) in MUT.items():
+    if not NEEDS.get(name, True):
+        print(f"skip {name}: the fixture has nothing it needs")
+        continue
     out = os.path.join(work, name + ".kicad_pcb")
     if os.path.exists(pro):
         shutil.copy(pro, os.path.splitext(out)[0] + ".kicad_pro")
@@ -129,8 +147,10 @@ for name, (code, refill) in MUT.items():
     if refill:
         subprocess.run([sys.executable, helper, "fill", out], capture_output=True, check=True)
     v = verify(out)
-    caught = v.returncode != 0
-    results[name + " caught"] = caught
-    print(f"{'ok  ' if caught else 'FAIL'} {name} caught  {first_fail(v)}")
+    import re
+    fired = sorted({m.group(1) for m in re.finditer(r'^\s*"([A-I]): ', v.stdout, re.M)})
+    ok = v.returncode != 0 and TARGET[name] in fired
+    results[name + " caught"] = ok
+    print(f"{'ok  ' if ok else 'FAIL'} {name} caught by {TARGET[name]} (fired: {''.join(fired)})")
 print(f"{'ok  ' if results['unmutated passes'] else 'FAIL'} unmutated passes")
 sys.exit(0 if all(results.values()) else 1)

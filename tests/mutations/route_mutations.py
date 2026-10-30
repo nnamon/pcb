@@ -70,8 +70,11 @@ def m_drop_outside_via(t):
 
 def m_dangling_inside(t):
     # a stub from a target-net pad... simplest: a short free segment on the target net, inside the region
+    # two free stubs on the target net, inside the region: the route may have fixed one dangling end of that net,
+    # so one stub alone could leave the count where it was
     x, y = r[0] + 0.5, r[1] + 0.5
-    return add(t, f'  (segment (start {x} {y}) (end {x + 0.3} {y}) (width 0.15) (layer "B.Cu") (net {nets[target]}))\n')
+    stub = lambda yy: f'  (segment (start {x} {yy}) (end {x + 0.3} {yy}) (width 0.15) (layer "B.Cu") (net {nets[target]}))\n'
+    return add(t, stub(y) + stub(y + 0.6))
 
 
 def m_clearance(t):
@@ -118,7 +121,21 @@ def m_unlock(t):
     raise SystemExit("no track inside the region")
 
 
-MUT = [m_narrow_new, m_shared_id, m_unlock, m_move_outside, m_add_outside, m_drop_new, m_footprint, m_other_net_inside, m_drop_outside_via, m_dangling_inside, m_clearance, m_split_outside]
+def m_drc_swap(t):
+    # review 3, 10: the original has one clearance violation between two nets, the result one between two others;
+    # a DRC compared by kind alone sees no change
+    o = open(orig).read()
+    xs = [r[2] + 20, r[2] + 30]
+    named = [n for n in nets if n][:4]
+    clash = lambda x, a, b: (f'  (segment (start {x} {r[3] + 20}) (end {x + 3} {r[3] + 20}) (width 0.2) (layer "B.Cu") (net {nets[a]}))\n'
+                             f'  (segment (start {x + 1} {r[3] + 19}) (end {x + 1} {r[3] + 21}) (width 0.2) (layer "B.Cu") (net {nets[b]}))\n')
+    return ("ORIG", add(o, clash(xs[0], named[0], named[1])), add(t, clash(xs[1], named[2], named[3])))
+
+
+# mutation -> the check it targets, which must be among those that fire (review 5, 6)
+MUT = {m_narrow_new: "I", m_shared_id: "H", m_unlock: "G", m_move_outside: "B", m_add_outside: "C", m_drop_new: "D",
+       m_footprint: "A", m_other_net_inside: "C", m_drop_outside_via: "B", m_dangling_inside: "E", m_clearance: "F",
+       m_split_outside: "B", m_drc_swap: "F"}
 
 
 def verify(board, o=None):
@@ -127,7 +144,7 @@ def verify(board, o=None):
 
 results = {"unmutated passes": verify(routed).returncode == 0}
 pro = os.path.splitext(routed)[0] + ".kicad_pro"
-for f in MUT:
+for f, check_id in MUT.items():
     out = f(src)
     o_path = None
     if isinstance(out, tuple):
@@ -144,8 +161,9 @@ for f in MUT:
         shutil.copy(pro, os.path.splitext(p)[0] + ".kicad_pro")
     v = verify(p, o_path)
     caught = v.returncode != 0
-    why = [ln.strip()[:100] for ln in v.stdout.splitlines() if re.match(r'\s*"[A-I]: ', ln)][:1]
-    results[f.__name__ + " caught"] = caught
-    print(f"{'ok  ' if caught else 'FAIL'} {f.__name__} caught  {why[:1]}")
+    fired = sorted({m.group(1) for m in re.finditer(r'^\s*"([A-I]): ', v.stdout, re.M)})
+    ok = caught and check_id in fired
+    results[f.__name__ + " caught"] = ok
+    print(f"{'ok  ' if ok else 'FAIL'} {f.__name__} caught by {check_id} (fired: {''.join(fired)})")
 print(f"{'ok  ' if results['unmutated passes'] else 'FAIL'} unmutated passes")
 sys.exit(0 if all(results.values()) else 1)

@@ -3,6 +3,7 @@
 mod board;
 mod contract;
 mod doctor;
+mod freerouting;
 mod gate;
 mod kicad;
 mod import_tscircuit;
@@ -128,6 +129,8 @@ fn parse_region(s: &str) -> Result<(f64, f64, f64, f64)> {
 /// What a command hands back: printed through the output contract (src/contract.rs) by `main`.
 struct Reply {
     outcome: Outcome,
+    /// For an outcome other than done that still carries data (a failed doctor): its code and message.
+    error: Option<(String, String)>,
     written: Option<String>,
     warnings: Vec<Warning>,
     human: String,
@@ -135,7 +138,7 @@ struct Reply {
 }
 
 fn emit(_json_mode: bool, ok: bool, human: String, data: serde_json::Value) -> Result<Reply> {
-    Ok(Reply { outcome: if ok { Outcome::Done } else { Outcome::Rejected }, written: None, warnings: vec![], human, data })
+    Ok(Reply { outcome: if ok { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings: vec![], human, data })
 }
 
 fn command_name(c: &Cmd) -> &'static str {
@@ -166,9 +169,23 @@ fn main() {
     };
     let json_mode = cli.json;
     let name = command_name(&cli.cmd);
+    // a panic keeps the contract too: one envelope, outcome failed, exit 3 (review 5, 10)
+    {
+        let json_mode = json_mode;
+        std::panic::set_hook(Box::new(move |info| {
+            let msg = format!("pcb panicked: {info}");
+            if json_mode {
+                let v = contract::envelope(name, Outcome::Failed, None, &[], Some(("panic", &msg)), json!({}));
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            } else {
+                eprintln!("failed [panic]: {msg}");
+            }
+            std::process::exit(Outcome::Failed.exit_code());
+        }));
+    }
     let (outcome, value, human) = match run(cli) {
         Ok(r) => {
-            let v = contract::envelope(name, r.outcome, r.written.as_deref(), &r.warnings, None, r.data);
+            let v = contract::envelope(name, r.outcome, r.written.as_deref(), &r.warnings, r.error.as_ref().map(|(c, m)| (c.as_str(), m.as_str())), r.data);
             let mut h = r.human;
             for w in &r.warnings {
                 h += &format!("\nwarning [{}]: {}", w.code, w.message);
@@ -243,6 +260,7 @@ fn run(cli: Cli) -> Result<Reply> {
             }
             Ok(Reply {
                 outcome: Outcome::Done,
+                error: None,
                 written: Some(out.clone()),
                 warnings: st.warnings.clone(),
                 human: format!("wrote {out}: {} footprints, {} pads, {} nets, {} segments, {} vias", st.footprints, st.pads, st.nets, st.segments, st.vias),
@@ -279,6 +297,7 @@ fn run(cli: Cli) -> Result<Reply> {
             }
             Ok(Reply {
                 outcome: if rep.regressions.is_empty() { Outcome::Done } else { Outcome::Rejected },
+                error: None,
                 written: Some(rep.written.clone()),
                 warnings,
                 human: h,
@@ -289,10 +308,9 @@ fn run(cli: Cli) -> Result<Reply> {
             let (checks, warnings) = doctor::run(std::path::Path::new(&work), freerouting.as_deref().map(std::path::Path::new), &java)?;
             let bad: Vec<&doctor::Check> = checks.iter().filter(|c| !c.ok).collect();
             let human = checks.iter().map(|c| format!("{} {}: {}{}", if c.ok { "ok  " } else { "FAIL" }, c.name, c.found, if c.ok { String::new() } else { format!(" (want {})", c.want) })).collect::<Vec<_>>().join("\n");
-            if !bad.is_empty() {
-                return Err(contract::refused("tools-mismatch", format!("{} of {} tool checks failed:\n{human}", bad.len(), checks.len())));
-            }
-            Ok(Reply { outcome: Outcome::Done, written: None, warnings, human, data: json!({ "checks": checks }) })
+            // the checks travel with a failure too (review 5, 12)
+            let error = (!bad.is_empty()).then(|| ("tools-mismatch".to_string(), format!("{} of {} tool checks failed", bad.len(), checks.len())));
+            Ok(Reply { outcome: if bad.is_empty() { Outcome::Done } else { Outcome::Refused }, error, written: None, warnings, human, data: json!({ "checks": checks }) })
         }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;
@@ -303,7 +321,7 @@ fn run(cli: Cli) -> Result<Reply> {
                 labels: !no_labels,
             };
             render::png(&b, &o, &out)?;
-            Ok(Reply { outcome: Outcome::Done, written: Some(out.clone()), warnings: vec![], human: format!("wrote {out}"), data: json!({}) })
+            Ok(Reply { outcome: Outcome::Done, error: None, written: Some(out.clone()), warnings: vec![], human: format!("wrote {out}"), data: json!({}) })
         }
     }
 }

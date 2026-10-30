@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 pub struct Gate {
     work: PathBuf,
+    input: PathBuf,
     pro: PathBuf,
     pub before: BTreeMap<String, usize>,
 }
@@ -29,7 +30,7 @@ pub struct GateResult {
 impl Gate {
     pub fn begin(work: &Path, board: &str) -> Result<Gate> {
         let before = kicad::drc_counts(work, board, "drc_before")?;
-        Ok(Gate { work: work.to_path_buf(), pro: Path::new(board).with_extension("kicad_pro"), before })
+        Ok(Gate { work: work.to_path_buf(), input: PathBuf::from(board), pro: Path::new(board).with_extension("kicad_pro"), before })
     }
 
     pub fn finish(&self, candidate: &str, out_path: &str, has_zones: bool) -> Result<GateResult> {
@@ -50,6 +51,14 @@ impl Gate {
             let p = Path::new(out_path);
             p.with_file_name(format!("{}.rejected.kicad_pcb", p.file_stem().and_then(|s| s.to_str()).unwrap_or("board"))).to_string_lossy().to_string()
         };
+        // a rejected result must never land on the input (review 5, 3), nor on the candidate itself
+        let same = |a: &Path, b: &Path| a.exists() && b.exists() && std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok();
+        if !regressions.is_empty() && same(Path::new(&dest), &self.input) {
+            return Err(crate::contract::refused("rejected-onto-input", format!("the result was rejected, and its file name {dest} is the input board; choose another --out")));
+        }
+        if same(Path::new(&dest), &cand) {
+            return Err(crate::contract::refused("output-in-work", format!("the output {dest} is pcb's own candidate file")));
+        }
         std::fs::copy(&cand, &dest)?;
         let dest_pro = Path::new(&dest).with_extension("kicad_pro");
         if self.pro.exists() && std::fs::canonicalize(&self.pro).ok() != std::fs::canonicalize(&dest_pro).ok() {

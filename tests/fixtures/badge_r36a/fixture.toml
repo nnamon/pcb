@@ -40,11 +40,13 @@ expect = "done"
 name = "vbus_f_at_width"
 region = [40, 20.5, 60, 36]
 nets = ["VBUS_F"]
-expect = "done"            # no path at 0.3 mm: nothing written, VBUS_F reported still open
+expect = "done"            # no path at 0.3 mm: nothing gets worse, the board is written unchanged, VBUS_F reported still open
 still_open = ["VBUS_F"]
 
 # Zones (spike 3 prototype), in KiCad coordinates (mm, y down).
 [zones]
+# phase0/spike3.py is written for this board only; `pcb zone` (milestone M2) replaces it
+prototype = "spike3"
 coil_json = "nfc_coil.json"
 keepouts = [
   { name = "coil", rect = [27, 98, 57.3, 123], grow = 3.5 },

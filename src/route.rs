@@ -15,13 +15,13 @@
 use crate::board::Board;
 use crate::contract::{failed, refused};
 use crate::gate::Gate;
+use crate::freerouting;
 use crate::kicad;
 use crate::sexpr::{self, Edits, Node, fmt_num as n};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 /// mm between the region's edge and the copper that may be ripped.
@@ -121,15 +121,15 @@ fn remove(edits: &mut Edits, src: &str, span: (usize, usize)) {
     edits.replace((start, end), "");
 }
 
-struct Wire {
-    net: String,
-    layer: String,
-    width: f64,
-    pts: Vec<(f64, f64)>,
-    fixed: bool,
+pub(crate) struct Wire {
+    pub net: String,
+    pub layer: String,
+    pub width: f64,
+    pub pts: Vec<(f64, f64)>,
+    pub fixed: bool,
 }
 
-struct SesVia {
+pub(crate) struct SesVia {
     net: String,
     x: f64,
     y: f64,
@@ -151,7 +151,7 @@ fn padstack_size(name: &str) -> Option<(f64, f64)> {
     Some((d.parse::<f64>().ok()? / k, h.parse::<f64>().ok()? / k))
 }
 
-fn read_ses(text: &str) -> Result<(Vec<Wire>, Vec<SesVia>)> {
+pub(crate) fn read_ses(text: &str) -> Result<(Vec<Wire>, Vec<SesVia>)> {
     let root = sexpr::parse(text)?;
     let routes = root.find("routes").context("session has no routes")?;
     let res = routes.find("resolution").context("no resolution")?;
@@ -184,9 +184,10 @@ fn read_ses(text: &str) -> Result<(Vec<Wire>, Vec<SesVia>)> {
 }
 
 /// Keep-outs (Specctra rects, DSN units: um, y negated) on every copper layer covering the board outside `r`.
-/// Copper layers not in `layers` become plane ("power") layers, which Freerouting does not route on but vias
-/// pass through. (A wire_keepout there blocks vias in Freerouting 1.9.)
-fn keepouts(dsn: &str, b: &Board, r: (f64, f64, f64, f64), layers: &[String]) -> Result<String> {
+/// Returns the DSN and, in its layer order, whether the router may use each layer: copper layers not in `layers`
+/// go to Freerouting as `--router.layers.routable=false`, and vias still pass through them. (Freerouting 2.5 turns a
+/// `(type power)` layer with no plane back into a signal layer, and a wire_keepout there blocks vias in 1.9.)
+fn keepouts(dsn: &str, b: &Board, r: (f64, f64, f64, f64), layers: &[String]) -> Result<(String, Vec<bool>)> {
     let (bx0, by0, bx1, by1) = b.bbox();
     let m = 1.0;
     let rects = [
@@ -210,10 +211,10 @@ fn keepouts(dsn: &str, b: &Board, r: (f64, f64, f64, f64), layers: &[String]) ->
     // insert just before the end of (structure ...)
     let root = sexpr::parse(dsn)?;
     let st = root.find("structure").context("DSN has no structure")?;
+    let routable = routable_layers(st, layers)?;
     let mut e = Edits::default();
-    set_layer_types(st, layers, &mut e)?;
     e.insert(st.span.1 - 1, k);
-    e.apply(dsn)
+    Ok((e.apply(dsn)?, routable))
 }
 
 /// Declare, with no pins, every net that wiring uses but the network lacks. KiCad leaves out nets that have
@@ -332,14 +333,52 @@ fn width_classes(dsn: &str, widths: &BTreeMap<String, f64>) -> Result<(String, B
     Ok((e.apply(dsn)?, moved))
 }
 
-fn set_layer_types(structure: &Node, layers: &[String], e: &mut Edits) -> Result<()> {
-    for layer in structure.find_all("layer") {
-        let name = layer.arg(1).context("layer without a name")?;
-        let ty = layer.find("type").context("layer without a type")?;
-        let want = if layers.iter().any(|l| l == name) { "signal" } else { "power" };
-        e.replace(ty.span, format!("(type {want})"));
+/// Move every net not in `nets` into a sibling of its class, with the same rule, and return the new classes'
+/// names for `--router.autorouter.ignore_net_classes`. Freerouting otherwise tries every open connection on the
+/// board, all of them behind the region's keep-outs; 2.5 spent over 9 minutes on the badge doing that. A class
+/// left with no nets is removed. An empty `nets` routes every net, so nothing moves.
+fn ignore_other_nets(dsn: &str, nets: &[String]) -> Result<(String, Vec<String>)> {
+    if nets.is_empty() {
+        return Ok((dsn.to_string(), vec![]));
     }
-    Ok(())
+    let root = sexpr::parse(dsn)?;
+    let network = root.find("network").context("DSN has no network")?;
+    let mut e = Edits::default();
+    let mut add = String::new();
+    let mut ignored = vec![];
+    for (i, class) in network.find_all("class").enumerate() {
+        let members: Vec<&Node> = class.items().iter().skip(2).filter(|it| it.atom().is_some()).collect();
+        let others: Vec<&&Node> = members.iter().filter(|it| !nets.iter().any(|n| Some(n.as_str()) == it.atom())).collect();
+        if others.is_empty() {
+            continue;
+        }
+        let name = format!("pcb_not_routed_{i}");
+        let rest: String =
+            class.items().iter().filter(|it| it.atom().is_none()).map(|it| format!("\n      {}", &dsn[it.span.0..it.span.1])).collect();
+        let list: Vec<&str> = others.iter().map(|it| &dsn[it.span.0..it.span.1]).collect();
+        add.push_str(&format!("    (class {name} {}{rest}\n    )\n", list.join(" ")));
+        if others.len() == members.len() {
+            e.replace(class.span, "");
+        } else {
+            for it in others {
+                e.replace(it.span, "");
+            }
+        }
+        ignored.push(name);
+    }
+    e.insert(network.span.1 - 1, add);
+    Ok((e.apply(dsn)?, ignored))
+}
+
+/// Whether each DSN layer, in file order (Freerouting's layer numbers), is one the router may use.
+fn routable_layers(structure: &Node, layers: &[String]) -> Result<Vec<bool>> {
+    structure
+        .find_all("layer")
+        .map(|layer| {
+            let name = layer.arg(1).context("layer without a name")?;
+            Ok(layers.iter().any(|l| l == name))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -493,11 +532,12 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         return Err(failed("kicad", "KiCad DSN export failed"));
     }
     let scratch_board = Board::load(scratch_pcb.to_str().unwrap())?;
-    let dsn_text = keepouts(&std::fs::read_to_string(&dsn)?, &scratch_board, r, &o.layers)?;
+    let (dsn_text, routable) = keepouts(&std::fs::read_to_string(&dsn)?, &scratch_board, r, &o.layers)?;
     let (dsn_text, declared) = declare_wiring_nets(&dsn_text)?;
     rep.declared_pinless_nets = declared;
     let (dsn_text, widths) = width_classes(&dsn_text, &net_widths(&b))?;
     rep.net_widths = widths;
+    let (dsn_text, ignored) = ignore_other_nets(&dsn_text, &o.nets)?;
     // Freerouting 1.9 hung on a dialog for any non-ASCII character; 2.5 runs headless, but the session must still
     // match the board's names, so the DSN stays ASCII
     let dsn_text: String = dsn_text.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect();
@@ -509,38 +549,8 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let mut plane_nets: Vec<String> = b.zones.iter().map(|z| z.net.clone()).filter(|n| !n.is_empty()).collect();
     plane_nets.sort();
     plane_nets.dedup();
-    // Freerouting 2.5 runs headless (no display, no dialogs); the time limit still bounds a long route
-    let fr = Command::new("timeout")
-        .arg(o.timeout_s.to_string())
-        .arg(&o.java)
-        .arg("-jar")
-        .arg(&o.fr_jar)
-        .arg("--gui.enabled=false")
-        .arg(format!("--router.autorouter.max_passes={}", o.passes))
-        // no fanout pre-pass: it lays 0.25 mm vias and may rip existing traces
-        .arg("--router.fanout.enabled=false")
-        // no neckdown: it narrows a net's traces below the width its class sets
-        .arg("--router.automatic_neckdown=false")
-        // plane nets are the nets that have zones on this board, not Freerouting's default GND and VCC
-        .arg(format!("--router.plane_nets={}", plane_nets.join(",")))
-        // no analytics or update checks from a CI or agent run
-        .arg("--usage_and_diagnostic_data.disable_analytics=true")
-        .arg("-de").arg(&dsn).arg("-do").arg(&ses)
-        .current_dir(&o.work)
-        .output()
-        .map_err(|e| failed("freerouting", format!("running Freerouting: {e}")))?;
-    let log = String::from_utf8_lossy(&fr.stdout).to_string() + &String::from_utf8_lossy(&fr.stderr);
-    if fr.status.code() == Some(124) {
-        let warns: Vec<&str> = log.lines().filter(|l| l.contains(" WARN ") || l.contains(" ERROR ")).collect();
-        if warns.is_empty() {
-            return Err(failed("freerouting-timeout", format!("Freerouting did not finish within {} s", o.timeout_s)));
-        }
-        return Err(failed("freerouting-timeout", format!("Freerouting did not finish within {} s; it shows import warnings in a dialog that waits for a click, so these probably hung it:\n{}", o.timeout_s, warns.join("\n"))));
-    }
+    let log = freerouting::run(&o.java, &o.fr_jar, &o.work, &dsn, &ses, o.passes, &plane_nets, &routable, &ignored, o.timeout_s)?;
     rep.freerouting_log = log.lines().filter(|l| l.contains("INFO") || l.contains("WARN") || l.contains("ERROR")).map(|l| l.chars().skip(24).collect::<String>()).collect::<Vec<_>>().join("\n");
-    if !ses.exists() {
-        return Err(failed("freerouting", format!("Freerouting wrote no session:\n{}", rep.freerouting_log)));
-    }
 
     // 5. read back, keep new copper for the requested nets inside the region
     let (wires, vias) = read_ses(&std::fs::read_to_string(&ses)?)?;
@@ -818,16 +828,34 @@ mod tests {
     }
 
     #[test]
-    fn layer_types_follow_routing_layers() {
-        let dsn = "(pcb x\n  (structure\n    (layer F.Cu\n      (type signal)\n    )\n    (layer In1.Cu\n      (type signal)\n    )\n    (layer B.Cu\n      (type power)\n    )\n  )\n)\n";
+    fn other_nets_go_to_ignored_classes_with_their_rules() {
+        let dsn = "(pcb x\n  (network\n    (class kicad_default \"\" A B \"/C\"\n      (circuit\n        (use_via V)\n      )\n      (rule\n        (width 200)\n        (clearance 200)\n      )\n    )\n    (class pcb_width_400 D\n      (circuit (use_via V))\n      (rule (width 400) (clearance 200))\n    )\n  )\n)\n";
+        let (out, ignored) = ignore_other_nets(dsn, &["A".to_string()]).unwrap();
+        assert_eq!(ignored, vec!["pcb_not_routed_0", "pcb_not_routed_1"]);
+        let root = sexpr::parse(&out).unwrap();
+        let net = root.find("network").unwrap();
+        let classes: Vec<(String, Vec<String>, Option<f64>)> = net
+            .find_all("class")
+            .map(|c| {
+                let members = c.items().iter().skip(2).filter_map(|i| i.atom().map(String::from)).collect();
+                (c.arg(1).unwrap().to_string(), members, c.find("rule").and_then(|r| r.find("width")).and_then(|w| w.num(1)))
+            })
+            .collect();
+        assert_eq!(classes[0], ("kicad_default".into(), vec!["A".into()], Some(200.0)));
+        assert_eq!(classes[1], ("pcb_not_routed_0".into(), vec!["".into(), "B".into(), "/C".into()], Some(200.0)));
+        assert_eq!(classes[2], ("pcb_not_routed_1".into(), vec!["D".into()], Some(400.0)));
+        assert_eq!(classes.len(), 3, "the emptied width class is removed");
+        assert!(out.contains("(class pcb_not_routed_0 \"\" B \"/C\""));
+        assert_eq!(ignore_other_nets(dsn, &[]).unwrap(), (dsn.to_string(), vec![]));
+    }
+
+    #[test]
+    fn routable_follows_routing_layers_in_dsn_order() {
+        let dsn = "(pcb x\n  (structure\n    (layer F.Cu\n      (type signal)\n    )\n    (layer In1.Cu\n      (type signal)\n    )\n    (layer In2.Cu\n      (type power)\n    )\n    (layer B.Cu\n      (type signal)\n    )\n  )\n)\n";
         let root = sexpr::parse(dsn).unwrap();
         let st = root.find("structure").unwrap();
-        let mut e = Edits::default();
-        set_layer_types(st, &["F.Cu".to_string(), "B.Cu".to_string()], &mut e).unwrap();
-        let out = e.apply(dsn).unwrap();
-        assert!(out.contains("(layer F.Cu\n      (type signal)"));
-        assert!(out.contains("(layer In1.Cu\n      (type power)"));
-        assert!(out.contains("(layer B.Cu\n      (type signal)"));
+        assert_eq!(routable_layers(st, &["F.Cu".to_string(), "B.Cu".to_string()]).unwrap(), vec![true, false, false, true]);
+        assert_eq!(routable_layers(st, &["In2.Cu".to_string()]).unwrap(), vec![false, false, true, false]);
     }
 
     #[test]
