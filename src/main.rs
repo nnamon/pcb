@@ -66,6 +66,9 @@ enum Cmd {
         /// Freerouting jar.
         #[arg(long, env = "PCB_FREEROUTING_JAR")]
         freerouting: String,
+        /// Java 25 or later, which runs Freerouting.
+        #[arg(long, env = "PCB_JAVA", default_value = "java")]
+        java: String,
         /// Work directory for the DSN, session and logs.
         #[arg(long, default_value = "pcb_work")]
         work: String,
@@ -83,11 +86,14 @@ enum Cmd {
         #[arg(long, short)]
         out: Option<String>,
     },
-    /// Check the pinned tool versions (KiCad 7.0.11, Freerouting 1.9.0) and the tool behaviours pcb relies on.
+    /// Check the pinned tool versions (KiCad 7.0.11, Freerouting 2.5.0 on Java 25) and the tool behaviours pcb relies on.
     Doctor {
         /// Freerouting jar.
         #[arg(long, env = "PCB_FREEROUTING_JAR")]
         freerouting: Option<String>,
+        /// Java that runs Freerouting.
+        #[arg(long, env = "PCB_JAVA", default_value = "java")]
+        java: String,
         /// Work directory for the self-test files.
         #[arg(long, default_value = "pcb_work/doctor")]
         work: String,
@@ -243,12 +249,13 @@ fn run(cli: Cli) -> Result<Reply> {
                 data: json!({ "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
             })
         }
-        Cmd::Route { board, region, nets, passes, freerouting, work, rip, layers, timeout, out } => {
+        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, out } => {
             let o = route::Opts {
                 region: parse_region(&region)?,
                 nets: nets.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
                 passes,
                 fr_jar: std::fs::canonicalize(&freerouting).with_context(|| format!("Freerouting jar {freerouting}"))?,
+                java: std::path::PathBuf::from(&java),
                 work: std::path::PathBuf::from(&work),
                 rip: match rip.as_str() {
                     "none" | "" => route::Rip::None,
@@ -278,8 +285,8 @@ fn run(cli: Cli) -> Result<Reply> {
                 data: serde_json::to_value(&rep)?,
             })
         }
-        Cmd::Doctor { freerouting, work } => {
-            let (checks, warnings) = doctor::run(std::path::Path::new(&work), freerouting.as_deref().map(std::path::Path::new))?;
+        Cmd::Doctor { freerouting, java, work } => {
+            let (checks, warnings) = doctor::run(std::path::Path::new(&work), freerouting.as_deref().map(std::path::Path::new), &java)?;
             let bad: Vec<&doctor::Check> = checks.iter().filter(|c| !c.ok).collect();
             let human = checks.iter().map(|c| format!("{} {}: {}{}", if c.ok { "ok  " } else { "FAIL" }, c.name, c.found, if c.ok { String::new() } else { format!(" (want {})", c.want) })).collect::<Vec<_>>().join("\n");
             if !bad.is_empty() {

@@ -91,7 +91,7 @@ fn main() -> Result<()> {
     let pcb = s.pcb.to_string_lossy().to_string();
     let jar = s.jar.as_ref().map(|p| p.to_string_lossy().to_string());
     if !s.fast && jar.is_none() {
-        bail!("PCB_FREEROUTING_JAR must name the Freerouting 1.9.0 jar (or use --fast)");
+        bail!("PCB_FREEROUTING_JAR must name the Freerouting 2.5.0 jar (or use --fast)");
     }
 
     // the pinned tools first: nothing else means anything on other versions

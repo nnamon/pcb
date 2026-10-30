@@ -1,7 +1,7 @@
 //! `pcb doctor`: the tools pcb is tested against, and the behaviours of theirs it relies on.
 //!
-//! Versions are pinned (proposal, decision 4): KiCad 7.0.11 and Freerouting 1.9.0, checked by version string and,
-//! for the jar, by SHA-256. The self-tests record each tool behaviour a workaround in pcb depends on; if an upgrade
+//! Versions are pinned (proposal, decision 4): KiCad 7.0.11 and Freerouting 2.5.0 (on Java 25), checked by version
+//! string and, for the jar, by SHA-256. The self-tests record each tool behaviour a workaround in pcb depends on; if an upgrade
 //! changes one, doctor fails and names it, before any board is touched.
 
 use crate::contract::{Warning, warn};
@@ -12,7 +12,9 @@ use std::path::Path;
 use std::process::Command;
 
 pub const KICAD_VERSION: &str = "7.0.11";
-pub const FREEROUTING_SHA256: &str = "9084a4888937a7f31f857ecc12aa7a37407f51160e4d2892dff9c9bb47ae3102";
+/// freerouting-2.5.0.jar from the v2.5.0 GitHub release (5 Oct 2026).
+pub const FREEROUTING_SHA256: &str = "f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7";
+pub const JAVA_MAJOR: u32 = 25;
 
 #[derive(Serialize)]
 pub struct Check {
@@ -35,7 +37,7 @@ fn on_path(prog: &str) -> bool {
     Command::new("sh").args(["-c", &format!("command -v {prog}")]).output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-pub fn run(work: &Path, freerouting: Option<&Path>) -> Result<(Vec<Check>, Vec<Warning>)> {
+pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<Check>, Vec<Warning>)> {
     std::fs::create_dir_all(work)?;
     let mut checks = vec![];
     let mut warnings = vec![];
@@ -55,15 +57,19 @@ pub fn run(work: &Path, freerouting: Option<&Path>) -> Result<(Vec<Check>, Vec<W
         }
         Err(e) => checks.push(check("kicad python module", false, format!("{e:#}"), "pcbnew importable by python3")),
     }
-    for prog in ["java", "xvfb-run", "timeout", "kicad-cli"] {
+    // Freerouting 2.5 is built for Java 25
+    let jv = Command::new(java).arg("-version").output().map(|o| String::from_utf8_lossy(&o.stderr).to_string()).unwrap_or_default();
+    let major = jv.lines().find(|l| l.contains(" version \"")).and_then(|l| l.split('"').nth(1)).and_then(|v| v.split('.').next()).and_then(|m| m.parse::<u32>().ok()).unwrap_or(0);
+    checks.push(check("java for freerouting", major >= JAVA_MAJOR, format!("{java}: {major}"), format!("{JAVA_MAJOR} or later")));
+    for prog in ["timeout", "kicad-cli"] {
         checks.push(check(&format!("{prog} on PATH"), on_path(prog), if on_path(prog) { "found" } else { "missing" }, "found"));
     }
     match freerouting {
         Some(jar) if jar.exists() => {
             let h = sha256_file(jar)?;
-            checks.push(check("freerouting 1.9.0 jar", h == FREEROUTING_SHA256, h, FREEROUTING_SHA256));
+            checks.push(check("freerouting 2.5.0 jar", h == FREEROUTING_SHA256, h, FREEROUTING_SHA256));
         }
-        Some(jar) => checks.push(check("freerouting 1.9.0 jar", false, format!("{} not found", jar.display()), "the jar")),
+        Some(jar) => checks.push(check("freerouting 2.5.0 jar", false, format!("{} not found", jar.display()), "the jar")),
         None => warnings.push(warn("no-freerouting", "no Freerouting jar given (--freerouting or PCB_FREEROUTING_JAR); pcb route will not run")),
     }
     Ok((checks, warnings))

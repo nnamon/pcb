@@ -34,6 +34,8 @@ pub struct Opts {
     pub nets: Vec<String>,
     pub passes: u32,
     pub fr_jar: PathBuf,
+    /// The Java that runs Freerouting (2.5 needs Java 25).
+    pub java: PathBuf,
     pub work: PathBuf,
     /// Which unlocked copper wholly inside the region is removed and routed again.
     pub rip: Rip,
@@ -401,7 +403,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     std::fs::create_dir_all(&o.work)?;
     // absolute, because Freerouting runs inside the work directory
     let work = std::fs::canonicalize(&o.work)?;
-    let o = &Opts { region: o.region, nets: o.nets.clone(), passes: o.passes, fr_jar: o.fr_jar.clone(), work, rip: o.rip.clone(), layers: o.layers.clone(), timeout_s: o.timeout_s };
+    let o = &Opts { region: o.region, nets: o.nets.clone(), passes: o.passes, fr_jar: o.fr_jar.clone(), java: o.java.clone(), work, rip: o.rip.clone(), layers: o.layers.clone(), timeout_s: o.timeout_s };
     // names checked before `--rip all` clears the list (review 4, R3)
     {
         let b0 = Board::load(board_path)?;
@@ -496,19 +498,34 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     rep.declared_pinless_nets = declared;
     let (dsn_text, widths) = width_classes(&dsn_text, &net_widths(&b))?;
     rep.net_widths = widths;
-    // Freerouting 1.9 shows a modal warning for any non-ASCII character and waits for a click that never comes
+    // Freerouting 1.9 hung on a dialog for any non-ASCII character; 2.5 runs headless, but the session must still
+    // match the board's names, so the DSN stays ASCII
     let dsn_text: String = dsn_text.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect();
     std::fs::write(&dsn, dsn_text)?;
 
     // 4. Freerouting
     let ses = o.work.join("route.ses");
     let _ = std::fs::remove_file(&ses);
-    // a time limit: any other modal dialog would hang the run the same way
+    let mut plane_nets: Vec<String> = b.zones.iter().map(|z| z.net.clone()).filter(|n| !n.is_empty()).collect();
+    plane_nets.sort();
+    plane_nets.dedup();
+    // Freerouting 2.5 runs headless (no display, no dialogs); the time limit still bounds a long route
     let fr = Command::new("timeout")
         .arg(o.timeout_s.to_string())
-        .args(["xvfb-run", "-a", "java", "-jar"])
+        .arg(&o.java)
+        .arg("-jar")
         .arg(&o.fr_jar)
-        .arg("-de").arg(&dsn).arg("-do").arg(&ses).arg("-mp").arg(o.passes.to_string())
+        .arg("--gui.enabled=false")
+        .arg(format!("--router.autorouter.max_passes={}", o.passes))
+        // no fanout pre-pass: it lays 0.25 mm vias and may rip existing traces
+        .arg("--router.fanout.enabled=false")
+        // no neckdown: it narrows a net's traces below the width its class sets
+        .arg("--router.automatic_neckdown=false")
+        // plane nets are the nets that have zones on this board, not Freerouting's default GND and VCC
+        .arg(format!("--router.plane_nets={}", plane_nets.join(",")))
+        // no analytics or update checks from a CI or agent run
+        .arg("--usage_and_diagnostic_data.disable_analytics=true")
+        .arg("-de").arg(&dsn).arg("-do").arg(&ses)
         .current_dir(&o.work)
         .output()
         .map_err(|e| failed("freerouting", format!("running Freerouting: {e}")))?;
@@ -553,7 +570,12 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                 rep.dropped_outside += 1;
                 continue;
             }
-            if existing.contains(&seg_key(a, c, &w.layer)) {
+            // a duplicate: the same segment, or one lying along a kept track of its net (Freerouting 2.5 returns
+            // pad-to-join stubs over existing copper; splitting the kept track for them would rewrite it)
+            let along = b.tracks.iter().any(|t| {
+                !rip_track(t) && t.net == w.net && t.layer == w.layer && point_seg_dist(a, (t.x0, t.y0), (t.x1, t.y1)) < 1e-3 && point_seg_dist(c, (t.x0, t.y0), (t.x1, t.y1)) < 1e-3
+            });
+            if existing.contains(&seg_key(a, c, &w.layer)) || along {
                 rep.dropped_duplicates += 1;
                 continue;
             }
