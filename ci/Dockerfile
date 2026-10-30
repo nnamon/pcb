@@ -1,15 +1,17 @@
 # CI image for tools/pcb: the exact tool versions pcb is tested against (pcb doctor checks them at run time).
 # Built by .github/workflows/pcb-ci-image.yml and published as ghcr.io/<owner>/claude-pcb/pcb-ci:<IMAGE_VERSION>.
 # Bump IMAGE_VERSION (and the tag in pcb-test.yml) whenever this file changes; the workflow refuses to overwrite a tag.
-# Pinned (review 6, K11): the base image by digest; Ubuntu's archive and the KiCad PPA at one snapshot date (Launchpad
-# keeps dated snapshots of PPAs too, so old KiCad builds stay installable); pip packages exactly; Rust by toolchain;
-# Freerouting by SHA-256. Not pinned: the rustup installer script (the toolchain it installs is).
+# Pinned: the base image by digest, KiCad by exact version, pip packages exactly, Rust by toolchain, Freerouting by
+# SHA-256. Other Ubuntu packages come from the live archive: Ubuntu's snapshot service, which would pin them too, served
+# at about 270 kB/s to GitHub's runners and made the build 32 minutes instead of about 4 (30 Oct 2026). The published
+# image is the reproducible record instead: a tag is published once and never overwritten, every apt and pip package
+# version in it is listed in /opt/pcb-ci/packages.txt, and the tests always run on a published tag.
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
-ARG IMAGE_VERSION=6
-ARG APT_SNAPSHOT=20261030T090000Z
-# KiCad 10 from the KiCad project's PPA (Ubuntu 24.04 ships 7.0.11), read at APT_SNAPSHOT. To move to a newer KiCad,
-# move APT_SNAPSHOT past its release, bump this and KICAD_VERSION in src/doctor.rs together, and re-run the suite.
+ARG IMAGE_VERSION=7
+# KiCad 10 from the KiCad project's PPA (Ubuntu 24.04 ships 7.0.11). The PPA keeps only its newest build, so when it
+# moves on this pin stops installing: bump it and KICAD_VERSION in src/doctor.rs together and re-run the suite. Images
+# already published keep working.
 ARG KICAD_VERSION=10.0.8~ubuntu24.04.1
 ARG KICAD_PPA_FINGERPRINT=FDA854F61C4D0D9572BB95E5245D5502FAD7A805
 ARG FREEROUTING_VERSION=2.5.0
@@ -20,20 +22,14 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 
 # the PPA's signing key is kept beside this file and checked against the fingerprint Launchpad publishes
 COPY kicad-10-ppa.asc /tmp/kicad-10-ppa.asc
-# The snapshot service is HTTPS only and the base image has no CA certificates, so ca-certificates and gnupg come first
-# from the live archive over plain HTTP (signed by Ubuntu's archive key), and are reinstalled from the snapshot below.
-# Then every apt command reads the archive and the PPA as they were at APT_SNAPSHOT: set in apt's config, not as a flag
-# on update alone, because `apt-get update --snapshot` leaves install reading the live archive (review 7, C3).
+# ca-certificates and gnupg first (the base image has neither), to fetch and check the PPA over HTTPS
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnupg ca-certificates \
- && printf 'APT::Snapshot "%s";\n' "${APT_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
- && rm -rf /var/lib/apt/lists/* \
  && test "$(gpg --show-keys --with-colons /tmp/kicad-10-ppa.asc | awk -F: '/^fpr/ {print $10; exit}')" = "${KICAD_PPA_FINGERPRINT}" \
  && mkdir -p /etc/apt/keyrings && gpg --dearmor < /tmp/kicad-10-ppa.asc > /etc/apt/keyrings/kicad-10.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/kicad-10.gpg] https://ppa.launchpadcontent.net/kicad/kicad-10.0-releases/ubuntu noble main" > /etc/apt/sources.list.d/kicad-10.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends --allow-downgrades \
-      gnupg ca-certificates \
+ && apt-get install -y --no-install-recommends \
       kicad=${KICAD_VERSION} \
       python3 python3-pip python3-shapely \
       openjdk-25-jre-headless \
@@ -55,6 +51,10 @@ ENV PCB_FREEROUTING_JAR=/opt/freerouting/freerouting-${FREEROUTING_VERSION}.jar
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION} \
  && rustc --version
+
+# what went into this image, for anyone rebuilding or comparing it
+RUN mkdir -p /opt/pcb-ci \
+ && { dpkg-query -W -f '${Package}=${Version}\n'; pip3 list --path /usr/local/lib/python3.12/dist-packages --format freeze; rustc --version; } > /opt/pcb-ci/packages.txt
 
 LABEL org.opencontainers.image.description="pcb CI: KiCad ${KICAD_VERSION}, Freerouting ${FREEROUTING_VERSION}, Rust ${RUST_VERSION}" \
       pcb.ci.image-version="${IMAGE_VERSION}"
