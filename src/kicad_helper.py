@@ -30,6 +30,8 @@ def main():
             items.append({"type": m.group(1), "message": m.group(2), "severity": sev.group(1) if sev else "", "at": locs})
         print(json.dumps({"ok": bool(ok), "items": items}))
     elif cmd == "fill":
+        # connectivity first: the filler uses it to find and remove unconnected islands
+        b.BuildConnectivity()
         pcbnew.ZONE_FILLER(b).Fill(b.Zones())
         b.Save(path)
         print(json.dumps({"ok": True, "zones": len(b.Zones())}))
