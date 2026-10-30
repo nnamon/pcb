@@ -147,7 +147,9 @@ fn sanitize_lib(name: &str) -> String {
 }
 
 /// `layers`: copper layers to write; `None` takes the circuit JSON's `num_layers` (2 if absent).
-pub fn convert(cj: &str, layers: Option<u32>) -> Result<(String, Stats)> {
+/// `allow_cross`: nets whose traces may end on another net's port (a coil drawn as a net between two pins, made a
+/// net tie later); any other trace that does stops the import, because it is a short.
+pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<(String, Stats)> {
     let d: Vec<Value> = serde_json::from_str(cj).context("circuit JSON")?;
     let mut warnings = vec![];
     for e in &d {
@@ -313,7 +315,10 @@ pub fn convert(cj: &str, layers: Option<u32>) -> Result<(String, Stats)> {
                 let (Some(qx), Some(qy)) = (f(pp, "x"), f(pp, "y")) else { continue };
                 let pn = port_net.get(s(pp, "source_port_id")).cloned().unwrap_or_default();
                 if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 && !pn.is_empty() && pn != net {
-                    warnings.push(format!("trace {} ({net}) ends on a port of net {pn}", s(t, "pcb_trace_id")));
+                    if !allow_cross.iter().any(|a| *a == net) {
+                        bail!("trace {} ({net}) ends on a port of net {pn}: a short (allow it with --allow-cross-net {net} if the trace is a net tie)", s(t, "pcb_trace_id"));
+                    }
+                    warnings.push(format!("trace {} ({net}) ends on a port of net {pn}, allowed", s(t, "pcb_trace_id")));
                 }
             }
         }
@@ -628,7 +633,11 @@ pub fn convert(cj: &str, layers: Option<u32>) -> Result<(String, Stats)> {
     // against the badge source; review 1, N10)
     let mut hn = 0;
     for e in by(&d, "pcb_hole").filter(|e| s(e, "pcb_component_id").is_empty()) {
-        anyhow::ensure!(s(e, "hole_shape") == "circle", "non-circular board hole");
+        match s(e, "hole_shape") {
+            "circle" => {}
+            "" => bail!("board hole at ({}, {}) has no hole_shape", f(e, "x").unwrap_or(0.0), f(e, "y").unwrap_or(0.0)),
+            other => bail!("board hole shape {other} is not handled"),
+        }
         hn += 1;
         let hd = f(e, "hole_diameter").context("hole")?;
         let (hx, hy) = x.pt(f(e, "x").context("x")?, f(e, "y").context("y")?);
@@ -808,14 +817,14 @@ mod tests {
     #[test]
     fn rejects_unknown_elements() {
         let j = r#"[{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]},{"type":"pcb_cutout"}]"#;
-        assert!(convert(j, Some(2)).is_err());
+        assert!(convert(j, Some(2), &[]).is_err());
     }
 
     #[test]
     fn rejects_layer_change_without_via() {
         let j = r#"[{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]},
             {"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"},{"route_type":"wire","x":1,"y":0,"width":0.2,"layer":"bottom"}]}]"#;
-        let e = convert(j, Some(2)).err().unwrap().to_string();
+        let e = convert(j, Some(2), &[]).err().unwrap().to_string();
         assert!(e.contains("without a via"), "{e}");
     }
 
@@ -823,7 +832,7 @@ mod tests {
     fn via_route_point_joins_both_sides() {
         let j = r#"[{"type":"pcb_board","width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]},
             {"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"},{"route_type":"via","x":1,"y":0,"from_layer":"top","to_layer":"bottom"},{"route_type":"wire","x":2,"y":0,"width":0.2,"layer":"bottom"}]}]"#;
-        let (text, st) = convert(j, Some(2)).unwrap();
+        let (text, st) = convert(j, Some(2), &[]).unwrap();
         assert_eq!(st.segments, 2, "{text}");
         // review 2, 1: the via point with no pcb_via gets a via
         assert_eq!(st.vias, 1, "{text}");
@@ -836,7 +845,7 @@ mod tests {
     fn via_point_needs_to_layer() {
         let j = format!(r#"[{BOARD},
             {{"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"}},{{"route_type":"via","x":1,"y":0}},{{"route_type":"wire","x":2,"y":0,"width":0.2,"layer":"bottom"}}]}}]"#);
-        let e = convert(&j, Some(2)).err().unwrap().to_string();
+        let e = convert(&j, Some(2), &[]).err().unwrap().to_string();
         assert!(e.contains("to_layer"), "{e}");
     }
 
@@ -845,23 +854,23 @@ mod tests {
         let j = format!(r#"[{BOARD},
             {{"type":"pcb_trace","pcb_trace_id":"t","net_name":"A","route":[{{"route_type":"wire","x":0,"y":0,"width":0.2,"layer":"top"}},{{"route_type":"wire","x":1,"y":0,"width":0.2,"layer":"top"}}]}},
             {{"type":"pcb_via","pcb_via_id":"v","x":1,"y":0,"outer_diameter":0.6,"hole_diameter":0.3}}]"#);
-        let (text, _) = convert(&j, Some(2)).unwrap();
+        let (text, _) = convert(&j, Some(2), &[]).unwrap();
         assert!(text.contains("(drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1))"), "{text}");
         let lonely = format!(r#"[{BOARD},{{"type":"pcb_via","pcb_via_id":"v","x":3,"y":3,"outer_diameter":0.6,"hole_diameter":0.3}}]"#);
-        assert!(convert(&lonely, Some(2)).is_err());
+        assert!(convert(&lonely, Some(2), &[]).is_err());
     }
 
     #[test]
     fn blind_via_by_layers_list() {
         let j = format!(r#"[{BOARD},{{"type":"pcb_via","pcb_via_id":"v","x":3,"y":3,"outer_diameter":0.6,"hole_diameter":0.3,"net_name":"A","layers":["top","inner1"]}}]"#);
-        let e = convert(&j, Some(4)).err().unwrap().to_string();
+        let e = convert(&j, Some(4), &[]).err().unwrap().to_string();
         assert!(e.contains("only through vias"), "{e}");
     }
 
     #[test]
     fn trace_error_stops_import() {
         let j = format!(r#"[{BOARD},{{"type":"pcb_trace_error","message":"unrouted"}}]"#);
-        assert!(convert(&j, Some(2)).err().unwrap().to_string().contains("pcb_trace_error"));
+        assert!(convert(&j, Some(2), &[]).err().unwrap().to_string().contains("pcb_trace_error"));
     }
 
     #[test]
@@ -872,7 +881,7 @@ mod tests {
     #[test]
     fn layers_default_to_the_json() {
         let j = r#"[{"type":"pcb_board","num_layers":4,"width":10,"height":10,"outline":[{"x":-5,"y":-5},{"x":5,"y":-5},{"x":5,"y":5}]}]"#;
-        let (text, st) = convert(j, None).unwrap();
+        let (text, st) = convert(j, None, &[]).unwrap();
         assert!(text.contains("In1.Cu") && st.warnings.is_empty(), "{text}");
     }
 }

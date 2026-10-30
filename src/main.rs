@@ -39,6 +39,9 @@ enum Cmd {
         /// Copper layers to write (default: the circuit JSON's num_layers).
         #[arg(long)]
         layers: Option<u32>,
+        /// Nets whose traces may end on another net's port (comma-separated), for a net tie drawn as a trace.
+        #[arg(long, default_value = "")]
+        allow_cross_net: String,
         #[arg(long, short)]
         out: String,
     },
@@ -166,9 +169,9 @@ fn run(cli: Cli) -> Result<()> {
                 "locked_tracks": locked, "vias": b.vias.len(), "zones": b.zones.len()
             }))
         }
-        Cmd::ImportTscircuit { circuit_json, layers, out } => {
+        Cmd::ImportTscircuit { circuit_json, layers, allow_cross_net, out } => {
             let src = std::fs::read_to_string(&circuit_json)?;
-            let (text, st) = import_tscircuit::convert(&src, layers)?;
+            let (text, st) = import_tscircuit::convert(&src, layers, &allow_cross_net.split(',').filter(|x| !x.is_empty()).map(String::from).collect::<Vec<_>>())?;
             std::fs::write(&out, &text)?;
             // the project file carries the design rules; written only if none exists, so hand-tuned rules survive
             let pro = std::path::Path::new(&out).with_extension("kicad_pro");
