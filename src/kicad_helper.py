@@ -2,7 +2,7 @@
 work directory at run time; prints one JSON object.
 
   dsn  board.kicad_pcb out.dsn         Specctra DSN export (locked tracks go out as fixed wiring)
-  drc  board.kicad_pcb report.rpt      DRC report plus a JSON summary of violations by type and position
+  drc  board.kicad_pcb report.rpt      zones refilled in memory, then DRC report plus a JSON summary by type and position
   fill board.kicad_pcb                 fill every zone and save the board
 """
 import json
@@ -20,6 +20,10 @@ def main():
         print(json.dumps({"ok": bool(ok), "dsn": sys.argv[3]}))
     elif cmd == "drc":
         rpt = sys.argv[3]
+        # fills as they would be now, in memory only: a stale fill gives false clearance and connection results
+        if len(b.Zones()):
+            b.BuildConnectivity()
+            pcbnew.ZONE_FILLER(b).Fill(b.Zones())
         ok = pcbnew.WriteDRCReport(b, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
         text = open(rpt).read()
         items = []

@@ -91,25 +91,60 @@ def m_split_outside(t):
     return t[:m.start()] + p1 + p2 + t[m.end():]
 
 
-MUT = [m_move_outside, m_add_outside, m_drop_new, m_footprint, m_other_net_inside, m_drop_outside_via, m_dangling_inside, m_clearance, m_split_outside]
+def added_lines(t):
+    o = set(open(orig).read().split("\n"))
+    return [ln for ln in t.split("\n") if ln.strip().startswith("(segment") and ln not in o]
 
 
-def verify(board):
-    return subprocess.run([sys.executable, os.path.join(here, "verify_route.py"), orig, board, region, targets, allowed], capture_output=True, text=True)
+def m_narrow_new(t):
+    ln = added_lines(t)[0]
+    w = re.search(r"\(width ([\d.]+)\)", ln).group(1)
+    return t.replace(ln, ln.replace(f"(width {w})", f"(width {float(w) - 0.05:g})"), 1)
+
+
+def m_shared_id(t):
+    a, b = added_lines(t)[:2]
+    t = t.replace(a, a[:-1] + " (tstamp 00000000-0000-0000-0000-00000000beef))", 1)
+    return t.replace(b, b[:-1] + " (tstamp 00000000-0000-0000-0000-00000000beef))", 1)
+
+
+def m_unlock(t):
+    # the original gets a locked track inside the region that the routed board has unlocked
+    for m in seg_lines(t):
+        xs, ys = [float(m.group(i)) for i in (1, 3)], [float(m.group(i)) for i in (2, 4)]
+        if all(r[0] < x < r[2] for x in xs) and all(r[1] < y < r[3] for y in ys) and m.group(0) in open(orig).read():
+            line = m.group(0)
+            return ("ORIG", open(orig).read().replace(line, line.replace("(segment ", "(segment locked ", 1), 1), t)
+    raise SystemExit("no track inside the region")
+
+
+MUT = [m_narrow_new, m_shared_id, m_unlock, m_move_outside, m_add_outside, m_drop_new, m_footprint, m_other_net_inside, m_drop_outside_via, m_dangling_inside, m_clearance, m_split_outside]
+
+
+def verify(board, o=None):
+    return subprocess.run([sys.executable, os.path.join(here, "verify_route.py"), o or orig, board, region, targets, allowed], capture_output=True, text=True)
 
 
 results = {"unmutated passes": verify(routed).returncode == 0}
 pro = os.path.splitext(routed)[0] + ".kicad_pro"
 for f in MUT:
     out = f(src)
-    assert out != src, f"{f.__name__} changed nothing"
+    o_path = None
+    if isinstance(out, tuple):
+        _, o_text, out = out
+        o_path = os.path.join(work, f.__name__ + "_orig.kicad_pcb")
+        open(o_path, "w").write(o_text)
+        shutil.copy(os.path.splitext(orig)[0] + ".kicad_pro", os.path.splitext(o_path)[0] + ".kicad_pro")
+        assert o_text != open(orig).read(), f"{f.__name__} changed nothing"
+    else:
+        assert out != src, f"{f.__name__} changed nothing"
     p = os.path.join(work, f.__name__ + ".kicad_pcb")
     open(p, "w").write(out)
     if os.path.exists(pro):
         shutil.copy(pro, os.path.splitext(p)[0] + ".kicad_pro")
-    v = verify(p)
+    v = verify(p, o_path)
     caught = v.returncode != 0
-    why = [ln.strip() for ln in v.stdout.splitlines() if ln.strip().startswith('"') and ":" in ln and not ln.strip().startswith('"ok')][:2]
+    why = [ln.strip()[:100] for ln in v.stdout.splitlines() if re.match(r'\s*"[A-I]: ', ln)][:1]
     results[f.__name__ + " caught"] = caught
     print(f"{'ok  ' if caught else 'FAIL'} {f.__name__} caught  {why[:1]}")
 print(f"{'ok  ' if results['unmutated passes'] else 'FAIL'} unmutated passes")

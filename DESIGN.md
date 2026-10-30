@@ -193,5 +193,7 @@ Exit criteria: VBUS_F and U106's ILM pin connected; nothing outside the region c
 | G | 44,25,54,35 | USB_SENSE, GND | rerouted; 4 dangling GND vias fixed | 36 s |
 | F | 40,20.5,60,36 | USB_SENSE, GND | ILM connected, but GND split into 3 more groups; refused | 77 s |
 
-- **VBUS_F: met.** `verify_route.py` agrees with the command's own DRC comparison on every run.
+- **VBUS_F: withdrawn after review 3.** Run A laid VBUS_F at the default 0.15 mm; its tracks are 0.3 mm. With nets now routed at their own width, the router finds no path in that region, and `pcb route` reports VBUS_F under `still_open`.
 - **ILM: not met.** U106 pin 10 is boxed in on the top layer by C116 pad 1, a GND via and the USB_SENSE via, with no room for a via of its own. The only routes Freerouting found need GND re-routed as tracks, which splits GND elsewhere. `pcb route` refused those results itself. This moves to spike 3: with GND as a plane, its vias stitch to the plane instead of needing tracks, and the area can be re-routed.
+
+After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB_SENSE lets the router join ILM, but the ripped GND vias leave 14 GND pads unconnected, because Freerouting treats the pour outline as already connecting them. The refused results went to `.rejected` files. What is left needs a hand edit (moving the GND via at 49.55, 27.80 that boxes in U106 pin 10) and the VBUS_F link at 0.3 mm. Both need a `pcb` command for explicit track and via edits, checked by the same DRC gate.

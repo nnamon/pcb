@@ -7,8 +7,10 @@
 //! 4. Freerouting runs headless on the DSN.
 //! 5. The session's wires and vias are read back. New copper is kept only for the requested nets (all nets if none
 //!    given), only inside the region, and only where it does not duplicate existing copper.
-//! 6. The original board text is edited: the removed tracks go, the new copper is appended. Nothing outside the
-//!    region changes; the edit is a splice into the original file.
+//! 6. The original board text is edited: the removed tracks go, the new copper is appended. Items wholly outside
+//!    the region are byte-identical; a track with one end inside that new copper joins mid-length is split.
+//! 7. KiCad refills any zones and runs DRC on the result. With no new violation it is written to the output;
+//!    otherwise it goes to `<output>.rejected.kicad_pcb` and the output is not touched.
 
 use crate::board::Board;
 use crate::sexpr::{self, Edits, Node, fmt_num as n};
@@ -77,6 +79,12 @@ pub struct Report {
     pub drc_total_after: usize,
     /// Dangling segments removed: router copper left hanging, and kept tails orphaned by ripping.
     pub pruned_segments: usize,
+    /// Requested nets that KiCad still reports as not fully connected after the route.
+    pub still_open: Vec<String>,
+    /// Nets routed wider than the default, at their existing tracks' most common width (mm).
+    pub net_widths: BTreeMap<String, f64>,
+    /// Where the result went: the output, or `<output>.rejected.kicad_pcb` when DRC found a new violation.
+    pub written: String,
     /// Kept tracks inside the region split where new copper joins their middle.
     pub split_tracks: usize,
     /// Joins in the middle of tracks with both ends outside the region, left unsplit (KiCad will call them dangling).
@@ -134,9 +142,23 @@ struct SesVia {
     x: f64,
     y: f64,
     fixed: bool,
+    /// Outer diameter and drill from the padstack name, when it follows KiCad's pattern.
+    size: Option<(f64, f64)>,
 }
 
 /// Read a Specctra session: wires and vias per net, in KiCad millimetres (y down).
+fn padstack_size(name: &str) -> Option<(f64, f64)> {
+    let tail = name.rsplit_once('_')?.0.rsplit_once('_')?.1;
+    let unit = name.rsplit_once('_')?.1;
+    let k = match unit {
+        "um" => 1000.0,
+        "mm" => 1.0,
+        _ => return None,
+    };
+    let (d, h) = tail.split_once(':')?;
+    Some((d.parse::<f64>().ok()? / k, h.parse::<f64>().ok()? / k))
+}
+
 fn read_ses(text: &str) -> Result<(Vec<Wire>, Vec<SesVia>)> {
     let root = sexpr::parse(text)?;
     let routes = root.find("routes").context("session has no routes")?;
@@ -161,7 +183,9 @@ fn read_ses(text: &str) -> Result<(Vec<Wire>, Vec<SesVia>)> {
         }
         for v in net.find_all("via") {
             let fixed = v.find("type").map(|t| matches!(t.arg(1), Some("fix") | Some("protect"))).unwrap_or(false);
-            vias.push(SesVia { net: name.clone(), x: v.num(2).unwrap_or(0.0) / per_mm, y: -v.num(3).unwrap_or(0.0) / per_mm, fixed });
+            // KiCad names its via padstacks "Via[0-3]_600:300_um": outer diameter and drill
+            let size = v.arg(1).and_then(padstack_size);
+            vias.push(SesVia { net: name.clone(), x: v.num(2).unwrap_or(0.0) / per_mm, y: -v.num(3).unwrap_or(0.0) / per_mm, fixed, size });
         }
     }
     Ok((wires, vias))
@@ -257,20 +281,63 @@ fn with_ends(text: &str, a: (f64, f64), c: (f64, f64)) -> Result<String> {
     e.replace((st.span.0 - base, st.span.1 - base), format!("(start {} {})", n(a.0), n(a.1)));
     e.replace((en.span.0 - base, en.span.1 - base), format!("(end {} {})", n(c.0), n(c.1)));
     let out = e.apply(text)?;
-    // two pieces must not share a uuid
-    Ok(match node.find("uuid").and_then(|u| u.arg(1)) {
-        Some(_) => strip_uuid(&out)?,
-        None => out,
-    })
+    // two pieces must not share an id: KiCad 7 writes `tstamp`, later versions `uuid`; KiCad assigns a new one
+    strip_ids(&out)
 }
 
-fn strip_uuid(text: &str) -> Result<String> {
+fn strip_ids(text: &str) -> Result<String> {
     let node = sexpr::parse(text)?;
-    let u = node.find("uuid").context("no uuid")?;
     let mut e = Edits::default();
-    // the space before the uuid goes too
-    e.replace((u.span.0 - 1, u.span.1), String::new());
+    for key in ["uuid", "tstamp"] {
+        for u in node.find_all(key) {
+            // the space before it goes too
+            e.replace((u.span.0 - node.span.0 - 1, u.span.1 - node.span.0), String::new());
+        }
+    }
     e.apply(text)
+}
+
+/// The width most of a net's tracks use (its most common width), for nets wider than the board default.
+fn net_widths(b: &Board) -> BTreeMap<String, f64> {
+    let mut counts: BTreeMap<&str, BTreeMap<i64, usize>> = BTreeMap::new();
+    for t in &b.tracks {
+        *counts.entry(&t.net).or_default().entry((t.width * 1000.0).round() as i64).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(net, m)| m.into_iter().max_by_key(|(w, c)| (*c, *w)).map(|(w, _)| (net.to_string(), w as f64 / 1000.0)))
+        .collect()
+}
+
+/// Route each net at its own width: nets wider than the DSN's default rule move out of the default class into a
+/// class of their width (same vias and clearance). Freerouting would otherwise lay them at the default width.
+fn width_classes(dsn: &str, widths: &BTreeMap<String, f64>) -> Result<(String, BTreeMap<String, f64>)> {
+    let root = sexpr::parse(dsn)?;
+    let network = root.find("network").context("DSN has no network")?;
+    let class = network.find("class").context("DSN has no net class")?;
+    let rule = class.find("rule").context("class without a rule")?;
+    let dw = rule.find("width").and_then(|w| w.num(1)).context("class rule without a width")?;
+    let circuit = class.find("circuit").map(|c| &dsn[c.span.0..c.span.1]).unwrap_or("");
+    let clearance = rule.find("clearance").map(|c| &dsn[c.span.0..c.span.1]).unwrap_or("");
+    let mut e = Edits::default();
+    let mut groups: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+    let mut moved = BTreeMap::new();
+    for item in class.items().iter().skip(2) {
+        let Some(name) = item.atom() else { continue };
+        let Some(w) = widths.get(name) else { continue };
+        let um = (w * 1000.0).round() as i64;
+        if (um as f64) > dw + 0.5 {
+            e.replace(item.span, "");
+            groups.entry(um).or_default().push(dsn[item.span.0..item.span.1].to_string());
+            moved.insert(name.to_string(), *w);
+        }
+    }
+    let mut add = String::new();
+    for (um, nets) in &groups {
+        add.push_str(&format!("    (class pcb_width_{um} {}\n      {circuit}\n      (rule (width {um}) {clearance})\n    )\n", nets.join(" ")));
+    }
+    e.insert(network.span.1 - 1, add);
+    Ok((e.apply(dsn)?, moved))
 }
 
 fn set_layer_types(structure: &Node, layers: &[String], e: &mut Edits) -> Result<()> {
@@ -321,6 +388,18 @@ fn in_pad(p: &crate::board::Pad, q: (f64, f64)) -> bool {
     lx.abs() <= p.w / 2.0 + 1e-3 && ly.abs() <= p.h / 2.0 + 1e-3
 }
 
+fn point_in_poly(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    let n_ = poly.len();
+    for i in 0..n_ {
+        let (a, c) = (poly[i], poly[(i + n_ - 1) % n_]);
+        if (a.1 > p.1) != (c.1 > p.1) && p.0 < (c.0 - a.0) * (p.1 - a.1) / (c.1 - a.1) + a.0 {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 fn seg_key(a: (f64, f64), b: (f64, f64), layer: &str) -> (i64, i64, i64, i64, String) {
     let q = |v: f64| (v * 1000.0).round() as i64;
     let (p, r) = if (q(a.0), q(a.1)) <= (q(b.0), q(b.1)) { (a, b) } else { (b, a) };
@@ -333,14 +412,34 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // absolute, because Freerouting runs inside the work directory
     let work = std::fs::canonicalize(&o.work)?;
     let o = &Opts { region: o.region, nets: o.nets.clone(), passes: o.passes, fr_jar: o.fr_jar.clone(), work, rip: o.rip.clone(), layers: o.layers.clone(), timeout_s: o.timeout_s };
-    // a ripped net has to be routed again, so its new copper is always kept
+    // a ripped net has to be routed again, so its new copper is always kept; ripping all keeps all
     let mut nets = o.nets.clone();
-    if let Rip::Nets(v) = &o.rip {
-        if !nets.is_empty() {
-            nets.extend(v.iter().filter(|x| !nets.contains(x)).cloned().collect::<Vec<_>>());
-        }
+    match &o.rip {
+        Rip::Nets(v) if !nets.is_empty() => nets.extend(v.iter().filter(|x| !nets.contains(x)).cloned().collect::<Vec<_>>()),
+        Rip::All => nets.clear(),
+        _ => {}
     }
     let o = &Opts { nets, ..o.clone() };
+    {
+        let b0 = Board::load(board_path)?;
+        let known: std::collections::BTreeSet<&str> = b0.nets.values().map(|s| s.as_str()).collect();
+        let named = o.nets.iter().chain(match &o.rip {
+            Rip::Nets(v) => v.iter(),
+            _ => [].iter(),
+        });
+        for nm in named {
+            if !known.contains(nm.as_str()) {
+                bail!("no net {nm} on this board");
+            }
+        }
+        if let Some(bad) = known.iter().find(|s| !s.is_ascii()) {
+            bail!("net name {bad:?} is not ASCII; Freerouting cannot take it and the session would not match");
+        }
+        // arcs are not in the board model yet: they would go to the router as chords it may cross
+        if b0.root.items().iter().any(|n| n.is("arc")) {
+            bail!("the board has track arcs, which pcb route does not handle yet");
+        }
+    }
     for l in &o.layers {
         if !Board::load(board_path)?.copper_layers.contains(l) {
             bail!("routing layer {l} is not a copper layer of this board");
@@ -396,6 +495,8 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let dsn_text = keepouts(&std::fs::read_to_string(&dsn)?, &scratch_board, r, &o.layers)?;
     let (dsn_text, declared) = declare_wiring_nets(&dsn_text)?;
     rep.declared_pinless_nets = declared;
+    let (dsn_text, widths) = width_classes(&dsn_text, &net_widths(&b))?;
+    rep.net_widths = widths;
     // Freerouting 1.9 shows a modal warning for any non-ASCII character and waits for a click that never comes
     let dsn_text: String = dsn_text.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect();
     std::fs::write(&dsn, dsn_text)?;
@@ -466,7 +567,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let existing_vias: std::collections::HashSet<_> =
         kept_vias.iter().map(|v| ((v.x * 1000.0).round() as i64, (v.y * 1000.0).round() as i64)).collect();
     let via_size = b.vias.first().map(|v| (v.size, v.drill)).unwrap_or((0.6, 0.3));
-    let mut new_vias: Vec<(String, f64, f64)> = vec![];
+    let mut new_vias: Vec<(String, f64, f64, (f64, f64))> = vec![];
     for v in &vias {
         if v.fixed {
             continue;
@@ -484,7 +585,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             continue;
         }
         netnum.get(v.net.as_str()).with_context(|| format!("router used unknown net {}", v.net))?;
-        new_vias.push((v.net.clone(), v.x, v.y));
+        new_vias.push((v.net.clone(), v.x, v.y, v.size.unwrap_or(via_size)));
     }
 
     // 5b. the router joins existing tracks anywhere along them; KiCad counts a track end on another track's
@@ -495,7 +596,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         ends.push((sg.net.clone(), Some(sg.layer.clone()), sg.a));
         ends.push((sg.net.clone(), Some(sg.layer.clone()), sg.c));
     }
-    for (net, x, y) in &new_vias {
+    for (net, x, y, _) in &new_vias {
         ends.push((net.clone(), None, (*x, *y)));
     }
     // ends of ripped copper: a kept track that met ripped copper there may be left as a dangling tail
@@ -520,7 +621,9 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             .collect();
         let whole = |prunable| Seg { a: (t.x0, t.y0), c: (t.x1, t.y1), layer: t.layer.clone(), net: t.net.clone(), width: t.width, origin: Origin::Kept(i), prunable };
         if cuts.is_empty() {
-            segs.push(whole(both_in && met_ripped));
+            // a locked track is never removed; nor is one outside the rip margin, so --rip alone says what may go
+            let in_ri = inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1);
+            segs.push(whole(both_in && in_ri && met_ripped && !t.locked));
             continue;
         }
         if !(inside(r, t.x0, t.y0) || inside(r, t.x1, t.y1)) {
@@ -540,7 +643,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             let met = |p: (f64, f64)| {
                 (near(p, (t.x0, t.y0)) || near(p, (t.x1, t.y1))) && ripped_ends.iter().any(|(net, q)| *net == t.net && near(*q, p))
             };
-            let tail = (met(w[0]) || met(w[1])) && inside(r, w[0].0, w[0].1) && inside(r, w[1].0, w[1].1);
+            let tail = (met(w[0]) || met(w[1])) && inside(ri, w[0].0, w[0].1) && inside(ri, w[1].0, w[1].1) && !t.locked;
             segs.push(Seg { a: w[0], c: w[1], layer: t.layer.clone(), net: t.net.clone(), width: t.width, origin: Origin::Piece(i), prunable: tail });
         }
         rep.split_tracks += 1;
@@ -552,7 +655,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let all_vias: Vec<(String, f64, f64, f64)> = kept_vias
         .iter()
         .map(|v| (v.net.clone(), v.x, v.y, v.size / 2.0))
-        .chain(new_vias.iter().map(|(n_, x, y)| (n_.clone(), *x, *y, via_size.0 / 2.0)))
+        .chain(new_vias.iter().map(|(n_, x, y, sz)| (n_.clone(), *x, *y, sz.0 / 2.0)))
         .collect();
     let pads: Vec<&crate::board::Pad> = b.footprints.iter().flat_map(|f| f.pads.iter()).collect();
     let mut alive = vec![true; segs.len()];
@@ -565,6 +668,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             let sg = &segs[i];
             let touches = |p: (f64, f64)| {
                 pads.iter().any(|pd| pd.net == sg.net && pad_on_layer(pd, &sg.layer) && in_pad(pd, p))
+                    || b.zones.iter().any(|z| z.net == sg.net && z.filled.iter().any(|(l, poly)| *l == sg.layer && point_in_poly(p, poly)))
                     || all_vias.iter().any(|(net, x, y, rad)| *net == sg.net && (p.0 - x).hypot(p.1 - y) <= rad + 1e-3)
                     || segs.iter().enumerate().any(|(j, o)| {
                         j != i && alive[j] && o.net == sg.net && o.layer == sg.layer && point_seg_dist(p, o.a, o.c) <= 1e-3
@@ -614,11 +718,11 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         }
     }
     let outer: Vec<String> = [b.copper_layers.first(), b.copper_layers.last()].iter().flatten().map(|l| sexpr::quote(l)).collect();
-    for (net, x, y) in &new_vias {
+    for (net, x, y, sz) in &new_vias {
         let num = netnum[net.as_str()];
         new_text.push_str(&format!(
             "  (via (at {} {}) (size {}) (drill {}) (layers {}) (net {num}))\n",
-            n(*x), n(*y), n(via_size.0), n(via_size.1), outer.join(" ")
+            n(*x), n(*y), n(sz.0), n(sz.1), outer.join(" ")
         ));
         rep.added_vias += 1;
     }
@@ -626,14 +730,39 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // 6. splice into the original: removals plus the new copper before the closing paren
     let root: &Node = &b.root;
     final_edits.insert(root.span.1 - 1, new_text);
-    std::fs::write(out_path, final_edits.apply(src)?)?;
+    let cand = o.work.join("candidate.kicad_pcb");
+    std::fs::write(&cand, final_edits.apply(src)?)?;
     // the design rules travel with the board: without the project file KiCad falls back to its defaults
-    let out_pro = Path::new(out_path).with_extension("kicad_pro");
-    if pro.exists() && !out_pro.exists() {
-        std::fs::copy(&pro, &out_pro)?;
+    if pro.exists() {
+        std::fs::copy(&pro, cand.with_extension("kicad_pro"))?;
     }
-    let after = drc_counts(&o.work, out_path, "drc_after")?;
+    // 7. zones refilled around the new copper, then DRC; only a result with no new violation reaches the output
+    if !b.zones.is_empty() {
+        helper(&o.work, &["fill", cand.to_str().unwrap()])?;
+    }
+    let after = drc_counts(&o.work, cand.to_str().unwrap(), "drc_after")?;
     compare(&before, &after, &mut rep);
+    // requested nets KiCad still reports as not connected
+    for (k, v) in &after {
+        if let Some(nets) = k.strip_prefix("unconnected_items ") {
+            for net in nets.split(' ') {
+                if o.nets.iter().any(|x| x == net) && !rep.still_open.contains(&net.to_string()) && *v > 0 {
+                    rep.still_open.push(net.to_string());
+                }
+            }
+        }
+    }
+    let dest = if rep.regressions.is_empty() {
+        out_path.to_string()
+    } else {
+        let p = Path::new(out_path);
+        p.with_file_name(format!("{}.rejected.kicad_pcb", p.file_stem().and_then(|s| s.to_str()).unwrap_or("board"))).to_string_lossy().to_string()
+    };
+    std::fs::copy(&cand, &dest)?;
+    if pro.exists() && std::fs::canonicalize(&pro).ok() != std::fs::canonicalize(Path::new(&dest).with_extension("kicad_pro")).ok() {
+        std::fs::copy(&pro, Path::new(&dest).with_extension("kicad_pro"))?;
+    }
+    rep.written = dest;
     rep.seconds = t0.elapsed().as_secs_f64();
     Ok(rep)
 }
@@ -738,6 +867,34 @@ mod tests {
         assert!(out.contains("(layer F.Cu\n      (type signal)"));
         assert!(out.contains("(layer In1.Cu\n      (type power)"));
         assert!(out.contains("(layer B.Cu\n      (type signal)"));
+    }
+
+    #[test]
+    fn wide_nets_get_their_own_class() {
+        let dsn = "(pcb x\n  (network\n    (class kicad_default \"\" A B \"C D\"\n      (circuit\n        (use_via V)\n      )\n      (rule\n        (width 150)\n        (clearance 150.1)\n      )\n    )\n  )\n)\n";
+        let w: BTreeMap<String, f64> = [("A".to_string(), 0.15), ("B".to_string(), 0.3), ("C D".to_string(), 0.3)].into();
+        let (out, moved) = width_classes(dsn, &w).unwrap();
+        assert_eq!(moved.keys().cloned().collect::<Vec<_>>(), vec!["B".to_string(), "C D".to_string()]);
+        let root = sexpr::parse(&out).unwrap();
+        let net = root.find("network").unwrap();
+        let classes: Vec<_> = net.find_all("class").collect();
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].args().iter().skip(2).cloned().collect::<Vec<_>>(), vec!["A"]);
+        assert_eq!(classes[1].arg(1), Some("pcb_width_300"));
+        assert_eq!(classes[1].find("rule").unwrap().find("width").unwrap().num(1), Some(300.0));
+        assert!(classes[1].find("circuit").is_some());
+    }
+
+    #[test]
+    fn padstack_names() {
+        assert_eq!(padstack_size("Via[0-3]_600:300_um"), Some((0.6, 0.3)));
+        assert_eq!(padstack_size("odd"), None);
+    }
+
+    #[test]
+    fn split_drops_ids() {
+        let s = "(segment (start 0 0) (end 10 0) (width 0.3) (layer \"F.Cu\") (net 5) (tstamp 7692ae2f-0000))";
+        assert_eq!(with_ends(s, (0.0, 0.0), (4.0, 0.0)).unwrap(), "(segment (start 0 0) (end 4 0) (width 0.3) (layer \"F.Cu\") (net 5))");
     }
 
     #[test]

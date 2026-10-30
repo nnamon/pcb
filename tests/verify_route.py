@@ -8,7 +8,10 @@ It reads both boards with KiCad's own pcbnew (not pcb's parser) and fails unless
   D. by KiCad's connectivity engine, no net has more separate pad groups than before, and each target net is
      whole;
   E. no net has more dangling track ends than before (KiCad's own dangling test);
-  F. KiCad DRC finds no more violations of any type than before.
+  F. KiCad DRC (zones refilled) finds no more violations of any type, for any set of nets, than before;
+  G. no locked track or via was removed or changed;
+  H. no two tracks or vias share an id (tstamp or uuid);
+  I. every added track is at least as wide as its net's most common width before.
 
 Usage: python3 verify_route.py original.kicad_pcb routed.kicad_pcb x0,y0,x1,y1 TARGET_NETS ALLOWED_NETS
        (comma-separated; ALLOWED_NETS "all" allows any net)
@@ -146,9 +149,16 @@ def dangling(board):
 
 
 def drc(board, path):
+    """Violations counted by type and the nets involved, after refilling zones in memory."""
+    if len(board.Zones()):
+        board.BuildConnectivity()
+        pcbnew.ZONE_FILLER(board).Fill(board.Zones())
     rpt = tempfile.mktemp(suffix=".rpt")
     pcbnew.WriteDRCReport(board, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
-    c = collections.Counter(re.findall(r"^\[(\w+)\]", open(rpt).read(), re.M))
+    c = collections.Counter()
+    for m in re.finditer(r"^\[(\w+)\]:[^\n]*\n((?:    [^\n]*\n)+)", open(rpt).read(), re.M):
+        nets = sorted(set(re.findall(r"\[([^\]]*)\]", m.group(2))))
+        c[m.group(1) + " " + " ".join(nets)] += 1
     os.unlink(rpt)
     return c
 
@@ -227,6 +237,27 @@ def main():
     for k in sorted(set(co) | set(cn)):
         if cn[k] > co[k]:
             fails.append(f"F: DRC {k} {co[k]} -> {cn[k]}")
+
+    # G
+    for line in removed:
+        if " locked" in line[:16]:
+            fails.append(f"G: locked item removed or changed: {line[:90]}")
+    # H
+    ids = collections.Counter(m.group(1) for x in n_items for m in [re.search(r"\((?:tstamp|uuid) ([^)\s]+)\)", x)] if m)
+    dup = [k for k, v in ids.items() if v > 1]
+    if dup:
+        fails.append(f"H: {len(dup)} ids shared by several tracks or vias, e.g. {dup[0]}")
+    # I
+    widths = collections.defaultdict(collections.Counter)
+    for x in o_items:
+        g = geom(x, o_nets)
+        if g["kind"] == "segment":
+            widths[g["net"]][g["width"]] += 1
+    for i, g in enumerate(added_g):
+        if g["kind"] == "segment" and widths[g["net"]]:
+            want = max(widths[g["net"]].items(), key=lambda kv: (kv[1], kv[0]))[0]
+            if g["width"] < want - 1e-3:
+                fails.append(f"I: {g['net']} track added at {g['width']} mm, its tracks are {want} mm: {added[i][:80]}")
 
     res = {
         "ok": not fails,

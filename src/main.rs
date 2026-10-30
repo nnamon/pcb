@@ -202,9 +202,9 @@ fn run(cli: Cli) -> Result<()> {
             let out = out.unwrap_or_else(|| board.clone());
             let rep = route::run(&board, &out, &o)?;
             let h = format!(
-                "routed {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates\nDRC {} -> {}\nfixed:\n  {}\nregressions:\n  {}",
+                "routed {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates\nstill open: {:?}\nDRC {} -> {}\nfixed:\n  {}\nregressions:\n  {}",
                 out, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates,
-                rep.drc_total_before, rep.drc_total_after, rep.fixed.join("\n  "), rep.regressions.join("\n  ")
+                rep.still_open, rep.drc_total_before, rep.drc_total_after, rep.fixed.join("\n  "), rep.regressions.join("\n  ")
             );
             emit(cli.json, rep.regressions.is_empty(), h, serde_json::to_value(&rep)?)
         }
