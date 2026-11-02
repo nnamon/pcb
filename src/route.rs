@@ -41,6 +41,11 @@ pub struct Opts {
     pub rip: Rip,
     /// Copper layers the router may use; the others get keep-outs over the whole board.
     pub layers: Vec<String>,
+    /// Widths that replace a net's usual width for this run (`--width NET=MM`): an owner's choice for one link.
+    pub widths: BTreeMap<String, f64>,
+    /// Explicit edits applied before routing (`--prewire`): parts moved or copper placed where the router cannot
+    /// find room. Their copper is kept as it is; the whole change is gated once against the input.
+    pub prewire: Vec<crate::edit::Op>,
     /// Seconds before Freerouting is stopped.
     pub timeout_s: u64,
 }
@@ -66,6 +71,8 @@ impl Rip {
 
 #[derive(Serialize, Default)]
 pub struct Report {
+    /// The prewire operations applied before routing, one line each.
+    pub prewired: Vec<String>,
     pub ripped_segments: usize,
     pub ripped_vias: usize,
     pub added_segments: usize,
@@ -306,8 +313,8 @@ fn net_widths(b: &Board) -> BTreeMap<String, f64> {
         .collect()
 }
 
-/// Route each net at its own width: nets wider than the DSN's default rule move out of the default class into a
-/// class of their width (same vias and clearance). Freerouting would otherwise lay them at the default width.
+/// Route each net at its own width: nets wider or narrower than the DSN's default rule move out of the default class
+/// into a class of their width (same vias and clearance). Freerouting would otherwise lay them at the default width.
 fn width_classes(dsn: &str, widths: &BTreeMap<String, f64>) -> Result<(String, BTreeMap<String, f64>)> {
     let root = sexpr::parse(dsn)?;
     let network = root.find("network").context("DSN has no network")?;
@@ -323,7 +330,7 @@ fn width_classes(dsn: &str, widths: &BTreeMap<String, f64>) -> Result<(String, B
         let Some(name) = item.atom() else { continue };
         let Some(w) = widths.get(name) else { continue };
         let um = (w * 1000.0).round() as i64;
-        if (um as f64) > dw + 0.5 {
+        if ((um as f64) - dw).abs() > 0.5 {
             e.replace(item.span, "");
             groups.entry(um).or_default().push(dsn[item.span.0..item.span.1].to_string());
             moved.insert(name.to_string(), *w);
@@ -446,10 +453,25 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     std::fs::create_dir_all(&o.work)?;
     // absolute, because Freerouting runs inside the work directory
     let work = std::fs::canonicalize(&o.work)?;
-    let o = &Opts { region: o.region, nets: o.nets.clone(), passes: o.passes, fr_jar: o.fr_jar.clone(), java: o.java.clone(), work, rip: o.rip.clone(), layers: o.layers.clone(), timeout_s: o.timeout_s };
+    let mut prewired: Vec<String> = vec![];
+    let o = &Opts { work, ..o.clone() };
+    // the board the router starts from: the input, with the prewire edits applied (written out for checking)
+    let start = {
+        let input = Board::load(board_path)?;
+        if o.prewire.is_empty() {
+            input
+        } else {
+            let (text, lines) = crate::edit::apply(&input, &o.prewire)?;
+            let p = o.work.join("prewired.kicad_pcb");
+            std::fs::write(&p, &text)?;
+            kicad::copy_rules(Path::new(board_path), &p)?;
+            prewired = lines;
+            Board::from_str(text)?
+        }
+    };
     // names checked before `--rip all` clears the list (review 4, R3)
     {
-        let b0 = Board::load(board_path)?;
+        let b0 = &start;
         for nm in &o.nets {
             if !b0.nets.contains(nm) {
                 return Err(refused("unknown-net", format!("no net {nm} on this board")));
@@ -465,7 +487,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     }
     let o = &Opts { nets, ..o.clone() };
     {
-        let b0 = Board::load(board_path)?;
+        let b0 = &start;
         let known: std::collections::BTreeSet<&str> = b0.nets.iter().map(|s| s.as_str()).collect();
         let named = o.nets.iter().chain(match &o.rip {
             Rip::Nets(v) => v.iter(),
@@ -485,15 +507,15 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         }
     }
     for l in &o.layers {
-        if !Board::load(board_path)?.copper_layers.contains(l) {
+        if !start.copper_layers.contains(l) {
             return Err(refused("bad-layer", format!("routing layer {l} is not a copper layer of this board")));
         }
     }
     let gate = Gate::begin(&o.work, board_path)?;
-    let b = Board::load(board_path)?;
+    let b = start;
     let src = &b.src;
     let r = o.region;
-    let mut rep = Report::default();
+    let mut rep = Report { prewired: prewired.clone(), ..Report::default() };
     // Copper is ripped only well inside the region, so the ends left by ripping (where the router must
     // reconnect) are clear of the keep-outs at the region's edge.
     let ri = (r.0 + RIP_MARGIN, r.1 + RIP_MARGIN, r.2 - RIP_MARGIN, r.3 - RIP_MARGIN);
@@ -536,7 +558,14 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let (dsn_text, routable) = keepouts(&std::fs::read_to_string(&dsn)?, &scratch_board, r, &o.layers)?;
     let (dsn_text, declared) = declare_wiring_nets(&dsn_text)?;
     rep.declared_pinless_nets = declared;
-    let (dsn_text, widths) = width_classes(&dsn_text, &net_widths(&b))?;
+    let mut want_widths = net_widths(&b);
+    for (net, w) in &o.widths {
+        if !b.nets.contains(net) {
+            return Err(refused("unknown-net", format!("--width names no net {net} on this board")));
+        }
+        want_widths.insert(net.clone(), *w);
+    }
+    let (dsn_text, widths) = width_classes(&dsn_text, &want_widths)?;
     rep.net_widths = widths;
     let (dsn_text, ignored) = ignore_other_nets(&dsn_text, &o.nets)?;
     // Freerouting 1.9 hung on a dialog for any non-ASCII character; 2.5 runs headless, but the session must still

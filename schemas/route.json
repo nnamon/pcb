@@ -47,7 +47,8 @@
      "split_tracks",
      "joins_outside_region",
      "declared_pinless_nets",
-     "freerouting_log"
+     "freerouting_log",
+     "prewired"
     ],
     "properties": {
      "regressions": {
@@ -83,6 +84,12 @@
      },
      "seconds": {
       "type": "number"
+     },
+     "prewired": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
      }
     }
    }

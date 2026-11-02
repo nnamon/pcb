@@ -86,6 +86,13 @@ enum Cmd {
         /// Seconds before Freerouting is stopped.
         #[arg(long, default_value_t = 900)]
         timeout: u64,
+        /// NET=MM: route NET at this width instead of its usual (most common) one; repeat for more nets.
+        #[arg(long = "width")]
+        width: Vec<String>,
+        /// pcb edit operations (JSON) applied before routing: parts moved or copper placed where the router cannot
+        /// find room. Checked as edits; their copper is kept; the whole result is gated once against the input.
+        #[arg(long)]
+        prewire: Option<String>,
         /// Output board (default: overwrite the input).
         #[arg(long, short)]
         out: Option<String>,
@@ -326,7 +333,17 @@ fn run(cli: Cli) -> Result<Reply> {
                 data: json!({ "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
             })
         }
-        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, out } => {
+        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, width, prewire, out } => {
+            let prewire = match &prewire {
+                Some(p) => edit::parse_ops(&std::fs::read_to_string(p).map_err(|e| contract::failed("io", format!("reading {p}: {e}")))?)?,
+                None => vec![],
+            };
+            let mut widths = std::collections::BTreeMap::new();
+            for w in &width {
+                let (n, mm) = w.split_once('=').ok_or_else(|| contract::refused("usage", format!("--width {w}: use NET=MM")))?;
+                let mm: f64 = mm.parse().ok().filter(|v: &f64| *v > 0.0).ok_or_else(|| contract::refused("usage", format!("--width {w}: MM must be a number above 0")))?;
+                widths.insert(n.to_string(), mm);
+            }
             let o = route::Opts {
                 region: parse_region(&region)?,
                 nets: nets.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
@@ -341,6 +358,8 @@ fn run(cli: Cli) -> Result<Reply> {
                 },
                 layers: layers.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
                 timeout_s: timeout,
+                widths,
+                prewire,
             };
             let out = out.unwrap_or_else(|| board.clone());
             let rep = route::run(&board, &out, &o)?;

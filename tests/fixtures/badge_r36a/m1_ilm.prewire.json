@@ -1,0 +1,5 @@
+{"ops": [
+  {"op": "move_footprint", "ref": "C116", "from": [48.03, 29.0], "to": [47.94, 29.0]},
+  {"op": "add_track", "net": "PMUX_ILM", "layer": "F.Cu", "width": 0.15, "points": [[50.85, 29.25], [50.1, 29.25], [49.85, 29.0]]},
+  {"op": "add_via", "net": "PMUX_ILM", "at": [49.85, 29.0], "size": 0.6, "drill": 0.3}
+]}

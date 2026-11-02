@@ -13,10 +13,11 @@ and fails unless:
   F. KiCad DRC (zones refilled) finds no more violations of any type, for any set of nets, than before;
   G. no locked track or via was removed or changed;
   H. no two tracks or vias share an id (tstamp or uuid);
-  I. every added track is at least as wide as its net's most common width before.
+  I. every added track is at least as wide as its net's most common width before, or exactly the width given for
+     its net in WIDTHS (pcb route --width, an owner's choice for one link).
 
-Usage: python3 verify_route.py original.kicad_pcb routed.kicad_pcb x0,y0,x1,y1 TARGET_NETS ALLOWED_NETS
-       (comma-separated; ALLOWED_NETS "all" allows any net)
+Usage: python3 verify_route.py original.kicad_pcb routed.kicad_pcb x0,y0,x1,y1 TARGET_NETS ALLOWED_NETS [WIDTHS]
+       (comma-separated; ALLOWED_NETS "all" allows any net; WIDTHS is NET=MM,...)
 """
 import collections
 import json
@@ -192,6 +193,7 @@ def measure(path):
 
 def main():
     orig_p, routed_p, region, targets, allowed = sys.argv[1:6]
+    given = {k: float(v) for k, v in (w.split("=") for w in (sys.argv[6] if len(sys.argv) > 6 else "").split(",") if w)}
     r = [float(v) for v in region.split(",")]
     r = (min(r[0], r[2]), min(r[1], r[3]), max(r[0], r[2]), max(r[1], r[3]))
     targets = [t for t in targets.split(",") if t]
@@ -271,7 +273,10 @@ def main():
         if g["kind"] == "segment":
             widths[g["net"]][g["width"]] += 1
     for i, g in enumerate(added_g):
-        if g["kind"] == "segment" and widths[g["net"]]:
+        if g["kind"] == "segment" and g["net"] in given:
+            if abs(g["width"] - given[g["net"]]) > 1e-3:
+                fails.append(f"I: {g['net']} track added at {g['width']} mm, --width gave {given[g['net']]} mm: {added[i][:80]}")
+        elif g["kind"] == "segment" and widths[g["net"]]:
             want = max(widths[g["net"]].items(), key=lambda kv: (kv[1], kv[0]))[0]
             if g["width"] < want - 1e-3:
                 fails.append(f"I: {g['net']} track added at {g['width']} mm, its tracks are {want} mm: {added[i][:80]}")

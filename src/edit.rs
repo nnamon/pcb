@@ -184,6 +184,15 @@ fn on_net_copper(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, skip_
 pub fn run(board_path: &str, ops: &[Op], out_path: &str, work: &Path) -> Result<Report> {
     std::fs::create_dir_all(work)?;
     let b = Board::load(board_path)?;
+    let (candidate, lines) = apply(&b, ops)?;
+    let gate = Gate::begin(work, board_path)?;
+    let g = gate.finish(&candidate, out_path, !b.zones.is_empty())?;
+    Ok(Report { ops: lines, fixed: g.fixed, regressions: g.regressions, drc_total_before: g.total_before, drc_total_after: g.total_after, written: g.written })
+}
+
+/// The board text with `ops` applied, and a line per operation; every check but the gate (targets, expectations,
+/// locks, joins). `pcb route --prewire` applies its operations with this, then routes, then gates the whole.
+pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
     let src = &b.src;
     let (bx0, by0, bx1, by1) = b.bbox();
     let inside = |p: [f64; 2]| p[0] >= bx0 - TOL && p[0] <= bx1 + TOL && p[1] >= by0 - TOL && p[1] <= by1 + TOL;
@@ -347,9 +356,7 @@ pub fn run(board_path: &str, ops: &[Op], out_path: &str, work: &Path) -> Result<
             ));
         }
     }
-    let gate = Gate::begin(work, board_path)?;
-    let g = gate.finish(&candidate, out_path, !b.zones.is_empty())?;
-    Ok(Report { ops: lines, fixed: g.fixed, regressions: g.regressions, drc_total_before: g.total_before, drc_total_after: g.total_after, written: g.written })
+    Ok((candidate, lines))
 }
 
 #[cfg(test)]

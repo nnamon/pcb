@@ -35,6 +35,17 @@ CASES = {
     # review 6, K4: the board's custom rules file says N is at least 0.5 mm wide; the router lays it at 0.2, so the
     # gate, checking by the same rules, must reject the result
     "custom_rules_kept": ("base", ["--nets", "N"], "rejected", None, None),
+    # --width: N (no tracks, so the 0.2 mm default) at 0.3, and W (0.4 mm) ripped and routed again at 0.25
+    "width_override_wider": ("base", ["--nets", "N", "--width", "N=0.3"], "done", None, ("", "N", "N=0.3")),
+    "width_override_narrower": ("base", ["--rip", "W", "--nets", "W", "--width", "W=0.25"], "done", None, ("", "W", "W=0.25")),
+    "width_override_unknown_net_refused": ("base", ["--nets", "N", "--width", "NOPE=0.3"], "refused", "no net NOPE", None),
+    # --prewire: N2 moved 2 mm down by an edit, then N routed to it; the edit's target checked like pcb edit
+    "prewire_move_then_route": ("base", ["--nets", "N", "--prewire", "PREWIRE:move_n2"], "done", None, ("N", "N")),
+    "prewire_bad_target_refused": ("base", ["--nets", "N", "--prewire", "PREWIRE:bad"], "refused", "N2 is at", None),
+}
+PREWIRE = {
+    "move_n2": [{"op": "move_footprint", "ref": "N2", "from": [40, 15], "to": [40, 17]}],
+    "bad": [{"op": "move_footprint", "ref": "N2", "from": [41, 15], "to": [40, 17]}],
 }
 # custom rules files (.kicad_dru) written beside a case's board
 DRU = {"custom_rules_kept": '(version 1)\n(rule "N wide"\n  (condition "A.NetName == \'N\'")\n  (constraint track_width (min 0.5mm)))\n'}
@@ -67,6 +78,12 @@ if __name__ == "__main__":
         subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), variant, board], check=True, capture_output=True)
         if name in DRU:
             open(os.path.splitext(board)[0] + ".kicad_dru", "w").write(DRU[name])
+        args = list(args)
+        for k, a in enumerate(args):
+            if a.startswith("PREWIRE:"):
+                pf = os.path.join(work, f"{name}.prewire.json")
+                json.dump(PREWIRE[a.split(":")[1]], open(pf, "w"))
+                args[k] = pf
         before = sha(board)
         out = os.path.join(work, f"{name}.out.kicad_pcb")
         r = subprocess.run([pcb, "--json", "route", board, "--region", REGION, "--freerouting", jar, "--work", os.path.join(work, name + "_w"), "-o", out, *args], capture_output=True, text=True)
@@ -85,8 +102,24 @@ if __name__ == "__main__":
         elif want == "rejected" and (os.path.exists(out) or not os.path.exists(os.path.join(work, f"{name}.out.rejected.kicad_pcb"))):
             results[name] = "a rejected result must go to .rejected and leave the output unwritten"
         elif want == "done" and verify:
-            v = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_route.py"), board, out, REGION, *verify], capture_output=True, text=True)
+            base = board
+            if "--prewire" in args:
+                base = os.path.join(work, name + "_w", "prewired.kicad_pcb")
+                ve = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_edit.py"), board, args[args.index("--prewire") + 1], base], capture_output=True, text=True)
+                if ve.returncode != 0:
+                    results[name] = f"verify_edit (prewire) failed: {ve.stdout[-500:]}"
+                    continue
+            v = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_route.py"), base, out, REGION, *verify], capture_output=True, text=True)
             results[name] = "ok" if v.returncode == 0 else f"verify_route failed: {v.stdout[-600:]}{v.stderr[-300:]}"
+            # a --width case must have laid copper at that width (verify_route checks only what was added)
+            if results[name] == "ok" and len(verify) == 3:
+                net, mm = verify[2].split("=")
+                sys.path.insert(0, os.path.join(here, "..", "lib"))
+                import kisexp
+                src = kisexp.parse(open(out).read())
+                new = [x for x in src.find_all("segment") if x.find("net").arg(1) == net and abs(x.nums("width")[0] - float(mm)) < 1e-6]
+                if not new:
+                    results[name] = f"no {net} track at {mm} mm in the result"
             if results[name] == "ok" and name in LAYER_CHECKS:
                 allowed, connected = LAYER_CHECKS[name]
                 p = subprocess.run([sys.executable, "-c", LAYER_PROBE, out], capture_output=True, text=True)
