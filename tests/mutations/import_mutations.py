@@ -188,6 +188,20 @@ def m_hole_one_layer(t):
     return re.sub(r'(\(pad "[^"]+" thru_hole [^\n]*?)\(layers "\*\.Cu" "\*\.Mask"\)', r'\1(layers "F.Cu" "F.Mask")', t, count=1)
 
 
+def m_polygon_mirror(t):
+    # review 5, 8: mirror a polygon pad about its own vertical axis; the area stays, the shape does not. The first
+    # pad whose mirror image differs from it (a symmetric pad would not change)
+    from shapely.geometry import Polygon
+    for m in re.finditer(r"\(primitives \(gr_poly \(pts ((?:\(xy [-\d.]+ [-\d.]+\) ?)+)\)", t):
+        pts = [(float(a), float(b)) for a, b in re.findall(r"\(xy ([-\d.]+) ([-\d.]+)\)", m.group(1))]
+        cx = (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
+        mir = [(2 * cx - x, y) for x, y in pts]
+        if Polygon(pts).buffer(0).symmetric_difference(Polygon(mir).buffer(0)).area > 0.01:
+            new = " ".join(f"(xy {x:g} {y:g})" for x, y in mir)
+            return t[:m.start(1)] + new + t[m.end(1):]
+    raise SystemExit("no asymmetric polygon pad")
+
+
 def m_polygon(t):
     # narrow one polygon pad to 80 % about its own centre: same place, less copper
     m = first_line(t, r"\(primitives \(gr_poly \(pts ((?:\(xy [-\d.]+ [-\d.]+\) ?)+)\)")
@@ -228,6 +242,7 @@ MUT = {
     m_blind_via: "not through",
     m_npth_drill: "NPTH at",
     m_hole_one_layer: "not on both copper layers",
+    m_polygon_mirror: "shape differs",
     m_polygon: "polygon pad",
     m_hole_renamed: "no KiCad pad",
 }

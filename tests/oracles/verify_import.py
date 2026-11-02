@@ -163,7 +163,8 @@ for f in b.GetFootprints():
                       "attr": {pcbnew.PAD_ATTRIB_SMD: "smd", pcbnew.PAD_ATTRIB_PTH: "pth", pcbnew.PAD_ATTRIB_NPTH: "npth"}.get(p.GetAttribute(), "other"),
                       "drill": (mm(dr.x), mm(dr.y)), "used": False, "number": p.GetNumber(), "pinfunction": p.GetPinFunction(),
                       "front": p.IsOnLayer(pcbnew.F_Cu), "back": p.IsOnLayer(pcbnew.B_Cu),
-                      "area": poly.Area() / 1e12 if poly else 0.0})
+                      "area": poly.Area() / 1e12 if poly else 0.0,
+                      "outline": [(mm(poly.Outline(0).CPoint(i).x), mm(poly.Outline(0).CPoint(i).y)) for i in range(poly.Outline(0).PointCount())] if poly and poly.OutlineCount() else []})
 by_ref = {}
 for k in kpads:
     by_ref.setdefault(k["ref"], []).append(k)
@@ -257,6 +258,11 @@ for e in d:
         area = abs(sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))) / 2
         if abs(k["area"] - area) > max(0.002, area * 0.01):
             err(f"{ref} polygon pad at {X:.3f},{Y:.3f}: copper area {k['area']:.4f} != {area:.4f} mm2")
+        # and its shape: a mirrored or turned outline keeps the area (the review 2 reviewer's polychk, review 5, 8)
+        if len(k["outline"]) >= 3:
+            off = Polygon([T(*q) for q in pts]).buffer(0).symmetric_difference(Polygon(k["outline"]).buffer(0)).area
+            if off > max(0.002, area * 0.01):
+                err(f"{ref} polygon pad at {X:.3f},{Y:.3f}: shape differs from the JSON outline by {off:.4f} mm2")
     want_net = "" if t == "pcb_hole" else cj_net(e)
     if not same_net(want_net, k["net"]):
         err(f"{ref} pad at {X:.3f},{Y:.3f}: net {k['net']!r} != {want_net!r}")

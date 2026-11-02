@@ -147,7 +147,7 @@ Every command:
 
 - **The suite:** `cargo xtask test` (see `tests/README.md`), run by CI in the pinned image (`ci/Dockerfile`, published to GHCR by `.github/workflows/pcb-ci-image.yml`; tested by `pcb-test.yml`).
 - **Output contract:** every command keeps it (`src/contract.rs`, `schemas/`, `docs/codes.md`).
-- **One write path:** every write goes through `src/gate.rs`.
+- **One write path for edits:** every command that changes an existing board writes through `src/gate.rs` (DRC before and after; a worse result goes to `.rejected`). Commands that make a new file have nothing to compare against and write directly: `import-tscircuit` (checked by `verify_import`) and `render` (review 5, 15).
 - **One door to KiCad:** every KiCad call goes through `src/kicad.rs`.
 - **Pinned tools:** `pcb doctor` checks the versions and the KiCad behaviours pcb works around.
 

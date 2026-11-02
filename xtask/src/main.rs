@@ -108,6 +108,7 @@ fn main() -> Result<()> {
     s.py("output contract", "tests/cases/contract_cases.py", &[&pcb, &s.w("contract")]);
     s.py("kicad adapter", "tests/cases/adapter_cases.py", &[&s.w("adapter")]);
     s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
+    s.py("import orientation sweep", "tests/cases/orient_cases.py", &[&pcb, &s.w("orient_cases")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
             let j = j.clone();
