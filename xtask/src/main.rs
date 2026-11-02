@@ -213,6 +213,11 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         if open != want_open {
             problems.push(format!("still open {open:?} (want {want_open:?})"));
         }
+        if let Some(a) = case.get("attempt_used").and_then(|x| x.as_integer()) {
+            if v["data"]["attempt_used"].as_i64() != Some(a) {
+                problems.push(format!("attempt_used {} (want {a}): {}", v["data"]["attempt_used"], v["data"]["attempts"]));
+            }
+        }
         let ok = problems.is_empty();
         eprintln!("   {} ({:.0} s)", if ok { "ok" } else { "FAILED" }, t0.elapsed().as_secs_f64());
         s.steps.push(Step { name: label.clone(), ok, seconds: t0.elapsed().as_secs_f64(), detail: problems.join("; ") });

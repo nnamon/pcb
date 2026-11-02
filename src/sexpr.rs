@@ -177,7 +177,7 @@ pub fn fmt_num(v: f64) -> String {
 }
 
 /// Pending edits to a source text: byte ranges replaced by new text, applied together.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Edits {
     ops: Vec<(usize, usize, String)>,
 }

@@ -43,6 +43,18 @@ nets = ["VBUS_F"]
 expect = "done"            # no path at 0.3 mm: nothing gets worse, the board is written unchanged, VBUS_F reported still open
 still_open = ["VBUS_F"]
 
+# PMUX_SS ripped and laid again in the box beside U106 (M1 gate). Freerouting 2.5.0 finds the path through the
+# 0.15 mm gaps but fails to insert it when the region's keep-outs shape its rooms; the second attempt, with no
+# keep-outs, lays it inside the region.
+[[route]]
+name = "reroute_pmux_ss"
+region = [46, 25.5, 52, 31]
+rip = ["PMUX_SS"]
+nets = ["PMUX_SS"]
+targets = ["PMUX_SS"]
+expect = "done"
+attempt_used = 1
+
 # Zones (spike 3 prototype), in KiCad coordinates (mm, y down).
 [zones]
 # phase0/spike3.py is written for this board only; `pcb zone` (milestone M2) replaces it
