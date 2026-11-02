@@ -113,7 +113,7 @@ fn lock(edits: &mut Edits, src: &str, span: (usize, usize)) {
 }
 
 /// Remove a top-level item and the newline after it.
-fn remove(edits: &mut Edits, src: &str, span: (usize, usize)) {
+pub(crate) fn remove(edits: &mut Edits, src: &str, span: (usize, usize)) {
     let mut end = span.1;
     if src[end..].starts_with('\n') {
         end += 1;
@@ -405,7 +405,7 @@ struct Seg {
     prunable: bool,
 }
 
-fn point_seg_dist(p: (f64, f64), a: (f64, f64), c: (f64, f64)) -> f64 {
+pub(crate) fn point_seg_dist(p: (f64, f64), a: (f64, f64), c: (f64, f64)) -> f64 {
     let (dx, dy) = (c.0 - a.0, c.1 - a.1);
     let l2 = dx * dx + dy * dy;
     let u = if l2 < 1e-12 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0) };
@@ -805,7 +805,7 @@ mod tests {
     }
 
     fn track(x0: f64, y0: f64, x1: f64, y1: f64) -> crate::board::Track {
-        crate::board::Track { x0, y0, x1, y1, width: 0.3, layer: "F.Cu".into(), net: "V".into(), locked: false, span: (0, 0) }
+        crate::board::Track { x0, y0, x1, y1, width: 0.3, layer: "F.Cu".into(), net: "V".into(), locked: false, uuid: None, span: (0, 0) }
     }
 
     #[test]

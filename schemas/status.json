@@ -1,0 +1,121 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:status",
+ "title": "pcb status output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/status/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "project",
+     "file",
+     "schema",
+     "problems",
+     "tag",
+     "gates",
+     "decisions",
+     "board",
+     "drc"
+    ],
+    "properties": {
+     "project": {
+      "type": "object",
+      "required": [
+       "name",
+       "version",
+       "board",
+       "layers",
+       "fab"
+      ]
+     },
+     "file": {
+      "type": "string"
+     },
+     "schema": {
+      "type": "integer"
+     },
+     "problems": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "version_file": {
+      "type": [
+       "object",
+       "null"
+      ]
+     },
+     "tag": {
+      "type": "object",
+      "required": [
+       "tag",
+       "recorded"
+      ]
+     },
+     "gates": {
+      "type": "object"
+     },
+     "decisions": {
+      "type": "object"
+     },
+     "board": {
+      "type": "object",
+      "required": [
+       "path",
+       "copper_layers",
+       "footprints",
+       "nets"
+      ]
+     },
+     "drc": {
+      "type": [
+       "object",
+       "null"
+      ]
+     }
+    }
+   }
+  }
+ },
+ "else": {
+  "if": {
+   "properties": {
+    "error": {
+     "properties": {
+      "code": {
+       "const": "config"
+      }
+     }
+    }
+   }
+  },
+  "then": {
+   "properties": {
+    "data": {
+     "type": "object",
+     "required": [
+      "problems"
+     ]
+    }
+   }
+  }
+ }
+}

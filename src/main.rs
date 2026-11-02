@@ -2,10 +2,13 @@
 
 mod board;
 mod contract;
+mod diff;
 mod doctor;
+mod edit;
 mod freerouting;
 mod gate;
 mod kicad;
+mod project;
 mod import_tscircuit;
 mod render;
 mod route;
@@ -99,6 +102,51 @@ enum Cmd {
         #[arg(long, default_value = "pcb_work/doctor")]
         work: String,
     },
+    /// Explicit changes from a JSON list: add_track, add_via, move_via, delete, set_width, move_footprint. Each names
+    /// its target and what it expects there; the result goes through the write gate (KiCad DRC before and after).
+    Edit {
+        board: String,
+        /// The operations: a JSON file, or - for standard input.
+        #[arg(long)]
+        ops: String,
+        /// Work directory for the DRC reports.
+        #[arg(long, default_value = "pcb_work/edit")]
+        work: String,
+        /// Output board (default: overwrite the input).
+        #[arg(long, short)]
+        out: Option<String>,
+    },
+    /// What changed between two boards (files, or git revisions as REV:path): footprints, copper per net, nets.
+    Diff {
+        a: String,
+        b: String,
+        /// Also write a PNG of the second board with the changed nets highlighted.
+        #[arg(long)]
+        png: Option<String>,
+    },
+    /// Write a starter pcb.toml for a board: name, layer count, fab rule set, and nets routed wider than usual.
+    Init {
+        board: String,
+        /// Project name (default: the board file's stem).
+        #[arg(long)]
+        name: Option<String>,
+        /// Where to write it (default: pcb.toml beside the board). An existing file is refused.
+        #[arg(long, short)]
+        out: Option<String>,
+    },
+    /// The project at a glance: version against VERSION and TAGS.tsv, gates, decisions, the board, its DRC, and
+    /// anything in pcb.toml that is wrong or does not match the board. The first command to run in a session.
+    Status {
+        /// pcb.toml, or the folder holding it.
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Skip KiCad DRC (seconds on a large board).
+        #[arg(long)]
+        no_drc: bool,
+        /// Work directory for the DRC report.
+        #[arg(long, default_value = "pcb_work/status")]
+        work: String,
+    },
     /// PNG of the board or a region, nets labelled.
     Render {
         board: String,
@@ -149,6 +197,10 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Route { .. } => "route",
         Cmd::Render { .. } => "render",
         Cmd::Doctor { .. } => "doctor",
+        Cmd::Init { .. } => "init",
+        Cmd::Edit { .. } => "edit",
+        Cmd::Diff { .. } => "diff",
+        Cmd::Status { .. } => "status",
     }
 }
 
@@ -319,6 +371,73 @@ fn run(cli: Cli) -> Result<Reply> {
             let error = (!bad.is_empty()).then(|| ("tools-mismatch".to_string(), format!("{} of {} tool checks failed", bad.len(), checks.len())));
             Ok(Reply { outcome: if bad.is_empty() { Outcome::Done } else { Outcome::Refused }, error, written: None, warnings, human, data: json!({ "checks": checks }) })
         }
+        Cmd::Init { board, name, out } => {
+            let b = Board::load(&board)?;
+            let bp = std::path::Path::new(&board);
+            let out = out.map(std::path::PathBuf::from).unwrap_or_else(|| bp.with_file_name("pcb.toml"));
+            if out.exists() {
+                return Err(contract::refused("exists", format!("{} exists; pcb init does not overwrite a project file", out.display())));
+            }
+            let name = name.unwrap_or_else(|| bp.file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string());
+            let rel = relative(bp, out.parent().unwrap_or(std::path::Path::new(".")));
+            let text = project::init_text(&name, &rel, &b);
+            // what init writes must read back cleanly, or it is pcb's bug
+            let p = project::parse(&text).map_err(|e| anyhow::anyhow!("pcb init wrote a file it cannot read: {e}"))?;
+            std::fs::write(&out, &text).map_err(|e| contract::failed("io", format!("writing {}: {e}", out.display())))?;
+            let o = out.display().to_string();
+            Ok(Reply {
+                outcome: Outcome::Done,
+                error: None,
+                written: Some(o.clone()),
+                warnings: vec![],
+                human: format!("wrote {o}: {name}, {} layers, {} net rules", p.project.layers, p.nets.len()),
+                data: json!({ "name": name, "board": rel, "layers": p.project.layers, "fab": p.project.fab, "nets": p.nets.keys().collect::<Vec<_>>() }),
+            })
+        }
+        Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
+        Cmd::Diff { a, b, png } => {
+            let (ba, bb) = (diff::load(&a)?, diff::load(&b)?);
+            let d = diff::diff(&ba, &bb, &a, &b);
+            let mut human = if d.identical { format!("{a} and {b}: no change") } else { format!("{a} -> {b}") };
+            for f in &d.footprints {
+                human += &format!("\n  {} {}", f.reference, f.change);
+            }
+            for (net, c) in &d.copper {
+                human += &format!("\n  {net}: +{} tracks ({:.2} mm) -{} tracks ({:.2} mm), +{} -{} vias", c.tracks_added, c.length_added_mm, c.tracks_removed, c.length_removed_mm, c.vias_added, c.vias_removed);
+            }
+            if !d.nets_added.is_empty() || !d.nets_removed.is_empty() {
+                human += &format!("\n  nets added {:?}, removed {:?}", d.nets_added, d.nets_removed);
+            }
+            let written = match &png {
+                Some(p) => {
+                    let o = render::Opts { region: None, highlight: d.copper.keys().cloned().collect(), scale: 20.0, labels: false };
+                    render::png(&bb, &o, p)?;
+                    Some(p.clone())
+                }
+                None => None,
+            };
+            Ok(Reply { outcome: Outcome::Done, error: None, written, warnings: vec![], human, data: serde_json::to_value(&d)? })
+        }
+        Cmd::Edit { board, ops, work, out } => {
+            let text = if ops == "-" {
+                let mut t = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut t)?;
+                t
+            } else {
+                std::fs::read_to_string(&ops).map_err(|e| contract::failed("io", format!("reading {ops}: {e}")))?
+            };
+            let list = edit::parse_ops(&text)?;
+            let out = out.unwrap_or_else(|| board.clone());
+            let r = edit::run(&board, &list, &out, std::path::Path::new(&work))?;
+            let rejected = !r.regressions.is_empty();
+            let mut human = r.ops.join("\n");
+            human += &format!("\nDRC {} -> {}", r.drc_total_before, r.drc_total_after);
+            if rejected {
+                human += &format!("\nrejected, written to {}: {}", r.written, r.regressions.join("; "));
+            }
+            let written = r.written.clone();
+            Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(written), warnings: vec![], human, data: serde_json::to_value(&r)? })
+        }
         Cmd::Render { board, region, highlight, scale, no_labels, out } => {
             let b = Board::load(&board)?;
             let o = render::Opts {
@@ -331,4 +450,81 @@ fn run(cli: Cli) -> Result<Reply> {
             Ok(Reply { outcome: Outcome::Done, error: None, written: Some(out.clone()), warnings: vec![], human: format!("wrote {out}"), data: json!({}) })
         }
     }
+}
+
+/// `board` written relative to `dir` when it lies inside it, else as given.
+fn relative(board: &std::path::Path, dir: &std::path::Path) -> String {
+    let (b, d) = (std::path::absolute(board).unwrap_or(board.to_path_buf()), std::path::absolute(dir).unwrap_or(dir.to_path_buf()));
+    b.strip_prefix(&d).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| board.to_string_lossy().to_string())
+}
+
+/// `pcb status`: see the command's help.
+fn status(proj: &str, no_drc: bool, work: &str) -> Result<Reply> {
+    let path = project::locate(proj);
+    // a file that does not parse is refused with its message as the one problem, so problems are always in one place
+    let l = match project::load(&path) {
+        Ok(l) => l,
+        Err(e) if contract::classify(&e).1 == "config" => {
+            let msg = format!("{e:#}");
+            return Ok(Reply { outcome: Outcome::Refused, error: Some(("config".into(), msg.clone())), written: None, warnings: vec![], human: format!("refused [config]: {msg}"), data: json!({ "file": path.display().to_string(), "problems": [msg] }) });
+        }
+        Err(e) => return Err(e),
+    };
+    let p = &l.project;
+    let problems = project::check(p);
+    let mut warnings = vec![];
+    let dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    // VERSION beside pcb.toml or one folder up (a project keeps pcb.toml in design/); TAGS.tsv at the repository top
+    let version_file = [dir.join("VERSION"), dir.join("..").join("VERSION")].into_iter().find(|f| f.exists());
+    let version_json = match &version_file {
+        Some(f) => {
+            let v = std::fs::read_to_string(f).unwrap_or_default().trim().to_string();
+            if v != p.project.version {
+                warnings.push(contract::warn("version-mismatch", format!("pcb.toml says {}, {} says {v}", p.project.version, f.display())));
+            }
+            json!({ "path": f.display().to_string(), "value": v, "matches": v == p.project.version })
+        }
+        None => serde_json::Value::Null,
+    };
+    let tag = format!("{}-v{}", p.project.name, p.project.version);
+    let tags_tsv = std::path::absolute(&dir).ok().and_then(|d| d.ancestors().map(|a| a.join("TAGS.tsv")).find(|f| f.exists()));
+    let tag_json = match &tags_tsv {
+        Some(f) => {
+            let recorded = std::fs::read_to_string(f).unwrap_or_default().lines().any(|l| l.split('\t').next() == Some(tag.as_str()));
+            json!({ "tag": tag, "file": f.display().to_string(), "recorded": recorded })
+        }
+        None => json!({ "tag": tag, "file": null, "recorded": false }),
+    };
+    let bp = l.board_path();
+    let b = Board::load(&bp.to_string_lossy())?;
+    warnings.extend(project::check_against(p, &b));
+    let drc = if no_drc {
+        serde_json::Value::Null
+    } else {
+        std::fs::create_dir_all(work)?;
+        match kicad::drc_counts(std::path::Path::new(work), &bp.to_string_lossy(), "status_drc") {
+            Ok(m) => json!({ "total": m.values().sum::<usize>(), "by_key": m }),
+            Err(e) => {
+                warnings.push(contract::warn("drc-not-run", format!("{e:#}")));
+                serde_json::Value::Null
+            }
+        }
+    };
+    let data = json!({
+        "project": &p.project, "file": path.display().to_string(), "schema": p.schema, "problems": problems,
+        "version_file": version_json, "tag": tag_json, "gates": &p.gates, "decisions": &p.decisions,
+        "board": { "path": bp.display().to_string(), "copper_layers": b.copper_layers, "footprints": b.footprints.len(), "nets": b.nets.len(), "tracks": b.tracks.len(), "vias": b.vias.len(), "zones": b.zones.len() },
+        "drc": drc,
+    });
+    let mut human = format!("{} {} ({})\n  board {}: {} footprints, {} nets\n", p.project.name, p.project.version, path.display(), bp.display(), b.footprints.len(), b.nets.len());
+    human += &format!("  gates: {}\n  decisions: {}\n", if p.gates.is_empty() { "none".to_string() } else { p.gates.keys().cloned().collect::<Vec<_>>().join(", ") }, p.decisions.len());
+    if let Some(t) = data["drc"]["total"].as_u64() {
+        human += &format!("  DRC: {t} items\n");
+    }
+    for e in &problems {
+        human += &format!("  problem: {e}\n");
+    }
+    // a file with problems is refused, with everything else still reported
+    let error = (!problems.is_empty()).then(|| ("config".to_string(), format!("{} problem(s) in {}", problems.len(), path.display())));
+    Ok(Reply { outcome: if problems.is_empty() { Outcome::Done } else { Outcome::Refused }, error, written: None, warnings, human, data })
 }

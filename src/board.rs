@@ -55,6 +55,8 @@ pub struct Track {
     pub layer: String,
     pub net: String,
     pub locked: bool,
+    /// KiCad's id, when the file has one (pcb writes items without one; KiCad gives them a new id on each load).
+    pub uuid: Option<String>,
     #[serde(skip)]
     pub span: (usize, usize),
 }
@@ -67,6 +69,7 @@ pub struct Via {
     pub drill: f64,
     pub net: String,
     pub locked: bool,
+    pub uuid: Option<String>,
     #[serde(skip)]
     pub span: (usize, usize),
 }
@@ -195,6 +198,7 @@ impl Board {
                         layer: n.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(),
                         net: net_of(n),
                         locked: locked(n),
+                        uuid: n.find("uuid").and_then(|u| u.arg(1)).map(String::from),
                         span: n.span,
                     })
                 }
@@ -206,6 +210,7 @@ impl Board {
                         drill: n.find("drill").and_then(|w| w.num(1)).unwrap_or(0.0),
                         net: net_of(n),
                         locked: locked(n),
+                        uuid: n.find("uuid").and_then(|u| u.arg(1)).map(String::from),
                         span: n.span,
                     })
                 }

@@ -5,6 +5,7 @@ Usage: python3 contract_cases.py pcb-binary workdir
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -42,15 +43,53 @@ subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"
 # the gate refuses before Freerouting would run, so the jar is a placeholder
 open(os.path.join(work, "never-run.jar"), "w").write("")
 cwd = {"doctor_relative_work": work}
-words = {"old_format_refused": "kicad-cli pcb upgrade", "new_format_refused": "newer KiCad format", "drc_truncated_refused": "clearance 499"}
+# pcb init and pcb status (M1): a project folder with the synthetic board, then pcb.toml variants made from init's file
+pj = os.path.join(work, "proj")
+os.makedirs(pj, exist_ok=True)
+pboard = os.path.join(pj, "b.kicad_pcb")
+subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), "base", pboard], check=True, capture_output=True)
+for f in ("pcb.toml",):
+    if os.path.exists(os.path.join(pj, f)):
+        os.remove(os.path.join(pj, f))
+r0 = subprocess.run([os.path.abspath(pcb), "--json", "init", pboard], capture_output=True, text=True)
+toml_text = open(os.path.join(pj, "pcb.toml")).read() if r0.returncode == 0 else ""
+variants = {
+    "unknown_key": toml_text.replace("fab = ", "fabb = ", 1),
+    # net N has no tracks, so init writes no rule for it
+    "bad_values": toml_text.replace('version = "0.1.0"', 'version = "0.1"', 1) + '\n[nets.N]\nwidth_mm = -1\n',
+    "mismatch": toml_text + '\n[nets.NO_SUCH_NET]\nwidth_mm = 0.3\n',
+}
+for k, t in variants.items():
+    d_ = os.path.join(work, "proj_" + k)
+    os.makedirs(d_, exist_ok=True)
+    shutil.copy(pboard, d_)
+    open(os.path.join(d_, "pcb.toml"), "w").write(t)
+runs.update({
+    "init_again_refused": ["init", pboard],
+    "status": ["status", "--project", pj, "--work", os.path.join(work, "status_w")],
+    "status_unknown_key_refused": ["status", "--project", os.path.join(work, "proj_unknown_key"), "--no-drc"],
+    "status_bad_values_refused": ["status", "--project", os.path.join(work, "proj_bad_values"), "--no-drc"],
+    "status_mismatch_warns": ["status", "--project", os.path.join(work, "proj_mismatch"), "--no-drc"],
+})
+words = {"init_again_refused": "does not overwrite", "status_unknown_key_refused": "fabb", "status_bad_values_refused": "2 problem",
+         "old_format_refused": "kicad-cli pcb upgrade", "new_format_refused": "newer KiCad format", "drc_truncated_refused": "clearance 499"}
 want = {"missing_file_fails": "failed", "usage_error_refused": "refused", "doctor_wrong_jar_refused": "refused",
         "render_too_large_refused": "refused", "render_unwritable_fails": "failed", "old_format_refused": "refused",
-        "new_format_refused": "refused", "drc_truncated_refused": "refused"}
+        "new_format_refused": "refused", "drc_truncated_refused": "refused", "init_again_refused": "refused",
+        "status_unknown_key_refused": "refused", "status_bad_values_refused": "refused"}
+# warnings a run must carry
+want_warn = {"status_mismatch_warns": "config-mismatch"}
 for name, args in runs.items():
     r = subprocess.run([os.path.abspath(pcb), "--json", *args], capture_output=True, text=True, cwd=cwd.get(name))
     d, problems = check(r.stdout, r.returncode)
     if not problems and d["outcome"] != want.get(name, "done"):
         problems.append(f"outcome {d['outcome']}, want {want.get(name, 'done')}")
+    if not problems and name in want_warn and want_warn[name] not in [w["code"] for w in d.get("warnings", [])]:
+        problems.append(f"no {want_warn[name]} warning: {d.get('warnings')}")
+    if not problems and name == "status_unknown_key_refused" and not any("fabb" in x for x in d.get("data", {}).get("problems", [])):
+        problems.append(f"data.problems should name the key: {d.get('data', {}).get('problems')}")
+    if not problems and name == "status_bad_values_refused" and len(d.get("data", {}).get("problems", [])) != 2:
+        problems.append(f"data.problems should name both: {d.get('data', {}).get('problems')}")
     if not problems and name in words and words[name] not in d.get("error", {}).get("message", ""):
         problems.append(f"message does not say {words[name]!r}: {d.get('error', {}).get('message', '')[:200]}")
     results[name] = "; ".join(problems) or "ok"

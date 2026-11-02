@@ -109,6 +109,10 @@ fn main() -> Result<()> {
     s.py("kicad adapter", "tests/cases/adapter_cases.py", &[&s.w("adapter")]);
     s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
     s.py("import orientation sweep", "tests/cases/orient_cases.py", &[&pcb, &s.w("orient_cases")]);
+    if s.py("edit edge cases", "tests/cases/edit_cases.py", &[&pcb, &s.w("edit_cases")]) {
+        s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
+        s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);
+    }
     match (&jar, s.fast) {
         (Some(j), false) => {
             let j = j.clone();

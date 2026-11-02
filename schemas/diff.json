@@ -1,0 +1,69 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:diff",
+ "title": "pcb diff output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/diff/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "a",
+     "b",
+     "footprints",
+     "nets_added",
+     "nets_removed",
+     "copper",
+     "zones_a",
+     "zones_b",
+     "identical"
+    ],
+    "properties": {
+     "footprints": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "ref",
+        "change"
+       ]
+      }
+     },
+     "copper": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "object",
+       "required": [
+        "tracks_added",
+        "tracks_removed",
+        "length_added_mm",
+        "length_removed_mm",
+        "vias_added",
+        "vias_removed"
+       ]
+      }
+     },
+     "identical": {
+      "type": "boolean"
+     }
+    }
+   }
+  }
+ }
+}
