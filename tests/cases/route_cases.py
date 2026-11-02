@@ -41,10 +41,13 @@ CASES = {
     "width_override_unknown_net_refused": ("base", ["--nets", "N", "--width", "NOPE=0.3"], "refused", "no net NOPE", None),
     # --prewire: N2 moved 2 mm down by an edit, then N routed to it; the edit's target checked like pcb edit
     "prewire_move_then_route": ("base", ["--nets", "N", "--prewire", "PREWIRE:move_n2"], "done", None, ("N", "N")),
+    # a prewired track on a ripped net is the owner's choice: --rip removes the input's copper, never the prewire's
+    "prewire_kept_through_rip": ("base", ["--rip", "N", "--nets", "N", "--prewire", "PREWIRE:stub_n"], "done", None, ("N", "N")),
     "prewire_bad_target_refused": ("base", ["--nets", "N", "--prewire", "PREWIRE:bad"], "refused", "N2 is at", None),
 }
 PREWIRE = {
     "move_n2": [{"op": "move_footprint", "ref": "N2", "from": [40, 15], "to": [40, 17]}],
+    "stub_n": [{"op": "add_track", "net": "N", "layer": "F.Cu", "width": 0.2, "points": [[20, 15], [30, 15]], "free_end": True}],
     "bad": [{"op": "move_footprint", "ref": "N2", "from": [41, 15], "to": [40, 17]}],
 }
 # custom rules files (.kicad_dru) written beside a case's board
@@ -120,6 +123,12 @@ if __name__ == "__main__":
                 new = [x for x in src.find_all("segment") if x.find("net").arg(1) == net and abs(x.nums("width")[0] - float(mm)) < 1e-6]
                 if not new:
                     results[name] = f"no {net} track at {mm} mm in the result"
+            if results[name] == "ok" and name == "prewire_kept_through_rip":
+                sys.path.insert(0, os.path.join(here, "..", "lib"))
+                import kisexp
+                src = kisexp.parse(open(out).read())
+                if not any(x.find("net").arg(1) == "N" and sorted([tuple(x.nums("start")), tuple(x.nums("end"))]) == [(20.0, 15.0), (30.0, 15.0)] for x in src.find_all("segment")):
+                    results[name] = "the prewired N track (20,15)-(30,15) is not in the result"
             if results[name] == "ok" and name in LAYER_CHECKS:
                 allowed, connected = LAYER_CHECKS[name]
                 p = subprocess.run([sys.executable, "-c", LAYER_PROBE, out], capture_output=True, text=True)

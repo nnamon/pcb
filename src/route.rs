@@ -556,8 +556,11 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let mut prewired: Vec<String> = vec![];
     let o = &Opts { work, ..o.clone() };
     // the board the router starts from: the input, with the prewire edits applied (written out for checking)
+    let input = Board::load(board_path)?;
+    // copper the prewire edits added is never ripped: it is the owner's explicit choice (the input's copper may be)
+    let input_tracks: std::collections::HashSet<_> = input.tracks.iter().map(|t| (seg_key((t.x0, t.y0), (t.x1, t.y1), &t.layer), t.net.clone())).collect();
+    let input_vias: std::collections::HashSet<_> = input.vias.iter().map(|v| ((v.x * 1000.0).round() as i64, (v.y * 1000.0).round() as i64, v.net.clone())).collect();
     let start = {
-        let input = Board::load(board_path)?;
         if o.prewire.is_empty() {
             input
         } else {
@@ -619,8 +622,12 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // Copper is ripped only well inside the region, so the ends left by ripping (where the router must
     // reconnect) are clear of the keep-outs at the region's edge.
     let ri = (r.0 + RIP_MARGIN, r.1 + RIP_MARGIN, r.2 - RIP_MARGIN, r.3 - RIP_MARGIN);
-    let rip_track = |t: &crate::board::Track| inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1) && !t.locked && o.rip.net(&t.net);
-    let rip_via = |v: &crate::board::Via| inside(ri, v.x, v.y) && !v.locked && o.rip.net(&v.net);
+    let rip_track = |t: &crate::board::Track| {
+        inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1) && !t.locked && o.rip.net(&t.net) && input_tracks.contains(&(seg_key((t.x0, t.y0), (t.x1, t.y1), &t.layer), t.net.clone()))
+    };
+    let rip_via = |v: &crate::board::Via| {
+        inside(ri, v.x, v.y) && !v.locked && o.rip.net(&v.net) && input_vias.contains(&((v.x * 1000.0).round() as i64, (v.y * 1000.0).round() as i64, v.net.clone()))
+    };
 
     // 1. scratch copy: lock outside, remove unlocked inside
     let mut scratch = Edits::default();
