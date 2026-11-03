@@ -235,6 +235,48 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         }
     }
 
+    // edit cases: the gate and target rules on the real board
+    for case in fx.get("edit").and_then(|r| r.as_array()).cloned().unwrap_or_default() {
+        let cname = case["name"].as_str().context("edit case name")?.to_string();
+        let label = format!("{name}: edit {cname}");
+        let t0 = Instant::now();
+        let ops = w(&format!("edit_{cname}.json"));
+        std::fs::write(&ops, case["ops"].as_str().context("edit case ops")?)?;
+        let out = w(&format!("edit_{cname}.kicad_pcb"));
+        let _ = std::fs::remove_file(&out);
+        let before = std::fs::read(&board)?;
+        let o = Command::new(pcb).args(["--json", "edit", &board, "--ops", &ops, "--work", &w(&format!("edit_{cname}_w")), "-o", &out]).output()?;
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(json!({}));
+        let want = case.get("expect").and_then(|x| x.as_str()).unwrap_or("done");
+        let mut problems = vec![];
+        if std::fs::read(&board)? != before {
+            problems.push("the input board changed".to_string());
+        }
+        if v["outcome"] != want {
+            problems.push(format!("outcome {} (want {want}): {} {}", v["outcome"], v["error"], v["data"]["regressions"]));
+        }
+        if let Some(c) = case.get("code").and_then(|x| x.as_str()) {
+            if v["error"]["code"] != c {
+                problems.push(format!("code {} (want {c})", v["error"]["code"]));
+            }
+        }
+        let got: Vec<String> = v["data"]["regressions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        for r in case.get("regressions").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
+            let r = r.as_str().unwrap_or_default();
+            if !got.iter().any(|g| g.starts_with(&format!("{r}:"))) {
+                problems.push(format!("regression {r} not reported: {got:?}"));
+            }
+        }
+        if want != "done" && Path::new(&out).exists() {
+            problems.push("a refused or rejected edit wrote the output".into());
+        }
+        let ok = problems.is_empty();
+        s.steps.push(Step { name: label.clone(), ok, seconds: t0.elapsed().as_secs_f64(), detail: problems.join("; ") });
+        if ok && want == "done" {
+            s.py(&format!("{label}: verify_edit"), "tests/oracles/verify_edit.py", &[&board, &ops, &out]);
+        }
+    }
+
     // zones: spike 3 is a badge-specific prototype until `pcb zone` (M2), so it runs only for a fixture that names it
     if let Some(z) = fx.get("zones").filter(|z| z.get("prototype").and_then(|p| p.as_str()) == Some("spike3")) {
         let coil = dir.join(z["coil_json"].as_str().context("coil_json")?).to_string_lossy().to_string();

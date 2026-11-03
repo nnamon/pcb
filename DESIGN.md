@@ -151,6 +151,65 @@ Every command:
 - **One door to KiCad:** every KiCad call goes through `src/kicad.rs`.
 - **Pinned tools:** `pcb doctor` checks the versions and the KiCad behaviours pcb works around.
 
+## Project file and explicit edits (milestone M1)
+
+The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1).
+
+### Project file
+
+`pcb.toml` holds what a project knows that the board file cannot (`src/project.rs`). It is read strictly: an unknown key, a missing `schema` key or another schema number is refused (`config`), so a misspelt setting is never silently ignored.
+
+| Key | Holds | Used by |
+| --- | --- | --- |
+| `schema` | `1` | every reader; checked first |
+| `[project]` | `name`, `version` (MAJOR.MINOR.PATCH), `board` (relative to `pcb.toml`), `layers` (2, 4, 6 or 8), `fab` (rule-set name) | `status` |
+| `[gates.<name>]` | `version`, `passed` (YYYY-MM-DD), `inputs` (`sha256:...`) | written by `pcb gate pass` (M3), never by hand |
+| `[decisions.<key>]` | `text`, `date`: owner decisions an agent must not ask about again | `status` |
+| `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste` | M3 release |
+| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm` | M2 zones, M3 width and rating checks |
+| `[[keepout]]` | `name`, `rect` (x0, y0, x1, y1 mm), `grow_mm`, `layers` (`"all"` or a list), `forbid` (`pour`, `track`, `via`, `footprint`) | M2 |
+| `[[zone]]` | `net`, `layers`, `clearance_mm`, `thermal = { gap_mm, spoke_mm }` | M2 |
+| `[[pad_override]]` | `pad` (`REF.PAD`), `zone_connection` (`solid`, `thermal`, `none`) | M2 |
+| `[[net_tie]]` | `footprint`, `pads` (two or more) | M2 |
+| `[bringup]` | `ammeter_break` (nets), `test_points` (reference to what it measures) | M3 bring-up sheet |
+
+- **`pcb init BOARD`** writes a starter file: the name (the board's stem unless `--name`), version 0.1.0, the layer count and `jlcpcb-<n>layer-1.6mm`, an empty `[decisions]`, and a `[nets.<NET>] width_mm` for every net whose most common track width is above the board's usual one. It never overwrites a file (`exists`).
+- **`pcb status [--project DIR|FILE]`** is the first command of a session. It reports the project, the board's counts, its KiCad DRC (`--no-drc` skips it), gates and decisions. It compares the version with a `VERSION` file beside `pcb.toml` or one folder up (`version-mismatch`), and looks for the tag `<name>-v<version>` in the nearest `TAGS.tsv` above. Problems inside the file (bad version, layer count, dates, ranges, names) make the outcome `refused` with every problem listed in `data.problems`; a file that does not parse is refused the same way, its parse message the one problem. Names the board lacks (nets, references, pads, layers) are `config-mismatch` warnings, since the board may be mid-change.
+
+### Edit language
+
+`pcb edit BOARD --ops FILE` (`src/edit.rs`) applies a JSON list of operations, `{"ops": [...]}` or a bare list, in order. Each names its target and what it expects to find there; when the board differs, the whole edit is refused and nothing is written.
+
+| `op` | Fields | Target and expectation |
+| --- | --- | --- |
+| `add_track` | `net`, `layer`, `width`, `points` (two or more), `free_start`, `free_end` | One segment per pair of points. Both ends must join copper of the net on the edited board (a pad on that layer, a via, or a track within half its width), unless marked free. Zone fills do not count |
+| `add_via` | `net`, `at`, `size`, `drill`, `free` | A through via, F.Cu to B.Cu. It must join copper of its net on some layer unless `free` |
+| `move_via` | `net`, `at`, `to`, `unlock` | The via of that net at `at`; its tracks are not moved, so it must still join at `to` |
+| `delete` | `what` (`via`, `track`), `net`, then `uuid`, or `at` for a via, or `layer`, `start`, `end` for a track; `unlock`, `all` | Exactly that item. When a position names several (a duplicate track), the edit is refused unless `all` is set, which deletes every one; boards imported from tscircuit have no uuids to tell duplicates apart |
+| `set_width` | `net`, `layer`, `start`, `end`, `from`, `to`, `unlock` | The track with those ends, now `from` mm wide |
+| `move_footprint` | `ref`, `from`, `to`, `unlock` | The footprint now at `from`; its pads move with it, rotation and side kept. Tracks do not move, so the gate sees any that no longer reach a pad |
+
+- Positions match within 5 µm. Unknown fields are refused, so a typo cannot pass as an omitted option. New points must lie on the board (`edit-op`).
+- A locked item is refused (`edit-locked`) unless the operation says `unlock`.
+- One item cannot be the target of two operations (`edit-op`), and an end may rely on copper an earlier operation in the same edit adds.
+- Codes: `edit-op` (a malformed or contradictory list), `edit-no-target`, `edit-mismatch` (found, but not as stated), `edit-locked`, `edit-unjoined`, plus `unknown-net` and `bad-layer`.
+- The result goes through the write gate. With no new DRC violation it is written to `-o` (default: the input); otherwise to `<out>.rejected.kicad_pcb`, and the outcome is `rejected` with the regressions listed.
+
+### Diff
+
+`pcb diff A B` compares two boards, each a file or a git revision as `REV:path` (`HEAD~1:design/board.kicad_pcb`). It reports:
+- footprints by reference: moved, turned, flipped, pads changed, added, removed;
+- copper per net: tracks added and removed with their lengths, vias added and removed; a track whose width alone changed counts as one removed and one added;
+- nets added and removed, and the zone count on each side.
+
+`--png FILE` also draws the second board with the changed nets highlighted.
+
+### Routing additions
+
+- **`--width NET=MM`** routes one net at a width other than its usual one: the owner's choice for one link. The net goes to Freerouting in a class of its own at that width; the gate still judges the result against the board's rules.
+- **`--prewire FILE`** applies `pcb edit` operations before routing: parts moved, or copper laid where the router cannot find room. They are checked as an edit would be. Their copper is never ripped, even on a net named in `--rip`, and the whole change, prewire plus routing, is gated once against the input. The prewired board is written to the work folder as `prewired.kicad_pcb`.
+- **Second router run.** When named nets are left open, the router runs again with no region keep-outs and copper outside the region is still dropped (Engineering choices, Freerouting traps). The report lists both runs in `attempts` and the one kept in `attempt_used`.
+
 ## Planning drawings
 
 `pcb drawing placement` writes the Gate 1 placement proposal in the house drawing style, written down in `docs/drawing-standard.md` from the badge's NNDC27-CAR-PLC-001 (A3 at 1:1, zoned frame, title block, datum A ordinates, leaders, mirrored bottom view with a stack-up section, placement table). All its facts come from the board and `pcb.toml [drawing]`. Milestone M4 in the proposal.
@@ -204,17 +263,19 @@ Every command:
 
 ## Phases
 
-| Phase | Delivers | Done when |
-| --- | --- | --- |
-| 0 | KiCad 7 installed; pcbnew load/save, DSN export with locked copper as protected, SES import, zone fill, DRC, `kicad-cli` exports all shown working | A script runs each on a test board |
-| 1 | Crate skeleton: S-expression round trip, `pcb info`, `pcb render` | A KiCad board round-trips byte-identical; `info` and `render` work on it |
-| 2 | `design.toml`, EasyEDA → KiCad footprints, `pcb sync`, `pcb place`, placement checks | A small test board syncs, places and passes `check --place` |
-| 3 | `pcb route` region-locked, prewires; `pcb zone`, `pcb fill` | A region re-routes without touching locked copper |
-| 4 | `pcb check` (DRC with JLCPCB rules, Gerber connectivity and DFM, paste, currents) | The check report covers GUIDELINES checks 7–16 |
-| 5 | `pcb release`: order pack, assembly page, bring-up sheet, fit print | A package passes check 20 |
-| 6 | Port the badge carrier 0.5.0: `design.toml` from its netlist, placement and r36 routing imported, Gate 2 on the new files, release | 0.5.0 released from `pcb` |
+The original six phases became five milestones in the proposal ("pcb tool: proposal and feature design", Claude doc), each closed by a gate:
 
-The project's Python scripts stay in the repository until phase 6 replaces their use on this board.
+| Milestone | Delivers | Gate |
+| --- | --- | --- |
+| M0 Foundations | Fixtures, oracles and mutations in the repository; `cargo xtask test`; CI image; `pcb doctor`; JSON schemas; the write gate in core | CI green on every push; the review oracles in the suite; `pcb doctor` passes |
+| M1 Project file and explicit edits | `pcb.toml`, `init`, `status`; `edit` and `diff` through the write gate; `route --width`, `--prewire` | Every M1 command passes its cases, oracles and mutations; review closed and confirmed |
+| M2 Zones | `pcb zone`: planes, pours, power fills, keep-outs, net ties, pad overrides, stitching vias | The spike 3 oracle passes on the Rust version; the badge's J102 thermal and GND vias as cases; review closed and confirmed |
+| M3 Check and release | `pcb check` (fab rule sets, path width, ratings, paste, bring-up), `pcb gate`, `pcb release` | The paddle-keyer package matches the files it was ordered with; badge 0.5.0 checked through `pcb` |
+| M4 Netlist and placement | `pcb sync` with pin-name checks, `pcb parts`, `pcb place`, `pcb drawing`, locks | paddle-keyer from netlist to order with no per-board code |
+
+**The tool before the boards** (owner, 4 Nov 2026). Every gate is judged on the tool alone. Real boards serve as fixtures, and their hard spots become cases, but no board's design work (the badge's ILM, VBUS_F and J102 fixes, its release) is done until M4 closes.
+
+The project's Python scripts stay in the repository until `pcb` replaces their use.
 
 ## Spike 2: region routing on r36a (30 Oct 2026)
 

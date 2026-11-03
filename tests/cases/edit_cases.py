@@ -42,8 +42,17 @@ CASES = {
     "off_board_refused": ([T("N", "F.Cu", 0.2, (20, 15), (90, 15))], "refused", "edit-op", None),
     "same_item_twice_refused": ([dict(op="set_width", net="W", layer="F.Cu", start=[15, 10], end=[30, 10], from_=0.4, to=0.5),
                                  dict(op="delete", what="track", net="W", layer="F.Cu", start=[15, 10], end=[30, 10])], "refused", "edit-op", None),
+    # two S tracks along the same line (variant dup): a position names both, so delete must say which or take all
+    "duplicate_named_by_position_refused": ([dict(op="delete", what="track", net="S", layer="F.Cu", start=[3, 30], end=[45, 30])], "refused", "edit-no-target", None),
+    "duplicate_delete_all_and_readd": ([dict(op="delete", what="track", net="S", layer="F.Cu", start=[3, 30], end=[45, 30], all=True),
+                                        T("S", "F.Cu", 0.2, (3, 30), (45, 30))], "done", None, None),
+    "duplicate_delete_all_breaks_net_rejected": ([dict(op="delete", what="track", net="S", layer="F.Cu", start=[3, 30], end=[45, 30], all=True)], "rejected", None, None),
     "unknown_field_refused": ([dict(op="add_via", net="N", at=[30, 15], size=0.6, drill=0.3, sise=1)], "refused", "edit-op", None),
 }
+
+
+# boards other than the base variant
+VARIANT = {"duplicate_named_by_position_refused": "dup", "duplicate_delete_all_and_readd": "dup", "duplicate_delete_all_breaks_net_rejected": "dup"}
 
 
 def sha(p):
@@ -61,7 +70,7 @@ if __name__ == "__main__":
     results = {}
     for name, (ops, want, code, extra) in CASES.items():
         board = os.path.join(work, f"{name}.kicad_pcb")
-        subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), "base", board], check=True, capture_output=True)
+        subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), VARIANT.get(name, "base"), board], check=True, capture_output=True)
         opsf = os.path.join(work, f"{name}.ops.json")
         json.dump(ops_json(ops), open(opsf, "w"))
         before = sha(board)

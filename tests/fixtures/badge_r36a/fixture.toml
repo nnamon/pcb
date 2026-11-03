@@ -55,6 +55,31 @@ targets = ["PMUX_SS"]
 expect = "done"
 attempt_used = 1
 
+# Edit cases run `pcb edit` on the imported board: the gate on a dense real board, and targets the import leaves
+# without uuids. `ops` is the JSON operation list; `regressions` must each be among the DRC regressions reported.
+[[edit]]
+name = "c116_west_rejected"          # 0.09 mm west brings C116.1 within 0.15 mm of the PMUX_SS track at x 48.19
+ops = '[{"op": "move_footprint", "ref": "C116", "from": [48.03, 29.0], "to": [47.94, 29.0]}]'
+expect = "rejected"
+regressions = ["clearance PMUX_SS VBUS_F"]
+
+[[edit]]
+name = "ilm_via_without_room_rejected"   # a via beside U106 pin 10 lands on USB_SENSE's B.Cu diagonal
+ops = '[{"op": "add_track", "net": "PMUX_ILM", "layer": "F.Cu", "width": 0.15, "points": [[50.85, 29.25], [50.1, 29.25], [49.85, 29.0]]}, {"op": "add_via", "net": "PMUX_ILM", "at": [49.85, 29.0], "size": 0.6, "drill": 0.3}]'
+expect = "rejected"
+regressions = ["shorting_items PMUX_ILM USB_SENSE", "clearance PMUX_ILM VBUS_F"]
+
+[[edit]]
+name = "duplicate_without_uuid_refused"  # the import wrote PMUX_SS's pin-11 stub twice, with no uuids
+ops = '[{"op": "delete", "what": "track", "net": "PMUX_SS", "layer": "F.Cu", "start": [50.85, 29.75], "end": [49.92, 29.75]}]'
+expect = "refused"
+code = "edit-no-target"
+
+[[edit]]
+name = "duplicate_removed"
+ops = '[{"op": "delete", "what": "track", "net": "PMUX_SS", "layer": "F.Cu", "start": [50.85, 29.75], "end": [49.92, 29.75], "all": true}, {"op": "add_track", "net": "PMUX_SS", "layer": "F.Cu", "width": 0.15, "points": [[50.85, 29.75], [49.92, 29.75]]}]'
+expect = "done"
+
 # Zones (spike 3 prototype), in KiCad coordinates (mm, y down).
 [zones]
 # phase0/spike3.py is written for this board only; `pcb zone` (milestone M2) replaces it

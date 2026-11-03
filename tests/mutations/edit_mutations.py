@@ -66,10 +66,21 @@ def m_footprint_not_moved(case="move_footprint"):
     return case, open(os.path.join(work, f"{case}.kicad_pcb")).read()
 
 
-MUT = [m_shift_end, m_drop_via, m_width, m_extra_segment, m_unrelated_change, m_width_not_set, m_footprint_other_change, m_footprint_not_moved]
+def m_delete_all_kept_one(case="duplicate_delete_all_and_readd"):
+    # delete all took both duplicates and one was laid again: the output with a second copy restored must fail
+    out, _ = new_lines(case)
+    ln = next(ln for ln in out.split("\n") if "(segment" in ln and "(start 3 30)" in ln)
+    return case, out.replace(ln, ln + "\n" + ln, 1)
+
+
+def m_delete_all_none_readded(case="duplicate_delete_all_and_readd"):
+    return case, open(os.path.join(work, f"{case}.kicad_pcb")).read()
+
+
+MUT = [m_shift_end, m_drop_via, m_width, m_extra_segment, m_unrelated_change, m_width_not_set, m_footprint_other_change, m_footprint_not_moved, m_delete_all_kept_one, m_delete_all_none_readded]
 
 results = {}
-for case in sorted({"join_n", "join_n_through_vias", "set_width", "move_footprint"}):
+for case in sorted({"join_n", "join_n_through_vias", "set_width", "move_footprint", "duplicate_delete_all_and_readd"}):
     v = subprocess.run([sys.executable, oracle, os.path.join(work, f"{case}.kicad_pcb"), os.path.join(work, f"{case}.ops.json"), os.path.join(work, f"{case}.out.kicad_pcb")], capture_output=True, text=True)
     results[f"unmutated {case} passes"] = v.returncode == 0
 for m in MUT:

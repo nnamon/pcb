@@ -1,9 +1,0 @@
-{"ops": [
-  {"op": "move_footprint", "ref": "C116", "from": [48.03, 29.0], "to": [47.83, 29.0]},
-  {"op": "delete", "what": "track", "net": "PMUX_SS", "layer": "F.Cu", "start": [49.74, 29.93], "end": [48.31, 29.93]},
-  {"op": "delete", "what": "track", "net": "PMUX_SS", "layer": "F.Cu", "start": [48.31, 29.93], "end": [48.19, 29.82]},
-  {"op": "delete", "what": "track", "net": "PMUX_SS", "layer": "F.Cu", "start": [48.19, 29.82], "end": [48.19, 26.98]},
-  {"op": "add_track", "net": "PMUX_SS", "layer": "F.Cu", "width": 0.15, "points": [[49.74, 29.93], [48.11, 29.93], [47.99, 29.81], [47.99, 27.18], [48.19, 26.98]]},
-  {"op": "add_track", "net": "PMUX_ILM", "layer": "F.Cu", "width": 0.15, "points": [[50.85, 29.25], [50.1, 29.25], [49.85, 29.0]]},
-  {"op": "add_via", "net": "PMUX_ILM", "at": [49.85, 29.0], "size": 0.6, "drill": 0.3}
-]}

@@ -4,10 +4,10 @@
 
 | Folder | What it holds |
 | --- | --- |
-| `cases/` | Edge cases with the outcome each must have. `import_cases.py` (38 circuit-JSON cases), `route_cases.py` (8 synthetic boards), `contract_cases.py` (output contract, codes, doctor, and the contract checker's own sensitivity) |
-| `oracles/` | Independent checks of a command's result, reading boards with pcbnew alone: `verify_import.py`, `verify_route.py`, `verify_zones.py` |
+| `cases/` | Edge cases with the outcome each must have. `import_cases.py` (38 circuit-JSON cases), `orient_cases.py` (8 footprints at every rotation), `route_cases.py` (18 runs on synthetic boards), `edit_cases.py` (23: each operation, each refusal, duplicates, the gate's verdict), `diff_cases.py` (9, on the boards `edit_cases.py` writes, plus a git revision), `contract_cases.py` (output contract, codes, doctor, `init` and `status`, and the contract checker's own sensitivity), `adapter_cases.py` (the KiCad adapter's DRC reading) |
+| `oracles/` | Independent checks of a command's result, reading boards with pcbnew or `lib/kisexp.py`, never pcb's own parser: `verify_import.py`, `verify_route.py`, `verify_zones.py`, `verify_edit.py` (the output differs from the input by exactly what the operations ask) |
 | `mutations/` | For each oracle, deliberately damaged results it must fail on, plus the undamaged one it must pass |
-| `fixtures/<name>/` | Real boards. Each holds a `fixture.toml` with every board fact the checks need, so no shared check names a part |
+| `fixtures/<name>/` | Real boards. Each holds a `fixture.toml` with every board fact the checks need, so no shared check names a part. Its `[[route]]` cases run `pcb route` on the imported board, each with an expected outcome, `still_open` nets and optionally `attempt_used`; its `[[edit]]` cases run `pcb edit`, each with an outcome, an error code or DRC regressions that must be reported, and `verify_edit` on every written result |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

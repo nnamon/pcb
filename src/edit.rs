@@ -52,6 +52,7 @@ pub enum Op {
         unlock: bool,
     },
     /// Delete a via (`at`) or a track (`layer`, `start`, `end`) of `net`; `uuid` may name it instead of the position.
+    /// With `all`, every item there is deleted (duplicates that have no uuids to tell them apart).
     Delete {
         what: What,
         net: String,
@@ -62,6 +63,8 @@ pub enum Op {
         end: Option<[f64; 2]>,
         #[serde(default)]
         unlock: bool,
+        #[serde(default)]
+        all: bool,
     },
     /// Change the width of the track of `net` on `layer` from `start` to `end`, which must now be `from`.
     SetWidth {
@@ -130,20 +133,43 @@ fn p2(a: [f64; 2]) -> String {
 
 /// The one via of `net` at `at`, or a refusal saying what is there instead.
 fn find_via<'a>(b: &'a Board, i: usize, net: &str, at: [f64; 2], uuid: Option<&str>) -> Result<&'a Via> {
+    Ok(find_vias(b, i, net, at, uuid, false)?[0])
+}
+
+/// The vias of `net` at `at` (or with `uuid`): exactly one, or with `all` every one there, all on `net`.
+fn find_vias<'a>(b: &'a Board, i: usize, net: &str, at: [f64; 2], uuid: Option<&str>, all: bool) -> Result<Vec<&'a Via>> {
     let hits: Vec<&Via> = match uuid {
         Some(u) => b.vias.iter().filter(|v| v.uuid.as_deref() == Some(u)).collect(),
         None => b.vias.iter().filter(|v| near((v.x, v.y), at)).collect(),
     };
-    match hits.as_slice() {
-        [v] if v.net == net => Ok(v),
-        [v] => Err(refused("edit-mismatch", format!("operation {i}: the via at {} is on {}, not {net}", p2([v.x, v.y]), v.net))),
-        [] => Err(refused("edit-no-target", format!("operation {i}: no via at {}{}", p2(at), uuid.map(|u| format!(" with uuid {u}")).unwrap_or_default()))),
-        _ => Err(refused("edit-no-target", format!("operation {i}: {} vias at {}; name one by uuid", hits.len(), p2(at)))),
+    if let Some(v) = hits.iter().find(|v| v.net != net) {
+        return Err(refused("edit-mismatch", format!("operation {i}: the via at {} is on {}, not {net}", p2([v.x, v.y]), v.net)));
+    }
+    match hits.len() {
+        0 => Err(refused("edit-no-target", format!("operation {i}: no via at {}{}", p2(at), uuid.map(|u| format!(" with uuid {u}")).unwrap_or_default()))),
+        1 => Ok(hits),
+        _ if all => Ok(hits),
+        k => Err(refused("edit-no-target", format!("operation {i}: {k} vias at {}; {}", p2(at), several(hits.iter().map(|v| v.uuid.is_some()))))),
+    }
+}
+
+/// What to say when a position names several items: name one by uuid, or delete them all.
+fn several(has_uuid: impl Iterator<Item = bool>) -> String {
+    if has_uuid.into_iter().all(|u| u) {
+        "name one by uuid, or add \"all\": true to delete every one".into()
+    } else {
+        "they have no uuids to tell them apart; add \"all\": true to delete every one".into()
     }
 }
 
 /// The one track of `net` on `layer` from `start` to `end` (either way round).
 fn find_track<'a>(b: &'a Board, i: usize, net: &str, layer: &str, start: [f64; 2], end: [f64; 2], uuid: Option<&str>) -> Result<&'a Track> {
+    Ok(find_tracks(b, i, net, layer, start, end, uuid, false)?[0])
+}
+
+/// The tracks there: exactly one, or with `all` every one, all on `net`.
+#[allow(clippy::too_many_arguments)]
+fn find_tracks<'a>(b: &'a Board, i: usize, net: &str, layer: &str, start: [f64; 2], end: [f64; 2], uuid: Option<&str>, all: bool) -> Result<Vec<&'a Track>> {
     let hits: Vec<&Track> = match uuid {
         Some(u) => b.tracks.iter().filter(|t| t.uuid.as_deref() == Some(u)).collect(),
         None => b
@@ -152,11 +178,14 @@ fn find_track<'a>(b: &'a Board, i: usize, net: &str, layer: &str, start: [f64; 2
             .filter(|t| t.layer == layer && ((near((t.x0, t.y0), start) && near((t.x1, t.y1), end)) || (near((t.x0, t.y0), end) && near((t.x1, t.y1), start))))
             .collect(),
     };
-    match hits.as_slice() {
-        [t] if t.net == net => Ok(t),
-        [t] => Err(refused("edit-mismatch", format!("operation {i}: the track there is on {}, not {net}", t.net))),
-        [] => Err(refused("edit-no-target", format!("operation {i}: no track on {layer} from {} to {}", p2(start), p2(end)))),
-        _ => Err(refused("edit-no-target", format!("operation {i}: {} tracks from {} to {}; name one by uuid", hits.len(), p2(start), p2(end)))),
+    if let Some(t) = hits.iter().find(|t| t.net != net) {
+        return Err(refused("edit-mismatch", format!("operation {i}: the track there is on {}, not {net}", t.net)));
+    }
+    match hits.len() {
+        0 => Err(refused("edit-no-target", format!("operation {i}: no track on {layer} from {} to {}", p2(start), p2(end)))),
+        1 => Ok(hits),
+        _ if all => Ok(hits),
+        k => Err(refused("edit-no-target", format!("operation {i}: {k} tracks from {} to {}; {}", p2(start), p2(end), several(hits.iter().map(|t| t.uuid.is_some()))))),
     }
 }
 
@@ -276,15 +305,15 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                 ends.push((i, net.clone(), (to[0], to[1]), None));
                 lines.push(format!("{i}: move_via {net} {} -> {}", p2(*at), p2(*to)));
             }
-            Op::Delete { what, net, uuid, at, layer, start, end, unlock } => {
-                let span = match what {
+            Op::Delete { what, net, uuid, at, layer, start, end, unlock, all } => {
+                let spans: Vec<(usize, usize)> = match what {
                     What::Via => {
                         let at = at.or(if uuid.is_some() { Some([f64::NAN, f64::NAN]) } else { None }).ok_or_else(|| refused("edit-op", format!("operation {i}: delete via needs at or uuid")))?;
-                        let v = find_via(&b, i, net, at, uuid.as_deref())?;
-                        if v.locked && !unlock {
+                        let vs = find_vias(&b, i, net, at, uuid.as_deref(), *all)?;
+                        if let Some(v) = vs.iter().find(|v| v.locked && !unlock) {
                             return Err(locked_refusal(i, &format!("the via at {}", p2([v.x, v.y]))));
                         }
-                        v.span
+                        vs.iter().map(|v| v.span).collect()
                     }
                     What::Track => {
                         let (l, s, e) = match (layer, start, end) {
@@ -292,16 +321,19 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                             _ if uuid.is_some() => ("", [f64::NAN; 2], [f64::NAN; 2]),
                             _ => return Err(refused("edit-op", format!("operation {i}: delete track needs layer, start and end, or uuid"))),
                         };
-                        let t = find_track(&b, i, net, l, s, e, uuid.as_deref())?;
-                        if t.locked && !unlock {
+                        let ts = find_tracks(&b, i, net, l, s, e, uuid.as_deref(), *all)?;
+                        if ts.iter().any(|t| t.locked && !unlock) {
                             return Err(locked_refusal(i, "the track"));
                         }
-                        t.span
+                        ts.iter().map(|t| t.span).collect()
                     }
                 };
-                touch(span, i)?;
-                crate::route::remove(&mut edits, src, span);
-                lines.push(format!("{i}: delete {} of {net}", if *what == What::Via { "via" } else { "track" }));
+                for span in &spans {
+                    touch(*span, i)?;
+                    crate::route::remove(&mut edits, src, *span);
+                }
+                let k = spans.len();
+                lines.push(format!("{i}: delete {k} {}{} of {net}", if *what == What::Via { "via" } else { "track" }, if k == 1 { "" } else { "s" }));
             }
             Op::SetWidth { net, layer, start, end, from, to, unlock } => {
                 if !(*to > 0.0) {
