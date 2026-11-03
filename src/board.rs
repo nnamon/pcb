@@ -82,6 +82,8 @@ pub struct Via {
     pub y: f64,
     pub size: f64,
     pub drill: f64,
+    /// The layers it spans, as written (`F.Cu` `B.Cu` for a through via).
+    pub layers: Vec<String>,
     pub net: String,
     pub locked: bool,
     pub uuid: Option<String>,
@@ -93,7 +95,13 @@ pub struct Via {
 pub struct Zone {
     pub net: String,
     pub layers: Vec<String>,
+    /// The first outline polygon.
     pub outline: Vec<(f64, f64)>,
+    /// Every outline polygon, the first included (review 9, 5).
+    pub outlines: Vec<Vec<(f64, f64)>>,
+    /// Its settings that change copper: clearance (`connect_pads`), priority, minimum thickness, and whether it is a
+    /// rule area; as written, for comparing.
+    pub settings: String,
     /// Filled polygons per layer (empty until KiCad fills the zone).
     pub filled: Vec<(String, Vec<(f64, f64)>)>,
 }
@@ -238,6 +246,7 @@ impl Board {
                         x, y,
                         size: n.find("size").and_then(|w| w.num(1)).unwrap_or(0.0),
                         drill: n.find("drill").and_then(|w| w.num(1)).unwrap_or(0.0),
+                        layers: n.find("layers").map(|l| l.args().into_iter().map(String::from).collect()).unwrap_or_default(),
                         net: net_of(n),
                         locked: locked(n),
                         uuid: n.find("uuid").and_then(|u| u.arg(1)).map(String::from),
@@ -254,7 +263,20 @@ impl Board {
                         .find_all("filled_polygon")
                         .map(|f| (f.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(), pts(f)))
                         .collect();
-                    b.zones.push(Zone { net: net_of(n), layers, outline, filled })
+                    let outlines: Vec<Vec<(f64, f64)>> = n.find_all("polygon").map(pts).collect();
+                    let num = |path: &[&str]| -> String {
+                        let mut c = Some(n);
+                        for h in path {
+                            c = c.and_then(|x| x.find(h));
+                        }
+                        c.map(|x| x.args().join(" ")).unwrap_or_default()
+                    };
+                    let settings = format!(
+                        "clearance {} | priority {} | min {} | keepout {}",
+                        num(&["connect_pads", "clearance"]), num(&["priority"]), num(&["min_thickness"]),
+                        n.find("keepout").map(|k| k.items().iter().skip(1).map(|c| c.args().join(" ")).collect::<Vec<_>>().join(", ")).unwrap_or_default()
+                    );
+                    b.zones.push(Zone { net: net_of(n), layers, outline, outlines, settings, filled })
                 }
                 Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle") => {
                     if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") {

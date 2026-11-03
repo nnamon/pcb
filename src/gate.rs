@@ -30,6 +30,15 @@ pub struct GateResult {
     pub written: String,
 }
 
+/// Remove a rejected result and the project file beside it (review 9, 9).
+pub fn remove_result(path: &str) {
+    let p = Path::new(path);
+    let _ = std::fs::remove_file(p);
+    for ext in ["kicad_pro", "kicad_prl", "kicad_dru"] {
+        let _ = std::fs::remove_file(p.with_extension(ext));
+    }
+}
+
 impl Gate {
     pub fn begin(work: &Path, board: &str) -> Result<Gate> {
         let before = kicad::drc_counts(work, board, "drc_before")?;
@@ -38,7 +47,8 @@ impl Gate {
 
     pub fn finish(&self, candidate: &str, out_path: &str, has_zones: bool) -> Result<GateResult> {
         let cand = self.work.join("candidate.kicad_pcb");
-        let text = if has_zones {
+        // zones inside footprints count too (review 9, 2)
+        let text = if has_zones || candidate.contains("(zone") {
             let filled = self.work.join("candidate_filled.kicad_pcb");
             std::fs::write(&filled, candidate)?;
             kicad::copy_rules(&self.input, &filled)?;
@@ -72,23 +82,66 @@ impl Gate {
     }
 }
 
-/// The candidate with each top-level zone's `filled_polygon` blocks replaced by those of the same zone in `filled`
-/// (pcbnew's save after filling). Zones are matched by uuid; a board whose zones have no uuids is matched by order,
-/// and then each pair must be on the same net.
+/// Every zone in a board, top level and inside footprints, with a key that names it: its uuid when it has one;
+/// otherwise its owner (top level, or the footprint by reference and repeat), net, layers and outline, and its place
+/// among zones with that same key. pcbnew's save reorders zones, so order alone cannot pair them (review 9, 1).
+fn zone_list(root: &crate::sexpr::Node) -> Vec<(String, Option<String>, crate::sexpr::Node)> {
+    use crate::sexpr::Node;
+    let sig = |z: &Node| {
+        let net = z.find("net").and_then(|u| u.arg(1)).unwrap_or("").to_string();
+        let layers = z.find("layers").map(|l| l.args().join(",")).or_else(|| z.find("layer").and_then(|l| l.arg(1)).map(String::from)).unwrap_or_default();
+        let outline: Vec<String> = z.find_all("polygon").map(|p| {
+            let mut v = vec![];
+            fn xy(n: &Node, v: &mut Vec<String>) {
+                if n.is("xy") {
+                    v.push(format!("{:.4} {:.4}", n.num(1).unwrap_or(0.0), n.num(2).unwrap_or(0.0)));
+                }
+                for c in n.items() {
+                    xy(c, v);
+                }
+            }
+            xy(p, &mut v);
+            v.join(";")
+        }).collect();
+        format!("{net}|{layers}|{}", outline.join("/"))
+    };
+    let mut owners: Vec<(String, &Node)> = vec![(String::new(), root)];
+    let mut seen: std::collections::BTreeMap<String, usize> = Default::default();
+    for f in root.items().iter().filter(|n| n.is("footprint")) {
+        let r = f.find_all("property").find(|p| p.arg(1) == Some("Reference")).and_then(|p| p.arg(2)).unwrap_or("").to_string();
+        let k = seen.entry(r.clone()).or_default();
+        *k += 1;
+        owners.push((format!("{r}#{k}"), f));
+    }
+    let mut out = vec![];
+    for (owner, n) in owners {
+        let mut count: std::collections::BTreeMap<String, usize> = Default::default();
+        for z in n.items().iter().filter(|z| z.is("zone")) {
+            let s = format!("{owner}|{}", sig(z));
+            let k = count.entry(s.clone()).or_default();
+            *k += 1;
+            let uuid = z.find("uuid").and_then(|u| u.arg(1)).map(String::from);
+            out.push((format!("{s}|{k}"), uuid, z.clone()));
+        }
+    }
+    out
+}
+
+/// The candidate with each zone's `filled_polygon` blocks (top level and inside footprints) replaced by those of the
+/// same zone in `filled` (pcbnew's save after filling). A zone is found by its uuid, or when it has none by its
+/// owner, net, layers and outline (`zone_list`).
 pub fn splice_fills(candidate: &str, filled: &str) -> Result<String> {
     let (a, b) = (crate::sexpr::parse(candidate)?, crate::sexpr::parse(filled)?);
-    let zones = |n: &crate::sexpr::Node| n.items().iter().filter(|z| z.is("zone")).cloned().collect::<Vec<_>>();
-    let (za, zb) = (zones(&a), zones(&b));
+    let (za, zb) = (zone_list(&a), zone_list(&b));
     anyhow::ensure!(za.len() == zb.len(), "the filled board has {} zones, the candidate {}", zb.len(), za.len());
-    let uuid = |z: &crate::sexpr::Node| z.find("uuid").and_then(|u| u.arg(1)).map(String::from);
-    let net = |z: &crate::sexpr::Node| z.find("net").and_then(|u| u.arg(1)).map(String::from);
     let mut e = crate::sexpr::Edits::default();
-    for (i, z) in za.iter().enumerate() {
-        let m = match uuid(z) {
-            Some(u) => zb.iter().find(|y| uuid(y).as_deref() == Some(u.as_str())).ok_or_else(|| anyhow::anyhow!("zone {u} is missing from the filled board"))?,
-            None => &zb[i],
-        };
-        anyhow::ensure!(net(z) == net(m), "zone {} is on {:?} in the candidate and {:?} after filling", i + 1, net(z), net(m));
+    for (key, uuid, z) in &za {
+        let m = match uuid {
+            Some(u) => zb.iter().find(|(_, v, _)| v.as_deref() == Some(u.as_str())),
+            None => zb.iter().find(|(k, _, _)| k == key),
+        }
+        .map(|(_, _, n)| n)
+        .ok_or_else(|| anyhow::anyhow!("zone {} is missing from the filled board", uuid.clone().unwrap_or_else(|| key.clone())))?;
         for old in z.find_all("filled_polygon") {
             crate::route::remove(&mut e, candidate, old.span);
         }
@@ -131,8 +184,13 @@ mod tests {
         assert!(out.contains("(segment (start 0 0) (end 1 0) (net \"A\"))"), "{out}");
         assert!(out.contains("(xy 1 1) (xy 2 2)") && !out.contains("(xy 9 9)"), "{out}");
         assert!(out.find("(segment").unwrap() < out.find("(zone").unwrap());
-        // a zone on another net after filling is refused
-        assert!(splice_fills(cand, &filled.replace("\"GND\"", "\"VCC\"")).is_err());
+        // zones without uuids, reordered by the save, pair by net, layers and outline
+        let c2 = "(kicad_pcb\n\t(zone (net \"GND\") (layer \"F.Cu\") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))))\n\t(zone (net \"VCC\") (layer \"F.Cu\") (polygon (pts (xy 5 5) (xy 6 5) (xy 6 6))))\n)\n";
+        let f2 = "(kicad_pcb\n\t(zone (net \"VCC\") (layer \"F.Cu\") (uuid \"u2\") (polygon (pts (xy 5 5) (xy 6 5) (xy 6 6))) (filled_polygon (layer \"F.Cu\") (pts (xy 5.5 5.5))))\n\t(zone (net \"GND\") (layer \"F.Cu\") (uuid \"u1\") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) (filled_polygon (layer \"F.Cu\") (pts (xy 0.5 0.5))))\n)\n";
+        let o2 = splice_fills(c2, f2).unwrap();
+        let (g, v) = (o2.find("GND").unwrap(), o2.find("VCC").unwrap());
+        let (p05, p55) = (o2.find("(xy 0.5 0.5)").unwrap(), o2.find("(xy 5.5 5.5)").unwrap());
+        assert!(g < p05 && p05 < v && v < p55, "{o2}");
     }
 
     #[test]

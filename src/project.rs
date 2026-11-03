@@ -176,6 +176,9 @@ pub fn locate(arg: &str) -> PathBuf {
 /// Read and parse a project file. A file that cannot be read is an I/O failure; one that does not parse, or has a
 /// schema this pcb does not read, is refused (`config`).
 pub fn load(path: &Path) -> Result<Loaded> {
+    if !path.exists() {
+        return Err(refused("config", format!("{}: no project file here; write one with `pcb init BOARD`", path.display())));
+    }
     let text = std::fs::read_to_string(path).map_err(|e| crate::contract::failed("io", format!("reading {}: {e}", path.display())))?;
     let project = parse(&text).map_err(|e| refused("config", format!("{}: {e}", path.display())))?;
     Ok(Loaded { path: path.to_path_buf(), project })
@@ -190,7 +193,11 @@ pub fn parse(text: &str) -> Result<Project, String> {
         Some(v) => return Err(format!("schema is {v}; it must be the whole number {SCHEMA}")),
         None => return Err(format!("no schema key; add `schema = {SCHEMA}` at the top")),
     }
-    toml::from_str::<Project>(text).map_err(|e| e.message().to_string())
+    toml::from_str::<Project>(text).map_err(|e| {
+        let m = e.message().to_string();
+        // TOML reads a bare 2026-11-04 as a date, not a string (review 9, 10)
+        if m.contains("invalid type: map, expected a string") { format!("{m}; write dates in quotes, \"YYYY-MM-DD\"") } else { m }
+    })
 }
 
 fn is_version(v: &str) -> bool {

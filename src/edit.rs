@@ -194,8 +194,8 @@ fn locked_refusal(i: usize, what: &str) -> anyhow::Error {
     refused("edit-locked", format!("operation {i}: {what} is locked; add \"unlock\": true to change it"))
 }
 
-/// Is `p` on copper of `net` in board `b`: a pad of the net (its turned rectangle), a via, or a track or track arc
-/// (within half its width of the centre line)? `skip_track` and `skip_via` leave out the item `p` belongs to, which would
+/// Is `p` on copper of `net` in board `b`: a pad of the net (its turned rectangle), a via, a track or track arc
+/// (within half its width of the centre line), or a zone fill of the net on that layer (any layer for a via)? `skip_track` and `skip_via` leave out the item `p` belongs to, which would
 /// otherwise always join itself.
 fn on_net_copper(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, skip_track: Option<usize>, skip_via: Option<usize>) -> bool {
     on_copper_except(b, net, p, layer, &|k| Some(k) == skip_track, &|k| Some(k) == skip_via)
@@ -216,12 +216,26 @@ fn on_copper_except(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, sk
     let arcs = b.arcs.iter().filter(|t| t.net == net && layer.is_none_or(|l| t.layer == l)).any(|t| {
         t.pts.windows(2).any(|w| crate::route::point_seg_dist(p, w[0], w[1]) <= t.width / 2.0 + TOL)
     });
-    pads || vias || tracks || arcs
+    // zone fills of the net: a stitching via or a track in a pour joins through the fill (review 9, 3 and 7). The fill
+    // is the one on file, from before the edit; the gate refills and judges the result
+    // A zone never filled counts by its outline on each of its layers.
+    let fills = b.zones.iter().filter(|z| z.net == net).any(|z| {
+        if z.filled.is_empty() {
+            z.layers.iter().any(|l| layer.is_none_or(|x| x == l)) && crate::route::point_in_poly(p, &z.outline)
+        } else {
+            z.filled.iter().any(|(l, poly)| layer.is_none_or(|x| x == l) && crate::route::point_in_poly(p, poly))
+        }
+    });
+    pads || vias || tracks || arcs || fills
 }
 
 /// Apply `ops` to the board at `board_path` and write the result through the gate.
 pub fn run(board_path: &str, ops: &[Op], out_path: &str, work: &Path) -> Result<Report> {
     std::fs::create_dir_all(work)?;
+    // a board that is not there is the caller's mistake, not a tool failure (review 9, 10)
+    if !Path::new(board_path).exists() {
+        return Err(refused("usage", format!("{board_path}: no such board")));
+    }
     let b = Board::load(board_path)?;
     let (candidate, lines) = apply(&b, ops)?;
     let gate = Gate::begin(work, board_path)?;
@@ -265,7 +279,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
             Op::AddTrack { net, layer, width, points, free_start, free_end } => {
                 check_net(net)?;
                 check_layer(layer)?;
-                if points.len() < 2 || !(*width > 0.0) {
+                if points.len() < 2 || !(*width > 0.0 && width.is_finite()) {
                     return Err(refused("edit-op", format!("operation {i}: add_track needs two or more points and a width above 0")));
                 }
                 for p in points {
@@ -293,7 +307,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
             Op::AddVia { net, at, size, drill, free } => {
                 check_net(net)?;
                 check_in(*at)?;
-                if !(*size > *drill && *drill > 0.0) {
+                if !(*size > *drill && *drill > 0.0 && size.is_finite()) {
                     return Err(refused("edit-op", format!("operation {i}: add_via needs size above drill above 0")));
                 }
                 appended.push_str(&format!(
@@ -379,7 +393,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                 lines.push(format!("{i}: delete {k} {}{} of {net}", if *what == What::Via { "via" } else { "track" }, if k == 1 { "" } else { "s" }));
             }
             Op::SetWidth { net, layer, start, end, from, to, unlock } => {
-                if !(*to > 0.0) {
+                if !(*to > 0.0 && to.is_finite()) {
                     return Err(refused("edit-op", format!("operation {i}: set_width needs a width above 0")));
                 }
                 let t = find_track(&b, i, net, layer, *start, *end, None)?;
@@ -517,7 +531,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
         let r = root(&mut parent, i);
         if !anchored[r] {
             let (q, _) = &nodes[i].1[0];
-            return Err(refused("edit-unjoined", format!("the new {} copper at {} joins only other new copper; nothing ties it to the board's own copper of {}", nodes[i].0, p2([q.0, q.1]), nodes[i].0)));
+            return Err(refused("edit-unjoined", format!("the new or changed {} copper at {} reaches no copper of {} that the edit left as it was (a pad, a track, a via or a fill)", nodes[i].0, p2([q.0, q.1]), nodes[i].0)));
         }
     }
     Ok((candidate, lines))

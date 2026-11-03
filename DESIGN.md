@@ -182,8 +182,8 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 
 | `op` | Fields | Target and expectation |
 | --- | --- | --- |
-| `add_track` | `net`, `layer`, `width`, `points` (two or more), `free_start`, `free_end` | One segment per pair of points. Both ends must join copper of the net on the edited board (a pad on that layer, a via, or a track or track arc within half its width), unless marked free. Zone fills do not count |
-| `add_via` | `net`, `at`, `size`, `drill`, `free` | A through via, F.Cu to B.Cu. It must join copper of its net on some layer unless `free` |
+| `add_track` | `net`, `layer`, `width`, `points` (two or more), `free_start`, `free_end` | One segment per pair of points. Both ends must join copper of the net on the edited board (a pad on that layer, a via, a track or track arc within half its width, or a fill of the net on that layer; a zone never filled counts by its outline), unless marked free |
+| `add_via` | `net`, `at`, `size`, `drill`, `free` | A through via, F.Cu to B.Cu. It must join copper of its net on some layer, a fill included, unless `free` |
 | `move_via` | `net`, `at`, `to`, `unlock` | The via of that net at `at`; its tracks are not moved, so it must still join at `to` |
 | `delete` | `what` (`via`, `track`), `net`, then `uuid`, or `at` for a via, or `layer`, `start`, `end` for a track; `unlock`, `all` | Exactly that item. With a uuid and a position both given, they must name the same item (`edit-mismatch`); a field that does not apply (`at` for a track, `layer` for a via) is refused (`edit-op`). When a position names several (a duplicate track), the edit is refused unless `all` is set, which deletes every one; boards imported from tscircuit have no uuids to tell duplicates apart |
 | `set_width` | `net`, `layer`, `start`, `end`, `from`, `to`, `unlock` | The track with those ends, now `from` mm wide |
@@ -192,18 +192,18 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 - Positions match within 5 µm. Unknown fields are refused, so a typo cannot pass as an omitted option. New points must lie on the board (`edit-op`).
 - A locked item is refused (`edit-locked`) unless the operation says `unlock`. The item stays locked after the change.
 - One item cannot be the target of two operations (`edit-op`). Joins are checked on the edited board, so an end may rely on copper any other operation in the same edit adds.
-- Each connected piece of new or changed copper must reach the board's own copper (a pad, or a track or via the edit left as it was), unless one of its ends is marked free. A track that loops back onto itself, a triangle of new tracks or two stacked new vias are refused (`edit-unjoined`).
+- Each connected piece of new or changed copper must reach the board's own copper (a pad, a fill, or a track or via the edit left as it was), unless one of its ends is marked free. A track that loops back onto itself, a triangle of new tracks or two stacked new vias are refused (`edit-unjoined`).
 - "On the board" means inside the outline's bounding box; a point in a cut-out passes this check and is left to the gate's DRC (copper to edge).
 - Codes: `edit-op` (a malformed or contradictory list), `edit-no-target`, `edit-mismatch` (found, but not as stated), `edit-locked`, `edit-unjoined`, plus `unknown-net` and `bad-layer`.
 - The result goes through the write gate. With no new DRC violation it is written to `-o` (default: the input); otherwise to `<out>.rejected.kicad_pcb`, and the outcome is `rejected` with the regressions listed.
-- On a board with zones the gate fills a copy and carries back only the new `filled_polygon` blocks into the candidate's own zones. Everything else is written as the command produced it, byte for byte, and the same edit gives the same file every time (review 8, 3).
+- On a board with zones (footprint zones included) the gate fills a copy and carries back only the new `filled_polygon` blocks into the candidate's own zones. A zone is found by its uuid, or when it has none by its owner, net, layers and outline, since pcbnew's save reorders zones (review 9, 1). Everything else is written as the command produced it, byte for byte, and the same edit gives the same file every time (review 8, 3).
 
 ### Diff
 
 `pcb diff A B` compares two boards, each a file or a git revision as `REV:path` (`HEAD~1:design/board.kicad_pcb`). It reports:
-- footprints by reference: moved, turned (270° and −90° are the same turn), flipped, pads changed (number, position in the footprint, size, turn, shape, kind, drill, layers or net; compared only when the side is unchanged), locked, unlocked, added, removed. A reference that appears more than once is matched in file order and warned (`repeated-ref`);
-- copper per net: tracks and track arcs added and removed with their lengths, vias added and removed, and locks changed; a track whose width alone changed counts as one removed and one added;
-- nets added and removed; zones added and removed (by net, layers and outline), and the zone count on each side; whether the board outline changed.
+- footprints by reference: moved, turned (270° and −90° are the same turn), flipped, pads changed (number, position in the footprint, size, turn, shape, kind, drill, layers or net; compared only when the side is unchanged), locked, unlocked, value changed, edge cuts changed (the footprint's own Edge.Cuts graphics), added, removed. Pad layers compare as a set, since KiCad's save orders them its own way. A reference that appears more than once is matched in file order and warned (`repeated-ref`);
+- copper per net: tracks and track arcs added and removed with their lengths, vias added and removed (a via's layers are part of it), and locks changed on tracks, arcs and vias; a track whose width alone changed counts as one removed and one added;
+- nets added and removed; zones added and removed (by net, layers, every outline polygon, and the settings that change copper: clearance, priority, minimum thickness, rule-area flags), and the zone count on each side; whether the board outline changed.
 
 `identical` is true when none of these differ; `same_text` when the files are byte for byte the same. A missing file or git revision is refused (`usage`).
 
@@ -211,8 +211,8 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 
 ### Routing additions
 
-- **`--width NET=MM`** routes one net at a width other than its usual one: the owner's choice for one link. A net named twice, or one this run does not route, is refused (`usage`). The net goes to Freerouting in a class of its own at that width; the gate still judges the result against the board's rules.
-- **`--prewire FILE`** applies `pcb edit` operations before routing: parts moved, or copper laid where the router cannot find room. They are checked as an edit would be. Their copper (every track and via whose text the input does not hold, so a track they widened too) is never ripped, even on a net named in `--rip`, and never pruned, and the whole change, prewire plus routing, is gated once against the input. The prewired board is written to the work folder as `prewired.kicad_pcb`.
+- **`--width NET=MM`** routes one net at a width other than its usual one: the owner's choice for one link. A width must be above 0 and at most 25 mm; a net named twice, or one this run does not route, is refused (`usage`). The net goes to Freerouting in a class of its own at that width; the gate still judges the result against the board's rules.
+- **`--prewire FILE`** applies `pcb edit` operations before routing: parts moved, or copper laid where the router cannot find room. They are checked as an edit would be. Their copper (every track and via whose text the input does not hold, so a track they widened too) is never ripped, even on a net named in `--rip`, and never pruned, except the free end of a prewire stub past the point where the router joined it, and the whole change, prewire plus routing, is gated once against the input. The prewired board is written to the work folder as `prewired.kicad_pcb`.
 - **Second router run.** When named nets are left open, the router runs again with no region keep-outs and copper outside the region is still dropped (Engineering choices, Freerouting traps). The run leaving fewer named nets open goes to the gate first; if it makes the board worse and the other run does not, the other is kept. If the second run fails or times out, the first run's result stands (`second-run-failed`). The report lists both runs in `attempts` and the one kept in `attempt_used`. The count of open nets reads the input's zone fills, which routing makes stale; it only picks the order, and KiCad's DRC is the judge. Worst case, a route takes twice `--timeout`.
 
 ## Planning drawings

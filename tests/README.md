@@ -9,6 +9,7 @@
 | `mutations/` | For each oracle, deliberately damaged results it must fail on, plus the undamaged one it must pass |
 | `fixtures/<name>/` | Real boards. Each holds a `fixture.toml` with every board fact the checks need, so no shared check names a part. Its `[[route]]` cases run `pcb route` on the imported board, each with an expected outcome, `still_open` nets and optionally `attempt_used`; its `[[edit]]` cases run `pcb edit`, each with an outcome, an error code or DRC regressions that must be reported, and `verify_edit` on every written result |
 | `review8/` | Review 8's probe scripts, kept as cases: edit, diff, init and status, route (`--prewire` with `--rip`, `--width`), `verify_edit`'s mutations, and `move_footprint` against pcbnew's own move |
+| `review9/` | Review 9's cases: the gate's fill carry-back on zones with and without uuids and in footprints (`zone_gate_cases.py`), the join rule, diff misses, the router's choice between runs driven by a stand-in java (`fake/`), and prewire with `--rip`. `expect_pass.py` turns their PASS and FAIL lines into an exit status |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

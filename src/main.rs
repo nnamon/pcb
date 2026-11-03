@@ -341,7 +341,7 @@ fn run(cli: Cli) -> Result<Reply> {
             let mut widths = std::collections::BTreeMap::new();
             for w in &width {
                 let (n, mm) = w.split_once('=').ok_or_else(|| contract::refused("usage", format!("--width {w}: use NET=MM")))?;
-                let mm: f64 = mm.parse().ok().filter(|v: &f64| *v > 0.0).ok_or_else(|| contract::refused("usage", format!("--width {w}: MM must be a number above 0")))?;
+                let mm: f64 = mm.parse().ok().filter(|v: &f64| *v > 0.0 && *v <= 25.0).ok_or_else(|| contract::refused("usage", format!("--width {w}: MM must be a number above 0 and at most 25")))?;
                 if widths.insert(n.to_string(), mm).is_some() {
                     return Err(contract::refused("usage", format!("--width names {n} twice")));
                 }

@@ -456,7 +456,7 @@ fn in_pad(p: &crate::board::Pad, q: (f64, f64)) -> bool {
     lx.abs() <= p.w / 2.0 + 1e-3 && ly.abs() <= p.h / 2.0 + 1e-3
 }
 
-fn point_in_poly(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
+pub(crate) fn point_in_poly(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
     let mut inside = false;
     let n_ = poly.len();
     for i in 0..n_ {
@@ -625,6 +625,18 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // Copper the prewire added or changed is the owner's explicit choice: never ripped, never pruned (review 8, 1
     // and 2). It is every track and via whose text the input does not hold, matched item by item, so a track the
     // prewire widened or laid again at another width counts as the prewire's.
+    // the free ends the prewire tracks were laid with
+    let prewire_free: Vec<(String, (f64, f64))> = o
+        .prewire
+        .iter()
+        .flat_map(|op| match op {
+            crate::edit::Op::AddTrack { net, points, free_start, free_end, .. } if !points.is_empty() => {
+                let (a, z) = (points[0], points[points.len() - 1]);
+                [(*free_start, a), (*free_end, z)].into_iter().filter(|(f, _)| *f).map(|(_, p)| (net.clone(), (p[0], p[1]))).collect::<Vec<_>>()
+            }
+            _ => vec![],
+        })
+        .collect();
     let prewire_spans: std::collections::HashSet<(usize, usize)> = {
         let mut left = input_copper.clone();
         b.tracks.iter().map(|t| t.span).chain(b.vias.iter().map(|v| v.span)).filter(|sp| match left.get_mut(&src[sp.0..sp.1]) {
@@ -835,6 +847,11 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                     (near(p, (t.x0, t.y0)) || near(p, (t.x1, t.y1))) && ripped_ends.iter().any(|(net, q)| *net == t.net && near(*q, p))
                 };
                 let tail = (met(w[0]) || met(w[1])) && inside(ri, w[0].0, w[0].1) && inside(ri, w[1].0, w[1].1) && !t.locked && !prewire_spans.contains(&t.span);
+                // a prewire stub's free end, past the point where the router joined it, is the one prewire piece that
+                // may go: the owner left that end for the router to use (review 9, 8)
+                let free_tail = prewire_spans.contains(&t.span)
+                    && prewire_free.iter().any(|(net, q)| *net == t.net && (near(*q, w[0]) || near(*q, w[1])) && (near(*q, (t.x0, t.y0)) || near(*q, (t.x1, t.y1))));
+                let tail = tail || free_tail;
                 segs.push(Seg { a: w[0], c: w[1], layer: t.layer.clone(), net: t.net.clone(), width: t.width, origin: Origin::Piece(i), prunable: tail });
             }
             rep.split_tracks += 1;
@@ -964,7 +981,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         let rejected = g.written.clone();
         let g2 = gate.finish(&text_of(&laids[1].1)?, out_path, has_zones)?;
         if g2.regressions.is_empty() {
-            let _ = std::fs::remove_file(&rejected);
+            crate::gate::remove_result(&rejected);
             g = g2;
             chosen = 1;
         } else {
@@ -1154,7 +1171,7 @@ mod prune_tests {
         let tee_b = vec![seg((0.0, 0.0), (10.0, 0.0), "F.Cu"), seg((5.0, 0.0), (5.0, 5.0), "B.Cu")];
         assert_eq!(open_nets(&nets, &tee_b, &[true; 2], &[], &far, &[]), nets);
         // two pads in one fill on their layer are joined by it
-        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
+        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], outlines: vec![], settings: String::new(), filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
         assert!(open_nets(&nets, &[], &[], &[], &pads, std::slice::from_ref(&z)).is_empty());
         let zb = crate::board::Zone { filled: vec![("B.Cu".into(), z.filled[0].1.clone())], ..z.clone() };
         assert_eq!(open_nets(&nets, &[], &[], &[], &pads, &[zb]), nets);

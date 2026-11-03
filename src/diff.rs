@@ -4,7 +4,8 @@
 //! their pads by number, with position, size, turn, shape, kind, drill, layers and net compared. Tracks are matched
 //! by net, layer, both ends (either way round, to 1 um) and width; track arcs by net, layer, start, mid, end and
 //! width; vias by net, position, size and drill. A track whose width alone changed shows as one removed and one
-//! added. Zones are matched by net, layers and outline; the board outline by its segments. `identical` means none
+//! added. Zones are matched by net, layers, every outline polygon and the settings that change copper; the board
+//! outline by its top-level Edge.Cuts segments, and a footprint's own Edge.Cuts graphics in its frame. `identical` means none
 //! of these differ; `same_text` means the two files are byte for byte the same.
 
 use crate::board::Board;
@@ -88,6 +89,11 @@ fn lock_counts(b: &Board) -> BTreeMap<String, usize> {
         let (p, q) = if p <= q { (p, q) } else { (q, p) };
         *m.entry(format!("t {} {} {p:?} {q:?} {}", t.net, t.layer, um(t.width))).or_default() += 1;
     }
+    for t in b.arcs.iter().filter(|t| t.locked) {
+        let q = |p: (f64, f64)| (um(p.0), um(p.1));
+        let (s0, e0) = if q(t.start) <= q(t.end) { (q(t.start), q(t.end)) } else { (q(t.end), q(t.start)) };
+        *m.entry(format!("a {} {} {s0:?} {:?} {e0:?} {}", t.net, t.layer, q(t.mid), um(t.width))).or_default() += 1;
+    }
     for v in b.vias.iter().filter(|v| v.locked) {
         *m.entry(format!("v {} {} {} {} {}", v.net, um(v.x), um(v.y), um(v.size), um(v.drill))).or_default() += 1;
     }
@@ -120,10 +126,11 @@ fn arc_keys(b: &Board) -> BTreeMap<ArcKey, (usize, f64)> {
     m
 }
 
-fn via_keys(b: &Board) -> BTreeMap<(String, i64, i64, i64, i64), usize> {
+fn via_keys(b: &Board) -> BTreeMap<(String, i64, i64, i64, i64, String), usize> {
     let mut m = BTreeMap::new();
     for v in &b.vias {
-        *m.entry((v.net.clone(), um(v.x), um(v.y), um(v.size), um(v.drill))).or_default() += 1;
+        // the layers a via spans are part of it (review 9, 5)
+        *m.entry((v.net.clone(), um(v.x), um(v.y), um(v.size), um(v.drill), v.layers.join(" "))).or_default() += 1;
     }
     m
 }
@@ -139,8 +146,41 @@ fn pad_key(f: &crate::board::Footprint, p: &crate::board::Pad) -> String {
     format!(
         "{} {} {} {} {} {} {} {} {:?} {:?} {}",
         p.number, um(dx), um(dy), um(p.w), um(p.h), turn(p.rot - f.rot), p.shape, p.kind,
-        p.drill.map(|(a, b)| (um(a), um(b))), p.layers, p.net
+        p.drill.map(|(a, b)| (um(a), um(b))), {
+            // KiCad's save orders a pad's layers its own way (review 9, 4)
+            let mut l = p.layers.clone();
+            l.sort();
+            l
+        }, p.net
     )
+}
+
+/// A footprint's own Edge.Cuts graphics (a slot or cut-out it carries), as numbers in its frame (review 9, 6).
+fn fp_edge_cuts(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
+    let Ok(n) = crate::sexpr::parse(&b.src[f.span.0..f.span.1]) else { return vec![] };
+    let mut v: Vec<String> = n
+        .items()
+        .iter()
+        .filter(|c| c.head().is_some_and(|h| h.starts_with("fp_")) && c.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts"))
+        .map(|c| {
+            let nums: Vec<String> = c.items().iter().filter(|k| ["start", "end", "mid", "center", "pts"].iter().any(|h| k.is(h))).map(|k| {
+                let mut out = vec![];
+                fn walk(x: &crate::sexpr::Node, out: &mut Vec<i64>) {
+                    for a in x.items().iter().skip(1) {
+                        match a.atom().and_then(|t| t.parse::<f64>().ok()) {
+                            Some(v) => out.push((v * 1000.0).round() as i64),
+                            None => walk(a, out),
+                        }
+                    }
+                }
+                walk(k, &mut out);
+                format!("{} {:?}", k.head().unwrap_or(""), out)
+            }).collect();
+            format!("{} {}", c.head().unwrap_or(""), nums.join(" "))
+        })
+        .collect();
+    v.sort();
+    v
 }
 
 /// Footprints by reference; the k-th repeat of a reference keyed `REF#k`.
@@ -163,8 +203,10 @@ fn by_ref(b: &Board) -> (BTreeMap<String, &crate::board::Footprint>, Vec<String>
 fn zone_keys(b: &Board) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
     for z in &b.zones {
-        let pts: Vec<(i64, i64)> = z.outline.iter().map(|(x, y)| (um(*x), um(*y))).collect();
-        *m.entry(format!("{}\t{:?}\t{:?}", z.net, z.layers, pts)).or_default() += 1;
+        let polys: Vec<Vec<(i64, i64)>> = z.outlines.iter().map(|p| p.iter().map(|(x, y)| (um(*x), um(*y))).collect()).collect();
+        let mut layers = z.layers.clone();
+        layers.sort();
+        *m.entry(format!("{}\t{:?}\t{:?}\t{}", z.net, layers, polys, z.settings)).or_default() += 1;
     }
     m
 }
@@ -200,8 +242,10 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
                 // a flip mirrors the pads in the footprint's frame; compare them only on the same side
                 let pads = !flipped && pa != pb;
                 let lock = f.locked != g.locked;
-                if moved || turned || flipped || pads || lock {
-                    let what: Vec<&str> = [(moved, "moved"), (turned, "turned"), (flipped, "flipped"), (pads, "pads changed"), (lock && g.locked, "locked"), (lock && !g.locked, "unlocked")].iter().filter(|(c, _)| *c).map(|(_, w)| *w).collect();
+                let value = f.value != g.value;
+                let cuts = fp_edge_cuts(a, f) != fp_edge_cuts(b, g);
+                if moved || turned || flipped || pads || lock || value || cuts {
+                    let what: Vec<&str> = [(moved, "moved"), (turned, "turned"), (flipped, "flipped"), (pads, "pads changed"), (lock && g.locked, "locked"), (lock && !g.locked, "unlocked"), (value, "value changed"), (cuts, "edge cuts changed")].iter().filter(|(c, _)| *c).map(|(_, w)| *w).collect();
                     footprints.push(FootprintChange { reference: r.to_string(), change: what.join(", "), from: Some([f.x, f.y, f.rot]), to: Some([g.x, g.y, g.rot]), side_from: Some(f.layer.clone()), side_to: Some(g.layer.clone()) });
                 }
             }

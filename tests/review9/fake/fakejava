@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Stands in for java: writes the session named by $FAKE_DIR/<tag>.ses, where tag is the -do file's stem
+(route_region or route_open). $FAKE_DIR/<tag>.fail makes it exit 1 with no session; <tag>.sleep sleeps."""
+import os, sys, time, shutil
+a = sys.argv
+ses = a[a.index("-do") + 1]
+tag = os.path.splitext(os.path.basename(ses))[0]
+d = os.environ["FAKE_DIR"]
+open(os.path.join(d, "calls.log"), "a").write(" ".join(a[1:]) + "\n")
+if os.path.exists(os.path.join(d, tag + ".fail")):
+    print("ERROR fake failure"); sys.exit(1)
+if os.path.exists(os.path.join(d, tag + ".sleep")):
+    time.sleep(int(open(os.path.join(d, tag + ".sleep")).read()))
+shutil.copy(os.path.join(d, tag + ".ses"), ses)
+print("INFO fake router done")

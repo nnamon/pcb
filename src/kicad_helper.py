@@ -206,9 +206,13 @@ def main():
     elif cmd == "fill":
         # connectivity first: the filler uses it to find and remove unconnected islands
         b.BuildConnectivity()
-        pcbnew.ZONE_FILLER(b).Fill(b.Zones())
+        # footprint zones too: a stale fill there is a false clearance violation (review 9, 2)
+        zones = list(b.Zones())
+        for f in b.GetFootprints():
+            zones.extend(f.Zones())
+        pcbnew.ZONE_FILLER(b).Fill(zones)
         b.Save(path)
-        print(json.dumps({"ok": True, "zones": len(b.Zones())}))
+        print(json.dumps({"ok": True, "zones": len(zones)}))
     else:
         raise SystemExit(f"unknown command {cmd}")
 

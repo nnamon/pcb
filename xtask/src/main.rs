@@ -114,6 +114,12 @@ fn main() -> Result<()> {
     for (n, f) in [("review 8: edit probes", "edit_probes"), ("review 8: diff probes", "diff_probes"), ("review 8: project probes", "project_probes"), ("review 8: verify_edit mutations", "verify_edit_mutations"), ("review 8: move_footprint against pcbnew", "move_fp_vs_pcbnew")] {
         s.py(n, &format!("tests/review8/{f}.py"), &[&pcb, &s.w(&format!("review8_{f}"))]);
     }
+    // review 9's cases: zone fills through the gate, the join rule, diff, the router's run choice (a stand-in java, no
+    // Freerouting) and prewire with --rip
+    s.py("review 9: zone gate cases", "tests/review9/zone_gate_cases.py", &[&pcb, &s.w("review9_zone")]);
+    for (n, f) in [("review 9: join probes", "join_probes"), ("review 9: diff misses", "diff_misses"), ("review 9: route branches", "route_branches"), ("review 9: prewire probes", "prewire_probes")] {
+        s.py(n, "tests/review9/expect_pass.py", &[&format!("tests/review9/{f}.py"), &pcb, &s.w(&format!("review9_{f}"))]);
+    }
     if s.py("edit edge cases", "tests/cases/edit_cases.py", &[&pcb, &s.w("edit_cases")]) {
         s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
         s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);
