@@ -184,9 +184,10 @@ pub fn load(path: &Path) -> Result<Loaded> {
 pub fn parse(text: &str) -> Result<Project, String> {
     // the schema first, so an old or new file gets that message rather than a field error
     let raw: toml::Table = toml::from_str(text).map_err(|e| e.message().to_string())?;
-    match raw.get("schema").and_then(|v| v.as_integer()) {
-        Some(s) if s == SCHEMA as i64 => {}
-        Some(s) => return Err(format!("schema {s}; this pcb reads schema {SCHEMA}")),
+    match raw.get("schema") {
+        Some(toml::Value::Integer(s)) if *s == SCHEMA as i64 => {}
+        Some(toml::Value::Integer(s)) => return Err(format!("schema {s}; this pcb reads schema {SCHEMA}")),
+        Some(v) => return Err(format!("schema is {v}; it must be the whole number {SCHEMA}")),
         None => return Err(format!("no schema key; add `schema = {SCHEMA}` at the top")),
     }
     toml::from_str::<Project>(text).map_err(|e| e.message().to_string())
@@ -197,9 +198,22 @@ fn is_version(v: &str) -> bool {
     p.len() == 3 && p.iter().all(|x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// YYYY-MM-DD and a real day of the calendar (review 8, 11).
 fn is_date(d: &str) -> bool {
     let b = d.as_bytes();
-    d.len() == 10 && b[4] == b'-' && b[7] == b'-' && d.chars().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+    if !(d.len() == 10 && b[4] == b'-' && b[7] == b'-' && d.chars().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())) {
+        return false;
+    }
+    let (y, m, day): (u32, u32, u32) = (d[0..4].parse().unwrap_or(0), d[5..7].parse().unwrap_or(0), d[8..10].parse().unwrap_or(0));
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
+    };
+    day >= 1 && day <= days
 }
 
 /// Problems inside the file itself, each as a sentence naming the key.
@@ -249,6 +263,11 @@ pub fn check(p: &Project) -> Vec<String> {
         if !(x1 > x0 && y1 > y0) {
             e.push(format!("keepout {:?}: rect must be x0, y0, x1, y1 with x1 > x0 and y1 > y0", k.name));
         }
+        if let Some(g) = k.grow_mm {
+            if !(g >= 0.0 && g.is_finite()) {
+                e.push(format!("keepout {:?}: grow_mm is {g}; it must be 0 or more", k.name));
+            }
+        }
         if let Layers::Named(s) = &k.layers {
             if s != "all" {
                 e.push(format!("keepout {:?}: layers is \"all\" or a list of copper layers", k.name));
@@ -263,6 +282,11 @@ pub fn check(p: &Project) -> Vec<String> {
     for z in &p.zone {
         if !(z.clearance_mm > 0.0) {
             e.push(format!("zone {}: clearance_mm must be above 0", z.net));
+        }
+        if let Some(t) = &z.thermal {
+            if !(t.gap_mm > 0.0 && t.spoke_mm > 0.0) {
+                e.push(format!("zone {}: thermal gap_mm and spoke_mm must be above 0", z.net));
+            }
         }
     }
     for o in &p.pad_override {

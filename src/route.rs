@@ -106,8 +106,11 @@ pub struct Report {
     /// Each router run, in order: the first with keep-outs outside the region, a second without them when named
     /// nets were left open.
     pub attempts: Vec<AttemptReport>,
-    /// Index into `attempts` of the run whose copper was kept: the one leaving fewest named nets open, first on a tie.
+    /// Index into `attempts` of the run whose copper was kept: the one leaving fewest named nets open, first on a
+    /// tie; the other one if that one makes the board worse and the other does not.
     pub attempt_used: usize,
+    /// Why the second run gave no result (it failed or timed out); the first run's result stands.
+    pub attempt_error: Option<String>,
     /// The kept run's Freerouting log (INFO, WARN and ERROR lines).
     pub freerouting_log: String,
 }
@@ -557,9 +560,11 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let o = &Opts { work, ..o.clone() };
     // the board the router starts from: the input, with the prewire edits applied (written out for checking)
     let input = Board::load(board_path)?;
-    // copper the prewire edits added is never ripped: it is the owner's explicit choice (the input's copper may be)
-    let input_tracks: std::collections::HashSet<_> = input.tracks.iter().map(|t| (seg_key((t.x0, t.y0), (t.x1, t.y1), &t.layer), t.net.clone())).collect();
-    let input_vias: std::collections::HashSet<_> = input.vias.iter().map(|v| ((v.x * 1000.0).round() as i64, (v.y * 1000.0).round() as i64, v.net.clone())).collect();
+    // the input's tracks and vias by their exact text, to tell the prewire's copper from the input's below
+    let mut input_copper: BTreeMap<String, usize> = BTreeMap::new();
+    for span in input.tracks.iter().map(|t| t.span).chain(input.vias.iter().map(|v| v.span)) {
+        *input_copper.entry(input.src[span.0..span.1].to_string()).or_default() += 1;
+    }
     let start = {
         if o.prewire.is_empty() {
             input
@@ -617,16 +622,26 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let gate = Gate::begin(&o.work, board_path)?;
     let b = start;
     let src = &b.src;
+    // Copper the prewire added or changed is the owner's explicit choice: never ripped, never pruned (review 8, 1
+    // and 2). It is every track and via whose text the input does not hold, matched item by item, so a track the
+    // prewire widened or laid again at another width counts as the prewire's.
+    let prewire_spans: std::collections::HashSet<(usize, usize)> = {
+        let mut left = input_copper.clone();
+        b.tracks.iter().map(|t| t.span).chain(b.vias.iter().map(|v| v.span)).filter(|sp| match left.get_mut(&src[sp.0..sp.1]) {
+            Some(c) if *c > 0 => { *c -= 1; false }
+            _ => true,
+        }).collect()
+    };
     let r = o.region;
     let mut rep = Report { prewired: prewired.clone(), ..Report::default() };
     // Copper is ripped only well inside the region, so the ends left by ripping (where the router must
     // reconnect) are clear of the keep-outs at the region's edge.
     let ri = (r.0 + RIP_MARGIN, r.1 + RIP_MARGIN, r.2 - RIP_MARGIN, r.3 - RIP_MARGIN);
     let rip_track = |t: &crate::board::Track| {
-        inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1) && !t.locked && o.rip.net(&t.net) && input_tracks.contains(&(seg_key((t.x0, t.y0), (t.x1, t.y1), &t.layer), t.net.clone()))
+        inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1) && !t.locked && o.rip.net(&t.net) && !prewire_spans.contains(&t.span)
     };
     let rip_via = |v: &crate::board::Via| {
-        inside(ri, v.x, v.y) && !v.locked && o.rip.net(&v.net) && input_vias.contains(&((v.x * 1000.0).round() as i64, (v.y * 1000.0).round() as i64, v.net.clone()))
+        inside(ri, v.x, v.y) && !v.locked && o.rip.net(&v.net) && !prewire_spans.contains(&v.span)
     };
 
     // 1. scratch copy: lock outside, remove unlocked inside
@@ -668,6 +683,10 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     for (net, w) in &o.widths {
         if !b.nets.contains(net) {
             return Err(refused("unknown-net", format!("--width names no net {net} on this board")));
+        }
+        // a width for a net this run does not route would be ignored without a word (review 8, 15)
+        if !o.nets.is_empty() && !o.nets.contains(net) {
+            return Err(refused("usage", format!("--width names {net}, which this run does not route; add it to --nets or --rip")));
         }
         want_widths.insert(net.clone(), *w);
     }
@@ -795,7 +814,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             if cuts.is_empty() {
                 // a locked track is never removed; nor is one outside the rip margin, so --rip alone says what may go
                 let in_ri = inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1);
-                segs.push(whole(both_in && in_ri && met_ripped && !t.locked));
+                segs.push(whole(both_in && in_ri && met_ripped && !t.locked && !prewire_spans.contains(&t.span)));
                 continue;
             }
             if !(inside(r, t.x0, t.y0) || inside(r, t.x1, t.y1)) {
@@ -815,7 +834,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                 let met = |p: (f64, f64)| {
                     (near(p, (t.x0, t.y0)) || near(p, (t.x1, t.y1))) && ripped_ends.iter().any(|(net, q)| *net == t.net && near(*q, p))
                 };
-                let tail = (met(w[0]) || met(w[1])) && inside(ri, w[0].0, w[0].1) && inside(ri, w[1].0, w[1].1) && !t.locked;
+                let tail = (met(w[0]) || met(w[1])) && inside(ri, w[0].0, w[0].1) && inside(ri, w[1].0, w[1].1) && !t.locked && !prewire_spans.contains(&t.span);
                 segs.push(Seg { a: w[0], c: w[1], layer: t.layer.clone(), net: t.net.clone(), width: t.width, origin: Origin::Piece(i), prunable: tail });
             }
             rep.split_tracks += 1;
@@ -907,35 +926,64 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // named nets are left open, the router runs once more with no region keep-outs; copper it lays outside the
     // region is still dropped, so that attempt can only win by closing nets inside the region.
     let plan: &[(bool, &str)] = if o.nets.is_empty() { &[(true, "region")] } else { &[(true, "region"), (false, "open")] };
-    let mut best: Option<Laid> = None;
+    let mut laids: Vec<(usize, Laid)> = vec![];
     for (i, (keep, tag)) in plan.iter().enumerate() {
-        let laid = attempt(*keep, tag)?;
+        let laid = match attempt(*keep, tag) {
+            Ok(l) => l,
+            // the second run failing or timing out leaves the first run's result standing (review 8, 17)
+            Err(e) if i > 0 => {
+                rep.attempt_error = Some(format!("{e:#}"));
+                break;
+            }
+            Err(e) => return Err(e),
+        };
         rep.attempts.push(AttemptReport { region_keepouts: *keep, added_segments: laid.rep.added_segments, added_vias: laid.rep.added_vias, open: laid.open.clone() });
-        if best.as_ref().is_none_or(|bst| laid.open.len() < bst.open.len()) {
-            best = Some(laid);
-            rep.attempt_used = i;
-        }
-        if best.as_ref().is_some_and(|bst| bst.open.is_empty()) {
+        let done = laid.open.is_empty();
+        laids.push((i, laid));
+        if done {
             break;
         }
     }
-    let Laid { rep: lr, edits: mut final_edits, new_text, open: _ } = best.expect("at least one attempt");
+    // preferred: fewest named nets open, the first run on a tie
+    laids.sort_by_key(|(i, l)| (l.open.len(), *i));
+
+    // 6. splice into the original: removals plus the new copper before the closing paren
+    let root: &Node = &b.root;
+    let text_of = |l: &Laid| -> Result<String> {
+        let mut e = l.edits.clone();
+        e.insert(root.span.1 - 1, l.new_text.clone());
+        e.apply(src)
+    };
+    // 7. the write gate: zones refilled, DRC against the input; written to the output only if nothing got worse.
+    // When the preferred run makes the board worse and the other run does not, the other run is kept: a run that
+    // closes a net but adds a violation must not cost a result the first run would have given (review 8, 17).
+    let has_zones = !b.zones.is_empty();
+    let mut chosen = 0;
+    let mut g = gate.finish(&text_of(&laids[0].1)?, out_path, has_zones)?;
+    if !g.regressions.is_empty() && laids.len() > 1 {
+        let rejected = g.written.clone();
+        let g2 = gate.finish(&text_of(&laids[1].1)?, out_path, has_zones)?;
+        if g2.regressions.is_empty() {
+            let _ = std::fs::remove_file(&rejected);
+            g = g2;
+            chosen = 1;
+        } else {
+            // both worse: report, and leave in .rejected, the preferred run
+            g = gate.finish(&text_of(&laids[0].1)?, out_path, has_zones)?;
+        }
+    }
+    let lr = &laids[chosen].1.rep;
+    rep.attempt_used = laids[chosen].0;
     rep.added_segments = lr.added_segments;
     rep.added_vias = lr.added_vias;
     rep.dropped_outside = lr.dropped_outside;
     rep.dropped_other_nets = lr.dropped_other_nets;
     rep.dropped_duplicates = lr.dropped_duplicates;
-    rep.nets_routed = lr.nets_routed;
+    rep.nets_routed = lr.nets_routed.clone();
     rep.pruned_segments = lr.pruned_segments;
     rep.split_tracks = lr.split_tracks;
     rep.joins_outside_region = lr.joins_outside_region;
-    rep.freerouting_log = lr.freerouting_log;
-
-    // 6. splice into the original: removals plus the new copper before the closing paren
-    let root: &Node = &b.root;
-    final_edits.insert(root.span.1 - 1, new_text);
-    // 7. the write gate: zones refilled, DRC against the input; written to the output only if nothing got worse
-    let g = gate.finish(&final_edits.apply(src)?, out_path, !b.zones.is_empty())?;
+    rep.freerouting_log = lr.freerouting_log.clone();
     rep.fixed = g.fixed;
     rep.regressions = g.regressions;
     rep.drc_total_before = g.total_before;

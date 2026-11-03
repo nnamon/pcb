@@ -32,7 +32,12 @@
      "copper",
      "zones_a",
      "zones_b",
-     "identical"
+     "identical",
+     "zones_added",
+     "zones_removed",
+     "outline_changed",
+     "repeated_refs",
+     "same_text"
     ],
     "properties": {
      "footprints": {
@@ -60,6 +65,30 @@
       }
      },
      "identical": {
+      "type": "boolean"
+     },
+     "zones_added": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "zones_removed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "outline_changed": {
+      "type": "boolean"
+     },
+     "repeated_refs": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "same_text": {
       "type": "boolean"
      }
     }

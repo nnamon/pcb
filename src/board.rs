@@ -61,6 +61,21 @@ pub struct Track {
     pub span: (usize, usize),
 }
 
+/// A track arc (`(arc ...)` at the top level), from `start` through `mid` to `end`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrackArc {
+    pub start: (f64, f64),
+    pub mid: (f64, f64),
+    pub end: (f64, f64),
+    pub width: f64,
+    pub layer: String,
+    pub net: String,
+    pub locked: bool,
+    pub uuid: Option<String>,
+    /// The centre line as a polyline.
+    pub pts: Vec<(f64, f64)>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Via {
     pub x: f64,
@@ -95,10 +110,12 @@ pub struct Segment {
 pub struct Board {
     pub src: String,
     pub root: Node,
-    /// Every net name used by a pad, track, via or zone (KiCad 10 has no net table).
+    /// Every net name used by a pad, track, arc, via or zone (KiCad 10 has no net table).
     pub nets: BTreeSet<String>,
     pub footprints: Vec<Footprint>,
     pub tracks: Vec<Track>,
+    /// Track arcs. Read so checks can see them; no command writes them yet.
+    pub arcs: Vec<TrackArc>,
     pub vias: Vec<Via>,
     pub zones: Vec<Zone>,
     pub outline: Vec<Segment>,
@@ -181,11 +198,12 @@ impl Board {
                 format!("the board is in a newer KiCad format (version {version}) than pcb reads (version {FORMAT_VERSION}, KiCad 10); pcb must be tested on that KiCad first"),
             ));
         }
+        // every copper layer, whatever its type (signal, power, mixed, jumper; review 8, 9)
         let copper_layers = root
             .find("layers")
-            .map(|l| l.items().iter().skip(1).filter(|c| c.arg(2) == Some("signal") || c.arg(2) == Some("power")).filter_map(|c| c.arg(1).map(String::from)).collect())
+            .map(|l| l.items().iter().skip(1).filter_map(|c| c.arg(1).filter(|n| n.ends_with(".Cu")).map(String::from)).collect())
             .unwrap_or_default();
-        let mut b = Board { src: String::new(), root: root.clone(), nets: BTreeSet::new(), footprints: vec![], tracks: vec![], vias: vec![], zones: vec![], outline: vec![], copper_layers };
+        let mut b = Board { src: String::new(), root: root.clone(), nets: BTreeSet::new(), footprints: vec![], tracks: vec![], arcs: vec![], vias: vec![], zones: vec![], outline: vec![], copper_layers };
         for n in root.items() {
             match n.head() {
                 Some("footprint") => b.footprints.push(b.footprint(n)),
@@ -200,6 +218,18 @@ impl Board {
                         locked: locked(n),
                         uuid: n.find("uuid").and_then(|u| u.arg(1)).map(String::from),
                         span: n.span,
+                    })
+                }
+                Some("arc") => {
+                    let (start, mid, end) = (xy(n, "start"), xy(n, "mid"), xy(n, "end"));
+                    b.arcs.push(TrackArc {
+                        start, mid, end,
+                        width: n.find("width").and_then(|w| w.num(1)).unwrap_or(0.0),
+                        layer: n.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(),
+                        net: net_of(n),
+                        locked: locked(n),
+                        uuid: n.find("uuid").and_then(|u| u.arg(1)).map(String::from),
+                        pts: arc_points(start, mid, end),
                     })
                 }
                 Some("via") => {
@@ -267,7 +297,7 @@ impl Board {
                 _ => {}
             }
         }
-        let used = b.footprints.iter().flat_map(|f| f.pads.iter().map(|p| &p.net)).chain(b.tracks.iter().map(|t| &t.net)).chain(b.vias.iter().map(|v| &v.net)).chain(b.zones.iter().map(|z| &z.net));
+        let used = b.footprints.iter().flat_map(|f| f.pads.iter().map(|p| &p.net)).chain(b.tracks.iter().map(|t| &t.net)).chain(b.arcs.iter().map(|t| &t.net)).chain(b.vias.iter().map(|v| &v.net)).chain(b.zones.iter().map(|z| &z.net));
         b.nets = used.filter(|n| !n.is_empty()).cloned().collect();
         b.src = src;
         Ok(b)

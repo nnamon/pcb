@@ -47,12 +47,20 @@ CASES = {
     "duplicate_delete_all_and_readd": ([dict(op="delete", what="track", net="S", layer="F.Cu", start=[3, 30], end=[45, 30], all=True),
                                         T("S", "F.Cu", 0.2, (3, 30), (45, 30))], "done", None, None),
     "duplicate_delete_all_breaks_net_rejected": ([dict(op="delete", what="track", net="S", layer="F.Cu", start=[3, 30], end=[45, 30], all=True)], "rejected", None, None),
+    # a board with a zone: the gate fills a copy and carries back only the fills (review 8, 3); checked by verify_edit
+    # and run twice, byte for byte the same
+    "zoned_join_n": ([T("N", "F.Cu", 0.2, (20, 15), (40, 15))], "done", None, "twice"),
+    # new copper joined only to itself floats (review 8, 13)
+    "self_loop_refused": ([T("N", "F.Cu", 0.2, (25, 26.5), (28, 26.5), (25, 26.5))], "refused", "edit-unjoined", None),
+    "floating_pair_refused": ([T("N", "F.Cu", 0.2, (25, 26), (28, 26), free_start=False), dict(op="add_via", net="N", at=[25, 26], size=0.6, drill=0.3)], "refused", "edit-unjoined", None),
+    # a uuid and a contradicting position (review 8, 5), and a field that does not apply
+    "delete_via_at_for_track_refused": ([dict(op="delete", what="track", net="S", layer="F.Cu", start=[3, 30], end=[45, 30], at=[3, 30])], "refused", "edit-op", None),
     "unknown_field_refused": ([dict(op="add_via", net="N", at=[30, 15], size=0.6, drill=0.3, sise=1)], "refused", "edit-op", None),
 }
 
 
 # boards other than the base variant
-VARIANT = {"duplicate_named_by_position_refused": "dup", "duplicate_delete_all_and_readd": "dup", "duplicate_delete_all_breaks_net_rejected": "dup"}
+VARIANT = {"zoned_join_n": "gzone", "duplicate_named_by_position_refused": "dup", "duplicate_delete_all_and_readd": "dup", "duplicate_delete_all_breaks_net_rejected": "dup"}
 
 
 def sha(p):
@@ -96,6 +104,8 @@ if __name__ == "__main__":
             v = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_edit.py"), board, opsf, out], capture_output=True, text=True)
             if v.returncode != 0:
                 results[name] = f"verify_edit failed: {v.stdout[-600:]}{v.stderr[-300:]}"
+            elif extra == "twice" and sha(out) != (lambda o2: (subprocess.run([pcb, "--json", "edit", board, "--ops", opsf, "--work", os.path.join(work, name + "_w2"), "-o", o2], capture_output=True), sha(o2))[1])(out + ".again.kicad_pcb"):
+                results[name] = "two runs of the same edit gave different files"
             elif extra == "fixes unconnected N" and not any(f.startswith("unconnected_items N") for f in d["data"]["fixed"]):
                 results[name] = f"the gate should report unconnected N fixed: {d['data']['fixed']}"
             else:

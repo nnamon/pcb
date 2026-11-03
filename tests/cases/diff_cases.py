@@ -28,7 +28,7 @@ results = {}
 # name: (a, b, test on data)
 CASES = {
     "identical": (E("join_n"), E("join_n"), lambda d: d["identical"] and not d["copper"] and not d["footprints"]),
-    "added_track": (E("join_n"), E("join_n", True), lambda d: d["copper"] == {"N": {"tracks_added": 1, "tracks_removed": 0, "length_added_mm": 20.0, "length_removed_mm": 0.0, "vias_added": 0, "vias_removed": 0}} and not d["footprints"]),
+    "added_track": (E("join_n"), E("join_n", True), lambda d: d["copper"] == {"N": {"tracks_added": 1, "tracks_removed": 0, "length_added_mm": 20.0, "length_removed_mm": 0.0, "vias_added": 0, "vias_removed": 0, "locks_changed": 0}} and not d["footprints"]),
     "tracks_and_vias": (E("join_n_through_vias"), E("join_n_through_vias", True), lambda d: (d["copper"]["N"]["tracks_added"], d["copper"]["N"]["vias_added"]) == (3, 2)),
     "width_change": (E("set_width"), E("set_width", True), lambda d: (d["copper"]["W"]["tracks_added"], d["copper"]["W"]["tracks_removed"]) == (1, 1)),
     "footprint_moved": (E("move_footprint"), E("move_footprint", True), lambda d: [(f["ref"], f["change"]) for f in d["footprints"]] == [("N2", "moved")] and not d["copper"]),
@@ -50,7 +50,7 @@ shutil.copy(E("join_n", True), os.path.join(g, "b.kicad_pcb"))
 d, problems = run("HEAD:b.kicad_pcb", "b.kicad_pcb", cwd=g)
 results["git_revision"] = "; ".join(problems) if problems else ("ok" if d["outcome"] == "done" and d["data"]["copper"].get("N", {}).get("tracks_added") == 1 else f"unexpected: {json.dumps(d.get('data'))[:300]}")
 d, problems = run("HEAD:no-such.kicad_pcb", "b.kicad_pcb", cwd=g)
-results["missing_revision_fails"] = "; ".join(problems) if problems else ("ok" if d["outcome"] == "failed" else f"outcome {d['outcome']}")
+results["missing_revision_refused"] = "; ".join(problems) if problems else ("ok" if d["outcome"] == "refused" and d["error"]["code"] == "usage" else f"outcome {d['outcome']}")
 png = os.path.join(work, "diff.png")
 d, problems = run(E("join_n"), E("join_n", True), "--png", png)
 results["png"] = "; ".join(problems) if problems else ("ok" if os.path.getsize(png) > 1000 and d.get("written") == png else "no PNG")

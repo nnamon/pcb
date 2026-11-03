@@ -13,6 +13,7 @@ use crate::gate::Gate;
 use crate::sexpr::{self, fmt_num as n, Edits};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Positions match within this (mm).
@@ -193,20 +194,29 @@ fn locked_refusal(i: usize, what: &str) -> anyhow::Error {
     refused("edit-locked", format!("operation {i}: {what} is locked; add \"unlock\": true to change it"))
 }
 
-/// Is `p` on copper of `net` in board `b`: a pad of the net (its turned rectangle), a via, or a track (within half
-/// its width of the centre line)? `skip_track` and `skip_via` leave out the item `p` belongs to, which would
+/// Is `p` on copper of `net` in board `b`: a pad of the net (its turned rectangle), a via, or a track or track arc
+/// (within half its width of the centre line)? `skip_track` and `skip_via` leave out the item `p` belongs to, which would
 /// otherwise always join itself.
 fn on_net_copper(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, skip_track: Option<usize>, skip_via: Option<usize>) -> bool {
+    on_copper_except(b, net, p, layer, &|k| Some(k) == skip_track, &|k| Some(k) == skip_via)
+}
+
+/// As `on_net_copper`, leaving out every track and via the two tests name.
+fn on_copper_except(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, skip_track: &dyn Fn(usize) -> bool, skip_via: &dyn Fn(usize) -> bool) -> bool {
     let pads = b.footprints.iter().flat_map(|f| f.pads.iter()).filter(|q| q.net == net).any(|q| {
         let on_layer = layer.is_none_or(|l| q.layers.iter().any(|ql| ql == l || ql == "*.Cu" || (ql == "F&B.Cu" && (l == "F.Cu" || l == "B.Cu"))));
         let (lx, ly) = rotate(p.0 - q.x, p.1 - q.y, -q.rot);
         on_layer && lx.abs() <= q.w / 2.0 + TOL && ly.abs() <= q.h / 2.0 + TOL
     });
-    let vias = b.vias.iter().enumerate().filter(|(k, v)| v.net == net && Some(*k) != skip_via).any(|(_, v)| ((p.0 - v.x).powi(2) + (p.1 - v.y).powi(2)).sqrt() <= v.size / 2.0 + TOL);
-    let tracks = b.tracks.iter().enumerate().filter(|(k, t)| t.net == net && Some(*k) != skip_track && layer.is_none_or(|l| t.layer == l)).any(|(_, t)| {
+    let vias = b.vias.iter().enumerate().filter(|(k, v)| v.net == net && !skip_via(*k)).any(|(_, v)| ((p.0 - v.x).powi(2) + (p.1 - v.y).powi(2)).sqrt() <= v.size / 2.0 + TOL);
+    let tracks = b.tracks.iter().enumerate().filter(|(k, t)| t.net == net && !skip_track(*k) && layer.is_none_or(|l| t.layer == l)).any(|(_, t)| {
         crate::route::point_seg_dist(p, (t.x0, t.y0), (t.x1, t.y1)) <= t.width / 2.0 + TOL
     });
-    pads || vias || tracks
+    // track arcs, along their centre polyline (review 8, 14); no operation edits an arc
+    let arcs = b.arcs.iter().filter(|t| t.net == net && layer.is_none_or(|l| t.layer == l)).any(|t| {
+        t.pts.windows(2).any(|w| crate::route::point_seg_dist(p, w[0], w[1]) <= t.width / 2.0 + TOL)
+    });
+    pads || vias || tracks || arcs
 }
 
 /// Apply `ops` to the board at `board_path` and write the result through the gate.
@@ -238,6 +248,8 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
     let mut lines = vec![];
     // ends of new copper to check on the edited board: (operation, net, point, layer or none for a via)
     let mut ends: Vec<(usize, String, (f64, f64), Option<String>)> = vec![];
+    // ends marked free: new copper that may stand alone
+    let mut free_pts: Vec<(String, (f64, f64))> = vec![];
     for (k, op) in ops.iter().enumerate() {
         let i = k + 1;
         let check_net = |net: &str| -> Result<()> {
@@ -268,12 +280,13 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                         n(w[0][0]), n(w[0][1]), n(w[1][0]), n(w[1][1]), n(*width), sexpr::quote(layer), sexpr::quote(net)
                     ));
                 }
-                if !free_start {
-                    ends.push((i, net.clone(), (points[0][0], points[0][1]), Some(layer.clone())));
-                }
-                if !free_end {
-                    let l = points[points.len() - 1];
-                    ends.push((i, net.clone(), (l[0], l[1]), Some(layer.clone())));
+                let l = points[points.len() - 1];
+                for (free, p) in [(*free_start, points[0]), (*free_end, l)] {
+                    if free {
+                        free_pts.push((net.clone(), (p[0], p[1])));
+                    } else {
+                        ends.push((i, net.clone(), (p[0], p[1]), Some(layer.clone())));
+                    }
                 }
                 lines.push(format!("{i}: add_track {net} on {layer}, {} segment(s) at {} mm", points.len() - 1, n(*width)));
             }
@@ -287,7 +300,9 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                     "  (via (at {} {}) (size {}) (drill {}) (layers \"F.Cu\" \"B.Cu\") (net {}))\n",
                     n(at[0]), n(at[1]), n(*size), n(*drill), sexpr::quote(net)
                 ));
-                if !free {
+                if *free {
+                    free_pts.push((net.clone(), (at[0], at[1])));
+                } else {
                     ends.push((i, net.clone(), (at[0], at[1]), None));
                 }
                 lines.push(format!("{i}: add_via {net} at {}", p2(*at)));
@@ -306,10 +321,25 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                 lines.push(format!("{i}: move_via {net} {} -> {}", p2(*at), p2(*to)));
             }
             Op::Delete { what, net, uuid, at, layer, start, end, unlock, all } => {
+                // fields that do not apply to this kind of item are refused, not ignored (review 8, 5)
+                match what {
+                    What::Via if layer.is_some() || start.is_some() || end.is_some() => {
+                        return Err(refused("edit-op", format!("operation {i}: delete via takes at or uuid, not layer, start or end")));
+                    }
+                    What::Track if at.is_some() => return Err(refused("edit-op", format!("operation {i}: delete track takes layer, start and end, or uuid, not at"))),
+                    _ => {}
+                }
                 let spans: Vec<(usize, usize)> = match what {
                     What::Via => {
+                        let at_given = *at;
                         let at = at.or(if uuid.is_some() { Some([f64::NAN, f64::NAN]) } else { None }).ok_or_else(|| refused("edit-op", format!("operation {i}: delete via needs at or uuid")))?;
                         let vs = find_vias(&b, i, net, at, uuid.as_deref(), *all)?;
+                        // a uuid and a position must name the same via
+                        if let (Some(_), Some(p)) = (uuid, at_given) {
+                            if let Some(v) = vs.iter().find(|v| !near((v.x, v.y), p)) {
+                                return Err(refused("edit-mismatch", format!("operation {i}: the via with that uuid is at {}, not {}", p2([v.x, v.y]), p2(p))));
+                            }
+                        }
                         if let Some(v) = vs.iter().find(|v| v.locked && !unlock) {
                             return Err(locked_refusal(i, &format!("the via at {}", p2([v.x, v.y]))));
                         }
@@ -322,6 +352,19 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                             _ => return Err(refused("edit-op", format!("operation {i}: delete track needs layer, start and end, or uuid"))),
                         };
                         let ts = find_tracks(&b, i, net, l, s, e, uuid.as_deref(), *all)?;
+                        // a uuid and the track's layer and ends must name the same track
+                        if uuid.is_some() {
+                            for t in &ts {
+                                let ends_ok = match (start, end) {
+                                    (Some(s0), Some(e0)) => (near((t.x0, t.y0), *s0) && near((t.x1, t.y1), *e0)) || (near((t.x0, t.y0), *e0) && near((t.x1, t.y1), *s0)),
+                                    (None, None) => true,
+                                    _ => false,
+                                };
+                                if layer.as_ref().is_some_and(|l| *l != t.layer) || !ends_ok {
+                                    return Err(refused("edit-mismatch", format!("operation {i}: the track with that uuid runs on {} from {} to {}", t.layer, p2([t.x0, t.y0]), p2([t.x1, t.y1]))));
+                                }
+                            }
+                        }
                         if ts.iter().any(|t| t.locked && !unlock) {
                             return Err(locked_refusal(i, "the track"));
                         }
@@ -366,6 +409,27 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                 let a = node.items().iter().find(|c| c.is("at")).ok_or_else(|| anyhow::anyhow!("footprint without at"))?;
                 let rot = a.num(3).map(|r| format!(" {}", n(r))).unwrap_or_default();
                 edits.replace((f.span.0 + a.span.0 - node.span.0, f.span.0 + a.span.1 - node.span.0), format!("(at {} {}{rot})", n(to[0]), n(to[1])));
+                // a footprint's own zones (rule areas) are stored in board coordinates: move every point of them too
+                // (review 8, 4)
+                let (dx, dy) = (to[0] - f.x, to[1] - f.y);
+                fn each_xy(nd: &sexpr::Node, out: &mut Vec<(usize, usize, f64, f64)>) {
+                    if nd.is("xy") {
+                        if let (Some(x), Some(y)) = (nd.num(1), nd.num(2)) {
+                            out.push((nd.span.0, nd.span.1, x, y));
+                        }
+                        return;
+                    }
+                    for c in nd.items() {
+                        each_xy(c, out);
+                    }
+                }
+                let mut xys = vec![];
+                for z in node.items().iter().filter(|c| c.is("zone")) {
+                    each_xy(z, &mut xys);
+                }
+                for (s0, s1, x, y) in xys {
+                    edits.replace((f.span.0 + s0 - node.span.0, f.span.0 + s1 - node.span.0), format!("(xy {} {})", n(x + dx), n(y + dy)));
+                }
                 lines.push(format!("{i}: move_footprint {reference} {} -> {}", p2(*from), p2(*to)));
             }
         }
@@ -386,6 +450,74 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                 "edit-unjoined",
                 format!("operation {i}: {} at {} touches no copper of {net}{}; mark the end free if that is meant", if layer.is_some() { "the track end" } else { "the via" }, p2([p.0, p.1]), layer.as_ref().map(|l| format!(" on {l}")).unwrap_or_default()),
             ));
+        }
+    }
+    // New copper joined only to other new copper floats (a loop back onto itself, a triangle, stacked vias): each
+    // connected piece of new or changed copper must reach the board's own copper (a pad, or a track or via the edit
+    // left as it was), unless one of its ends is marked free (review 8, 13).
+    let mut old: BTreeMap<&str, usize> = BTreeMap::new();
+    for sp in b.tracks.iter().map(|t| t.span).chain(b.vias.iter().map(|v| v.span)) {
+        *old.entry(&src[sp.0..sp.1]).or_default() += 1;
+    }
+    let mut is_new = |sp: (usize, usize)| match old.get_mut(&candidate[sp.0..sp.1]) {
+        Some(c) if *c > 0 => {
+            *c -= 1;
+            false
+        }
+        _ => true,
+    };
+    let new_t: Vec<usize> = (0..after.tracks.len()).filter(|k| is_new(after.tracks[*k].span)).collect();
+    let new_v: Vec<usize> = (0..after.vias.len()).filter(|k| is_new(after.vias[*k].span)).collect();
+    // nodes: new tracks, then new vias; each with its points (layer None for a via) and net
+    let mut nodes: Vec<(String, Vec<((f64, f64), Option<String>)>)> = new_t.iter().map(|k| {
+        let t = &after.tracks[*k];
+        (t.net.clone(), vec![((t.x0, t.y0), Some(t.layer.clone())), ((t.x1, t.y1), Some(t.layer.clone()))])
+    }).collect();
+    nodes.extend(new_v.iter().map(|k| (after.vias[*k].net.clone(), vec![((after.vias[*k].x, after.vias[*k].y), None)])));
+    let nt = new_t.len();
+    let mut parent: Vec<usize> = (0..nodes.len()).collect();
+    fn root(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    // does point q (on layer l, or any layer for a via) lie on node j's copper
+    let on_node = |j: usize, q: (f64, f64), l: &Option<String>| -> bool {
+        if j < nt {
+            let t = &after.tracks[new_t[j]];
+            l.as_ref().is_none_or(|l| *l == t.layer) && crate::route::point_seg_dist(q, (t.x0, t.y0), (t.x1, t.y1)) <= t.width / 2.0 + TOL
+        } else {
+            let v = &after.vias[new_v[j - nt]];
+            (q.0 - v.x).hypot(q.1 - v.y) <= v.size / 2.0 + TOL
+        }
+    };
+    for i in 0..nodes.len() {
+        for j in 0..nodes.len() {
+            if i != j && nodes[i].0 == nodes[j].0 && nodes[i].1.iter().any(|(q, l)| on_node(j, *q, l)) {
+                let (a, c) = (root(&mut parent, i), root(&mut parent, j));
+                parent[a] = c;
+            }
+        }
+    }
+    let new_t_set: std::collections::HashSet<usize> = new_t.iter().copied().collect();
+    let new_v_set: std::collections::HashSet<usize> = new_v.iter().copied().collect();
+    let mut anchored = vec![false; nodes.len()];
+    for (i, (net, pts)) in nodes.iter().enumerate() {
+        let ok = pts.iter().any(|(q, l)| {
+            on_copper_except(&after, net, *q, l.as_deref(), &|k| new_t_set.contains(&k), &|k| new_v_set.contains(&k)) || free_pts.iter().any(|(fnet, fp)| fnet == net && near(*q, [fp.0, fp.1]))
+        });
+        if ok {
+            let r = root(&mut parent, i);
+            anchored[r] = true;
+        }
+    }
+    for i in 0..nodes.len() {
+        let r = root(&mut parent, i);
+        if !anchored[r] {
+            let (q, _) = &nodes[i].1[0];
+            return Err(refused("edit-unjoined", format!("the new {} copper at {} joins only other new copper; nothing ties it to the board's own copper of {}", nodes[i].0, p2([q.0, q.1]), nodes[i].0)));
         }
     }
     Ok((candidate, lines))

@@ -4,7 +4,7 @@
 //! pre-pass (0.25 mm vias, may rip existing traces) and automatic neckdown (narrows a net below its class width) are
 //! turned off; the plane nets are the board's zone nets, not its default GND and VCC; the routable layers are set
 //! here, because 2.5 routes on a DSN `(type power)` layer that has no plane; nets not being routed are in classes
-//! the autorouter skips; analytics are off. Its user-data directory is one in the work directory, because 2.5 reads
+//! the autorouter skips; analytics are off. Each run gets a fresh user-data directory in the work directory, because 2.5 reads
 //! router and DRC settings from `freerouting.json` there (the GUI writes that file), and a run must not depend on it.
 
 use crate::contract::failed;
@@ -17,13 +17,16 @@ pub fn run(java: &Path, jar: &Path, work: &Path, dsn: &Path, ses: &Path, passes:
     // Java runs inside `work`, so a path relative to the caller would point elsewhere (review 6, K12)
     let (dsn, ses) = (&std::path::absolute(dsn)?, &std::path::absolute(ses)?);
     let _ = std::fs::remove_file(ses);
+    // a fresh user-data directory for each run, named after its session file (review 8, 16)
+    let user = work.join(format!("{}.freerouting-user", ses.file_stem().and_then(|x| x.to_str()).unwrap_or("run")));
+    let _ = std::fs::remove_dir_all(&user);
     let out = Command::new("timeout")
         .arg(timeout_s.to_string())
         .arg(java)
         .arg("-jar")
         .arg(jar)
         .arg("--gui.enabled=false")
-        .arg(format!("--user_data_path={}", work.join("freerouting-user").display()))
+        .arg(format!("--user_data_path={}", user.display()))
         .arg(format!("--router.autorouter.max_passes={passes}"))
         .arg("--router.fanout.enabled=false")
         .arg("--router.automatic_neckdown=false")

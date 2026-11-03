@@ -6,14 +6,17 @@ and nothing else. It reads both files with tests/lib/kisexp.py (not pcb's parser
   move_via        the via of that net at `at` gone, the same via (net, size, drill) at `to`
   delete          the named via or track gone (with `all`, every one there)
   set_width       the track gone, the same track (ends, net, layer) at the new width
-  move_footprint  the footprint gone, the same footprint (every child but its position) at `to`
+  move_footprint  the footprint gone, the same footprint at `to`: every child but its position the same, its zones'
+                  points moved with it
 
 The operations are applied in order to the input's items; the output must be what is left, byte for byte, plus
-exactly one new item per expectation. Positions match to 1 um.
+exactly one new item per expectation. Zones are compared without their filled_polygon blocks, which the gate
+refills. Positions match to 1 um.
 
 Usage: python3 verify_edit.py in.kicad_pcb ops.json out.kicad_pcb
 """
 import collections
+import re
 import json
 import os
 import sys
@@ -27,7 +30,18 @@ TOL = 0.001
 def items(path):
     src = open(path).read()
     root = kisexp.parse(src)
-    return [(n, n.text(src)) for n in root.items[1:] if isinstance(n, kisexp.Node)]
+    return [(n, without_fill(n, src)) for n in root.items[1:] if isinstance(n, kisexp.Node)]
+
+
+def without_fill(n, src):
+    """An item's text; a zone's without its filled_polygon blocks, which the write gate refills on every write."""
+    t = n.text(src)
+    if n.head != "zone":
+        return t
+    for f in sorted((c for c in n.items if isinstance(c, kisexp.Node) and c.head == "filled_polygon"), key=lambda c: -c.span[0]):
+        a, b = f.span[0] - n.span[0], f.span[1] - n.span[0]
+        t = t[:a] + t[b:]
+    return re.sub(r"\n[ \t]*(?=\n)", "", t)
 
 
 def near(a, b):
@@ -53,13 +67,47 @@ def via_is(n, at, net, size=None, drill=None):
     return (size is None or abs(n.nums("size")[0] - size) <= 1e-6) and (drill is None or abs(n.nums("drill")[0] - drill) <= 1e-6)
 
 
+def children(n):
+    return [c.head for c in n.items if isinstance(c, kisexp.Node)]
+
+
+def only(n, heads):
+    """A new item has exactly the documented children, in any order: no lock, no uuid, nothing else (review 8, 6)."""
+    return sorted(children(n)) == sorted(heads)
+
+
+def without(n, t, head):
+    """The item's text without its child `head`: an item changed in one field must be the same in every other."""
+    c = n.find(head)
+    return t if c is None else t[: c.span[0] - n.span[0]] + t[c.span[1] - n.span[0]:]
+
+
 def fp_ref(n):
     return next((p.arg(2) for p in n.find_all("property") if p.arg(1) == "Reference"), None)
 
 
 def fp_without_at(text, n):
+    """A footprint's text without its position. Its zones (rule areas) are stored in board coordinates, so their
+    points are written relative to the footprint's position: a moved footprint must carry them along (review 8, 4)."""
     a = next(c for c in n.items if isinstance(c, kisexp.Node) and c.head == "at")
-    return text[: a.span[0] - n.span[0]] + text[a.span[1] - n.span[0]:]
+    fx, fy = n.nums("at")[:2]
+    cuts = [(a.span[0], a.span[1], "")]
+
+    def walk(nd):
+        for c in nd.items:
+            if isinstance(c, kisexp.Node):
+                if c.head == "xy":
+                    x, y = float(c.items[1]), float(c.items[2])
+                    cuts.append((c.span[0], c.span[1], f"(xy {round(x - fx, 3)} {round(y - fy, 3)})"))
+                else:
+                    walk(c)
+    for z in n.find_all("zone"):
+        walk(z)
+    out, pos = "", n.span[0]
+    for s0, s1, t in sorted(cuts):
+        out += text[pos - n.span[0]: s0 - n.span[0]] + t
+        pos = s1
+    return out + text[pos - n.span[0]:]
 
 
 def main():
@@ -89,12 +137,12 @@ def main():
         if kind == "add_track":
             pts = op["points"]
             for p, q in zip(pts, pts[1:]):
-                expect.append((f"op {i}: segment {p}-{q}", lambda n, t, p=p, q=q, op=op: seg_is(n, p, q, op["net"], op["layer"], op["width"])))
+                expect.append((f"op {i}: segment {p}-{q}", lambda n, t, p=p, q=q, op=op: seg_is(n, p, q, op["net"], op["layer"], op["width"]) and only(n, ["start", "end", "width", "layer", "net"])))
         elif kind == "add_via":
-            expect.append((f"op {i}: via at {op['at']}", lambda n, t, op=op: via_is(n, op["at"], op["net"], op["size"], op["drill"]) and n.find("layers").items[1:] == ["F.Cu", "B.Cu"]))
+            expect.append((f"op {i}: via at {op['at']}", lambda n, t, op=op: via_is(n, op["at"], op["net"], op["size"], op["drill"]) and n.find("layers").items[1:] == ["F.Cu", "B.Cu"] and only(n, ["at", "size", "drill", "layers", "net"])))
         elif kind == "move_via":
-            for old, _ in take(lambda n, t: via_is(n, op["at"], op["net"]), f"op {i}: via at {op['at']}"):
-                expect.append((f"op {i}: via moved to {op['to']}", lambda n, t, old=old, op=op: via_is(n, op["to"], op["net"], old.nums("size")[0], old.nums("drill")[0])))
+            for old, ot in take(lambda n, t: via_is(n, op["at"], op["net"]), f"op {i}: via at {op['at']}"):
+                expect.append((f"op {i}: via moved to {op['to']}, otherwise identical", lambda n, t, old=old, ot=ot, op=op: via_is(n, op["to"], op["net"]) and without(n, t, "at") == without(old, ot, "at")))
         elif kind == "delete":
             every = bool(op.get("all"))
             def uuid_is(n):
@@ -107,8 +155,8 @@ def main():
                     return (near(s_, op["start"]) and near(e_, op["end"])) or (near(s_, op["end"]) and near(e_, op["start"]))
                 take(lambda n, t: n.head == "segment" and net_of(n) == op["net"] and ((op.get("start") and n.find("layer").arg(1) == op.get("layer") and ends(n)) or (not op.get("start") and uuid_is(n))), f"op {i}: track deleted", every)
         elif kind == "set_width":
-            if take(lambda n, t: seg_is(n, op["start"], op["end"], op["net"], op["layer"], op["from"]), f"op {i}: track at {op['from']} mm"):
-                expect.append((f"op {i}: track at {op['to']} mm", lambda n, t, op=op: seg_is(n, op["start"], op["end"], op["net"], op["layer"], op["to"])))
+            for old, ot in take(lambda n, t: seg_is(n, op["start"], op["end"], op["net"], op["layer"], op["from"]), f"op {i}: track at {op['from']} mm"):
+                expect.append((f"op {i}: track at {op['to']} mm, otherwise identical", lambda n, t, old=old, ot=ot, op=op: seg_is(n, op["start"], op["end"], op["net"], op["layer"], op["to"]) and without(n, t, "width") == without(old, ot, "width")))
         elif kind == "move_footprint":
             for old, ot in take(lambda n, t: n.head == "footprint" and fp_ref(n) == op["ref"] and near(n.nums("at")[:2], op["from"]), f"op {i}: {op['ref']} at {op['from']}"):
                 expect.append((f"op {i}: {op['ref']} at {op['to']}, otherwise identical", lambda n, t, old=old, ot=ot, op=op: n.head == "footprint" and fp_ref(n) == op["ref"] and near(n.nums("at")[:2], op["to"]) and fp_without_at(t, n) == fp_without_at(ot, old) and n.nums("at")[2:] == old.nums("at")[2:]))

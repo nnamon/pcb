@@ -342,7 +342,9 @@ fn run(cli: Cli) -> Result<Reply> {
             for w in &width {
                 let (n, mm) = w.split_once('=').ok_or_else(|| contract::refused("usage", format!("--width {w}: use NET=MM")))?;
                 let mm: f64 = mm.parse().ok().filter(|v: &f64| *v > 0.0).ok_or_else(|| contract::refused("usage", format!("--width {w}: MM must be a number above 0")))?;
-                widths.insert(n.to_string(), mm);
+                if widths.insert(n.to_string(), mm).is_some() {
+                    return Err(contract::refused("usage", format!("--width names {n} twice")));
+                }
             }
             let o = route::Opts {
                 region: parse_region(&region)?,
@@ -370,6 +372,9 @@ fn run(cli: Cli) -> Result<Reply> {
             );
             let mut warnings: Vec<Warning> = rep.still_open.iter().map(|n| contract::warn("still-open", format!("{n} is still not fully connected"))).collect();
             warnings.extend(rep.declared_pinless_nets.iter().map(|n| contract::warn("pinless-net", format!("{n} has copper but no pads; declared to Freerouting"))));
+            if let Some(e) = &rep.attempt_error {
+                warnings.push(contract::warn("second-run-failed", format!("the router's second run, without region keep-outs, gave no result; the first run's stands: {e}")));
+            }
             if rep.joins_outside_region > 0 {
                 warnings.push(contract::warn("join-outside-region", format!("{} joins in the middle of tracks wholly outside the region were left unsplit", rep.joins_outside_region)));
             }
@@ -398,11 +403,22 @@ fn run(cli: Cli) -> Result<Reply> {
                 return Err(contract::refused("exists", format!("{} exists; pcb init does not overwrite a project file", out.display())));
             }
             let name = name.unwrap_or_else(|| bp.file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string());
-            let rel = relative(bp, out.parent().unwrap_or(std::path::Path::new(".")));
+            let rel = relative(bp, out.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")));
             let text = project::init_text(&name, &rel, &b);
             // what init writes must read back cleanly, or it is pcb's bug
             let p = project::parse(&text).map_err(|e| anyhow::anyhow!("pcb init wrote a file it cannot read: {e}"))?;
+            // and must pass the checks status runs, or status would refuse it at once (review 8, 10)
+            let problems = project::check(&p);
+            if !problems.is_empty() {
+                return Err(contract::refused("config", format!("the file init would write has problems: {}", problems.join("; "))));
+            }
             std::fs::write(&out, &text).map_err(|e| contract::failed("io", format!("writing {}: {e}", out.display())))?;
+            // the board must be found from the written file, as status will look for it (review 8, 8)
+            let back = project::load(&out)?;
+            if !back.board_path().exists() {
+                let _ = std::fs::remove_file(&out);
+                return Err(anyhow::anyhow!("pcb init wrote board = {rel:?}, which does not lead from {} to {board}", out.display()));
+            }
             let o = out.display().to_string();
             Ok(Reply {
                 outcome: Outcome::Done,
@@ -427,6 +443,13 @@ fn run(cli: Cli) -> Result<Reply> {
             if !d.nets_added.is_empty() || !d.nets_removed.is_empty() {
                 human += &format!("\n  nets added {:?}, removed {:?}", d.nets_added, d.nets_removed);
             }
+            if !d.zones_added.is_empty() || !d.zones_removed.is_empty() {
+                human += &format!("\n  zones added {:?}, removed {:?}", d.zones_added, d.zones_removed);
+            }
+            if d.outline_changed {
+                human += "\n  board outline changed";
+            }
+            let warnings: Vec<contract::Warning> = d.repeated_refs.iter().map(|r| contract::warn("repeated-ref", format!("reference {r} appears more than once; repeats are matched in file order as {r}#2, {r}#3 ..."))).collect();
             let written = match &png {
                 Some(p) => {
                     let o = render::Opts { region: None, highlight: d.copper.keys().cloned().collect(), scale: 20.0, labels: false };
@@ -435,7 +458,7 @@ fn run(cli: Cli) -> Result<Reply> {
                 }
                 None => None,
             };
-            Ok(Reply { outcome: Outcome::Done, error: None, written, warnings: vec![], human, data: serde_json::to_value(&d)? })
+            Ok(Reply { outcome: Outcome::Done, error: None, written, warnings, human, data: serde_json::to_value(&d)? })
         }
         Cmd::Edit { board, ops, work, out } => {
             let text = if ops == "-" {
@@ -472,9 +495,36 @@ fn run(cli: Cli) -> Result<Reply> {
 }
 
 /// `board` written relative to `dir` when it lies inside it, else as given.
+/// `board` relative to `dir`, climbing with `..` where it must (review 8, 8). Both are made absolute and normalised
+/// first; on another drive (Windows) the absolute path is returned.
 fn relative(board: &std::path::Path, dir: &std::path::Path) -> String {
-    let (b, d) = (std::path::absolute(board).unwrap_or(board.to_path_buf()), std::path::absolute(dir).unwrap_or(dir.to_path_buf()));
-    b.strip_prefix(&d).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| board.to_string_lossy().to_string())
+    use std::path::Component;
+    let norm = |p: &std::path::Path| -> Vec<std::ffi::OsString> {
+        let mut v: Vec<std::ffi::OsString> = vec![];
+        for c in std::path::absolute(p).unwrap_or(p.to_path_buf()).components() {
+            match c {
+                Component::ParentDir => {
+                    v.pop();
+                }
+                Component::CurDir => {}
+                other => v.push(other.as_os_str().to_os_string()),
+            }
+        }
+        v
+    };
+    let (b, d) = (norm(board), norm(dir));
+    if b.first() != d.first() {
+        return board.to_string_lossy().to_string();
+    }
+    let common = b.iter().zip(&d).take_while(|(x, y)| x == y).count();
+    let mut out = std::path::PathBuf::new();
+    for _ in common..d.len() {
+        out.push("..");
+    }
+    for c in &b[common..] {
+        out.push(c);
+    }
+    out.to_string_lossy().to_string()
 }
 
 /// `pcb status`: see the command's help.
@@ -515,6 +565,11 @@ fn status(proj: &str, no_drc: bool, work: &str) -> Result<Reply> {
         None => json!({ "tag": tag, "file": null, "recorded": false }),
     };
     let bp = l.board_path();
+    // a board the file names but that is not there is the file's problem, not a tool failure (review 8, 12)
+    if !bp.exists() {
+        let msg = format!("project.board: no file {}", bp.display());
+        return Ok(Reply { outcome: Outcome::Refused, error: Some(("config".into(), msg.clone())), written: None, warnings, human: format!("refused [config]: {msg}"), data: json!({ "file": path.display().to_string(), "problems": problems.iter().cloned().chain([msg]).collect::<Vec<_>>() }) });
+    }
     let b = Board::load(&bp.to_string_lossy())?;
     warnings.extend(project::check_against(p, &b));
     let drc = if no_drc {
@@ -546,4 +601,14 @@ fn status(proj: &str, no_drc: bool, work: &str) -> Result<Reply> {
     // a file with problems is refused, with everything else still reported
     let error = (!problems.is_empty()).then(|| ("config".to_string(), format!("{} problem(s) in {}", problems.len(), path.display())));
     Ok(Reply { outcome: if problems.is_empty() { Outcome::Done } else { Outcome::Refused }, error, written: None, warnings, human, data })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn relative_climbs_with_dotdot() {
+        assert_eq!(super::relative(std::path::Path::new("/a/boards/b.kicad_pcb"), std::path::Path::new("/a/proj")), "../boards/b.kicad_pcb");
+        assert_eq!(super::relative(std::path::Path::new("/a/proj/b.kicad_pcb"), std::path::Path::new("/a/proj")), "b.kicad_pcb");
+        assert_eq!(super::relative(std::path::Path::new("/a/x/../proj/sub/b.kicad_pcb"), std::path::Path::new("/a/proj/./")), "sub/b.kicad_pcb");
+    }
 }

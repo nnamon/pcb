@@ -109,6 +109,11 @@ fn main() -> Result<()> {
     s.py("kicad adapter", "tests/cases/adapter_cases.py", &[&s.w("adapter")]);
     s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
     s.py("import orientation sweep", "tests/cases/orient_cases.py", &[&pcb, &s.w("orient_cases")]);
+    // review 8's probes, kept as cases: edit, diff, init and status, the edit oracle's mutations, and move_footprint
+    // against pcbnew's own move
+    for (n, f) in [("review 8: edit probes", "edit_probes"), ("review 8: diff probes", "diff_probes"), ("review 8: project probes", "project_probes"), ("review 8: verify_edit mutations", "verify_edit_mutations"), ("review 8: move_footprint against pcbnew", "move_fp_vs_pcbnew")] {
+        s.py(n, &format!("tests/review8/{f}.py"), &[&pcb, &s.w(&format!("review8_{f}"))]);
+    }
     if s.py("edit edge cases", "tests/cases/edit_cases.py", &[&pcb, &s.w("edit_cases")]) {
         s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
         s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);
@@ -117,8 +122,12 @@ fn main() -> Result<()> {
         (Some(j), false) => {
             let j = j.clone();
             s.py("route edge cases", "tests/cases/route_cases.py", &[&pcb, &j, &s.w("route_cases")]);
+            s.py("review 8: route probes", "tests/review8/route_probes.py", &[&pcb, &j, &s.w("review8_route_probes")]);
         }
-        _ => s.skip("route edge cases", "--fast"),
+        _ => {
+            s.skip("route edge cases", "--fast");
+            s.skip("review 8: route probes", "--fast");
+        }
     }
 
     // fixtures
@@ -182,20 +191,9 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         let before = std::fs::read(&board)?;
         let o = Command::new(pcb).args(&args).output()?;
         let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(json!({}));
-        let contract = Command::new("python3")
-            .args(["-c", "import sys, json; sys.path.insert(0, 'tests/lib'); from contract_check import check; d, p = check(sys.stdin.read(), int(sys.argv[1])); print(json.dumps(p))", &o.status.code().unwrap_or(-1).to_string()])
-            .current_dir(&s.root)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut c| {
-                use std::io::Write;
-                c.stdin.take().unwrap().write_all(&o.stdout)?;
-                c.wait_with_output()
-            })?;
         let want = case.get("expect").and_then(|x| x.as_str()).unwrap_or("done");
         let mut problems = vec![];
-        let cp = String::from_utf8_lossy(&contract.stdout).trim().to_string();
+        let cp = contract_problems(&s.root, &o)?;
         if cp != "[]" {
             problems.push(format!("output contract: {cp}"));
         }
@@ -249,6 +247,10 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(json!({}));
         let want = case.get("expect").and_then(|x| x.as_str()).unwrap_or("done");
         let mut problems = vec![];
+        let cp = contract_problems(&s.root, &o)?;
+        if cp != "[]" {
+            problems.push(format!("output contract: {cp}"));
+        }
         if std::fs::read(&board)? != before {
             problems.push("the input board changed".to_string());
         }
@@ -295,6 +297,22 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         }
     }
     Ok(())
+}
+
+/// The output-contract checker's problems with one command's output, as JSON (`[]` when none).
+fn contract_problems(root: &Path, o: &std::process::Output) -> Result<String> {
+    let c = Command::new("python3")
+        .args(["-c", "import sys, json; sys.path.insert(0, 'tests/lib'); from contract_check import check; d, p = check(sys.stdin.read(), int(sys.argv[1])); print(json.dumps(p))", &o.status.code().unwrap_or(-1).to_string()])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.take().unwrap().write_all(&o.stdout)?;
+            c.wait_with_output()
+        })?;
+    Ok(String::from_utf8_lossy(&c.stdout).trim().to_string())
 }
 
 fn finish(s: &Suite, t0: Instant) -> Result<()> {
