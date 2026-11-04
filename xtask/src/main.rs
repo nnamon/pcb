@@ -129,6 +129,7 @@ fn main() -> Result<()> {
         s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);
     }
     s.py("zone cases", "tests/cases/zone_cases.py", &[&pcb, &s.w("zone_cases")]);
+    s.py("check, gate and release cases", "tests/cases/release_cases.py", &[&pcb, &s.w("release_cases")]);
     s.py("review 13: zone probes", "tests/review13/check.py", &[&pcb, &s.w("review13")]);
     match (&jar, s.fast) {
         (Some(j), false) => {

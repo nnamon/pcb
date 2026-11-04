@@ -319,7 +319,7 @@ On the zoned badge fixture with the 4-layer JLCPCB rules, `pcb check` finds what
 
 ### Still to do for M3
 
-Fixtures for check, gate and release refusals; gerbonara in the CI image.
+gerbonara in the CI image.
 
 ## Planning drawings
 
