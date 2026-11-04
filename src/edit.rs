@@ -231,7 +231,9 @@ fn on_copper_except(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, sk
 
 /// Apply `ops` to the board at `board_path` and write the result through the gate.
 pub fn run(board_path: &str, ops: &[Op], out_path: &str, work: &Path) -> Result<Report> {
+    crate::gate::check_work(work)?;
     std::fs::create_dir_all(work)?;
+    crate::gate::check_out(out_path)?;
     // a board that is not there is the caller's mistake, not a tool failure (review 9, 10)
     if !Path::new(board_path).exists() {
         return Err(refused("usage", format!("{board_path}: no such board")));

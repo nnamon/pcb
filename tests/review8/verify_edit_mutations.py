@@ -59,7 +59,7 @@ MUT = {
     "new_segment_locked": ("join_n", lambda t: sub1(t, r'(\(segment \(start 20 15\) \(end 40 15\)[^\n]*?\(net "N"\))\)', r'\1 (locked yes))')),
     "new_via_locked": ("add_via", lambda t: sub1(t, r'(\(via \(at 30 15\)[^\n]*?\(net "N"\))\)', r'\1 (locked yes))')),
     # the widened track lost its uuid, or gained a lock
-    "set_width_uuid_changed": ("set_width", lambda t: sub1(t, r'(\(start 15 10\)\s*\(end 30 10\)\s*\(width 0.5\)\s*\(layer "F.Cu"\)\s*\(net "W"\)\s*\(uuid ")[0-9a-f]', r'\g<1>f')),
+    "set_width_uuid_changed": ("set_width", lambda t: sub1(t, r'(\(start 15 10\)\s*\(end 30 10\)\s*\(width 0.5\)\s*\(layer "F.Cu"\)\s*\(net "W"\)\s*\(uuid ")([0-9a-f])', lambda m: m.group(1) + ("0" if m.group(2) != "0" else "1"))),
     "set_width_locked": ("set_width", lambda t: sub1(t, r'(\(width 0.5\)\s*\(layer "F.Cu"\)\s*\(net "W"\))', r'\1 (locked yes)')),
     # the moved via changed its uuid, or became blind
     "move_via_uuid_changed": ("move_via", lambda t: t.replace("aaaaaaaa-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000001")),

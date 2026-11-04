@@ -12,6 +12,7 @@
 | `review9/` | Review 9's cases: the gate's fill carry-back on zones with and without uuids and in footprints (`zone_gate_cases.py`), the join rule, diff misses, the router's choice between runs driven by a stand-in java (`fake/`), and prewire with `--rip`. `expect_pass.py` turns their PASS and FAIL lines into an exit status |
 | `review10/` | Review 10's probes (zone pairing without uuids and in copied footprints, joins through stale or empty fills, diff on KiCad re-saves and copper graphics, multi-segment prewire stubs), with their verdicts in `check.py` |
 | `review11/` | Review 11's probes (the gate's markers on never-filled, hand-written and copied zones; prewire stubs anchored in a never-filled zone or joined at a bend; diff misses and KiCad re-saves of hand-written text), with their verdicts in `check.py` |
+| `review12/` | Review 12's probes (markers against colliding ids, shared uuids, groups and pasted footprints; copper text and graphics changes and re-saves; two prewire stubs at one pad), with their verdicts in `check.py` |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

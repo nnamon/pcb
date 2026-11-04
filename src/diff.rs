@@ -165,30 +165,84 @@ fn pad_key(f: &crate::board::Footprint, p: &crate::board::Pad) -> String {
 fn fp_graphics(b: &Board, f: &crate::board::Footprint, copper: bool) -> Vec<String> {
     let Ok(n) = crate::sexpr::parse(&b.src[f.span.0..f.span.1]) else { return vec![] };
     let on = |l: Option<&str>| if copper { l.is_some_and(|l| l.ends_with(".Cu")) } else { l == Some("Edge.Cuts") };
-    // graphics, and text or properties put on a copper layer (review 11, N5)
+    // graphics, and text, properties or dimensions put on a copper layer (review 11, N5), each whole (review 12, R3)
     let mut v: Vec<String> = n
         .items()
         .iter()
         .filter(|c| c.head().is_some_and(|h| h.starts_with("fp_") || h == "property" || h == "dimension") && on(c.find("layer").and_then(|l| l.arg(1))))
-        .map(|c| {
-            let nums: Vec<String> = c.items().iter().filter(|k| ["start", "end", "mid", "center", "pts"].iter().any(|h| k.is(h))).map(|k| {
-                let mut out = vec![];
-                fn walk(x: &crate::sexpr::Node, out: &mut Vec<i64>) {
-                    for a in x.items().iter().skip(1) {
-                        match a.atom().and_then(|t| t.parse::<f64>().ok()) {
-                            Some(v) => out.push((v * 1000.0).round() as i64),
-                            None => walk(a, out),
-                        }
-                    }
-                }
-                walk(k, &mut out);
-                format!("{} {:?}", k.head().unwrap_or(""), out)
-            }).collect();
-            format!("{} {} {}", c.head().unwrap_or(""), c.find("layer").and_then(|l| l.arg(1)).unwrap_or(""), nums.join(" "))
-        })
+        .map(graphic_canon)
         .collect();
     v.sort();
     v
+}
+
+/// A graphic item (board `gr_*`, footprint `fp_*`, text, property, dimension, target) as canonical text: every child
+/// that places or shapes it, in a fixed order, numbers to 1 um, no uuid; with KiCad's re-save spellings read alike
+/// (reviews 11 and 12): a bare `width` and a `stroke` width are one width, and a missing one is 0; the stroke's line
+/// type is left out (it does not change copper); `fill solid` is `fill yes` and `none` is `no`; an `at` with no
+/// angle has angle 0; an arc's two ends compare in either order; a dimension compares by type, layer, points,
+/// height and line thickness, since KiCad recomputes its text and defaults its format. Font size, thickness, bold, italic, justification, mirroring and a layer's knockout flag all count.
+fn graphic_canon(c: &crate::sexpr::Node) -> String {
+    use crate::sexpr::Node;
+    fn num(a: &str) -> String {
+        a.parse::<f64>().map(|v| format!("{}", (v * 1000.0).round() / 1000.0)).unwrap_or(a.to_string())
+    }
+    fn walk(n: &Node) -> String {
+        if let Some(a) = n.atom() {
+            return num(a);
+        }
+        let head = n.head().unwrap_or("");
+        let atoms: Vec<String> = n.items().iter().skip(1).filter_map(|a| a.atom()).map(num).collect();
+        let mut kids: Vec<String> = vec![];
+        let mut width: Option<String> = None;
+        for k in n.items().iter().skip(1).filter(|k| k.atom().is_none()) {
+            match k.head() {
+                Some("uuid") | Some("tstamp") => {}
+                Some("stroke") => width = Some(k.find("width").and_then(|w| w.arg(1)).map(num).unwrap_or("0".into())),
+                Some("width") => width = Some(k.arg(1).map(num).unwrap_or("0".into())),
+                // a dimension by what places its copper: type, layer, points, height and line thickness. Its text is
+                // recomputed and its format fields defaulted on every save (review 12, R4)
+                Some(h) if head == "dimension" && !matches!(h, "type" | "layer" | "pts" | "height" | "style") => {}
+                Some("style") if head == "dimension" => kids.push(format!("(thickness {})", k.find("thickness").and_then(|t| t.arg(1)).map(num).unwrap_or_default())),
+                Some("at") => {
+                    let mut v: Vec<String> = k.args().iter().map(|a| num(a)).collect();
+                    if v.len() == 2 {
+                        v.push("0".into());
+                    }
+                    kids.push(format!("(at {})", v.join(" ")));
+                }
+                Some("fill") => {
+                    let f = match k.arg(1) {
+                        Some("solid") | Some("yes") => "yes",
+                        _ => "no",
+                    };
+                    kids.push(format!("(fill {f})"));
+                }
+                _ => kids.push(walk(k)),
+            }
+        }
+        let graphic = head.starts_with("gr_") || head.starts_with("fp_");
+        if graphic && head != "gr_text" && head != "fp_text" {
+            kids.push(format!("(width {})", width.unwrap_or("0".into())));
+            if !kids.iter().any(|k| k.starts_with("(fill ")) && !head.ends_with("line") && !head.ends_with("arc") {
+                kids.push("(fill no)".into());
+            }
+        }
+        // an arc's ends in either order
+        if head.ends_with("arc") || head == "arc" {
+            let s_i = kids.iter().position(|k| k.starts_with("(start "));
+            let e_i = kids.iter().position(|k| k.starts_with("(end "));
+            if let (Some(si), Some(ei)) = (s_i, e_i) {
+                let (a, b) = (kids[si]["(start ".len()..].to_string(), kids[ei]["(end ".len()..].to_string());
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                kids[si] = format!("(start {lo}");
+                kids[ei] = format!("(end {hi}");
+            }
+        }
+        kids.sort();
+        format!("({head}{}{}{})", if atoms.is_empty() { "" } else { " " }, atoms.join(" "), kids.join(""))
+    }
+    walk(c)
 }
 
 /// Per pad, the settings that change how copper meets it: zone connection, clearance, thermal relief (review 10, 5).
@@ -201,7 +255,11 @@ fn pad_rules(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
         .map(|p| {
             // as numbers, so 0.30 and 0.3 are the same (review 11, N4)
             let get = |h: &str| p.find(h).map(|x| x.args().iter().map(|a| a.parse::<f64>().map(|v| format!("{v}")).unwrap_or(a.to_string())).collect::<Vec<_>>().join(" ")).unwrap_or_default();
-            format!("{} zc {} cl {} tw {} tg {} ta {}", p.arg(1).unwrap_or(""), get("zone_connect"), get("clearance"), get("thermal_bridge_width"), get("thermal_gap"), get("thermal_bridge_angle"))
+            format!("{} zc {} cl {} tw {} tg {} ta {}", p.arg(1).unwrap_or(""), get("zone_connect"), get("clearance"), get("thermal_bridge_width"), get("thermal_gap"), {
+                // KiCad's save drops the spoke angle at its default, 90 degrees (review 12, R4)
+                let t = get("thermal_bridge_angle");
+                if t.is_empty() { "90".to_string() } else { t }
+            })
         })
         .collect();
     v.sort();
@@ -209,58 +267,14 @@ fn pad_rules(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
 }
 
 /// Board items on copper layers that are not tracks, vias or zones (a `gr_poly` on F.Cu is copper and may carry a
-/// net; text, dimensions and targets there are copper too), each by its geometry: kind, layer, net, the points that
-/// place it, width (`width` or `stroke`), fill (`solid` and `yes` alike), text. A KiCad re-save writes the same
-/// graphic in other words; this key reads them alike (review 11, N4 and N5).
+/// net; text, dimensions and targets there are copper too), each as `graphic_canon` text, labelled by kind and layer.
 fn copper_graphics(b: &Board) -> BTreeMap<String, usize> {
-    let num = |s: &str| s.parse::<f64>().map(|v| format!("{}", (v * 1000.0).round() / 1000.0)).unwrap_or(s.to_string());
     let mut m = BTreeMap::new();
     for c in b.root.items().iter().filter(|c| {
         c.head().is_some_and(|h| h.starts_with("gr_") || h == "dimension" || h == "target") && c.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".Cu"))
     }) {
-        let mut k = vec![c.head().unwrap_or("").to_string(), c.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string()];
-        k.push(format!("net {}", c.find("net").and_then(|x| x.arg(1)).unwrap_or("")));
-        if c.is("gr_text") {
-            k.push(format!("text {:?}", c.arg(1).unwrap_or("")));
-        }
-        for h in ["start", "end", "center", "mid", "at", "size"] {
-            if let Some(x) = c.find(h) {
-                let mut v: Vec<String> = x.args().iter().map(|a| num(a)).collect();
-                if h == "at" && v.len() == 2 {
-                    v.push("0".into());
-                }
-                k.push(format!("{h} {}", v.join(" ")));
-            }
-        }
-        if let Some(p) = c.find("pts") {
-            k.push(format!("pts {}", p.items().iter().filter(|q| q.is("xy")).map(|q| q.args().iter().map(|a| num(a)).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join(";")));
-        }
-        let w = c.find("width").or_else(|| c.find("stroke").and_then(|s| s.find("width"))).and_then(|w| w.arg(1)).map(num).unwrap_or_default();
-        k.push(format!("width {w}"));
-        let fill = match c.find("fill").and_then(|f| f.arg(1)) {
-            Some("solid") | Some("yes") => "yes",
-            _ => "no",
-        };
-        k.push(format!("fill {fill}"));
-        if c.is("dimension") || c.is("target") {
-            // any other numbers that place it
-            let mut all = vec![];
-            fn walk(x: &crate::sexpr::Node, out: &mut Vec<String>) {
-                if x.is("uuid") {
-                    return;
-                }
-                for a in x.items() {
-                    match a.atom() {
-                        Some(t) if t.parse::<f64>().is_ok() => out.push(t.to_string()),
-                        Some(_) => {}
-                        None => walk(a, out),
-                    }
-                }
-            }
-            walk(c, &mut all);
-            k.push(all.iter().map(|a| num(a)).collect::<Vec<_>>().join(" "));
-        }
-        *m.entry(k.join(" | ")).or_default() += 1;
+        let label = format!("{} {}", c.head().unwrap_or(""), c.find("layer").and_then(|l| l.arg(1)).unwrap_or(""));
+        *m.entry(format!("{label}\t{}", graphic_canon(c))).or_default() += 1;
     }
     m
 }
@@ -418,7 +432,7 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
     let (mut copper_graphics_added, mut copper_graphics_removed) = (vec![], vec![]);
     for k in ga.keys().chain(gb.keys()).collect::<BTreeSet<_>>() {
         let (na, nb) = (ga.get(k).copied().unwrap_or(0), gb.get(k).copied().unwrap_or(0));
-        let what = k.split(" | ").take(2).collect::<Vec<_>>().join(" ");
+        let what = k.split('\t').next().unwrap_or("").to_string();
         for _ in nb..na {
             copper_graphics_removed.push(what.clone());
         }

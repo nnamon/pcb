@@ -30,6 +30,41 @@ pub struct GateResult {
     pub written: String,
 }
 
+/// Refuses an output path that cannot be written: a folder, or a file in a folder that does not exist (review 12,
+/// R6). Run before any work.
+pub fn check_out(out: &str) -> Result<()> {
+    let p = Path::new(out);
+    if p.is_dir() {
+        return Err(crate::contract::refused("usage", format!("-o {out}: a folder, not a board file")));
+    }
+    let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    if !parent.is_dir() {
+        return Err(crate::contract::refused("usage", format!("-o {out}: no folder {}", parent.display())));
+    }
+    Ok(())
+}
+
+/// Refuses a work folder path where a file stands (review 12, R6).
+pub fn check_work(work: &Path) -> Result<()> {
+    if work.exists() && !work.is_dir() {
+        return Err(crate::contract::refused("usage", format!("--work {}: a file is there, not a folder", work.display())));
+    }
+    Ok(())
+}
+
+/// Every zone needs an outline: pcbnew drops a zone without one when it loads the board, so it could not be filled or
+/// carried back (review 12, R5).
+pub fn check_zones(candidate: &str) -> Result<()> {
+    let root = crate::sexpr::parse(candidate)?;
+    for (i, z) in all_zones(&root).into_iter().enumerate() {
+        if z.find("polygon").is_none() {
+            let net = z.find("net").and_then(|n| n.arg(1)).unwrap_or("");
+            return Err(crate::contract::refused("refused", format!("zone {} ({}) has no outline polygon; KiCad would drop it", i + 1, if net.is_empty() { "no net" } else { net })));
+        }
+    }
+    Ok(())
+}
+
 /// Remove a rejected result and the project file beside it (review 9, 9).
 pub fn remove_result(path: &str) {
     let p = Path::new(path);
@@ -40,7 +75,10 @@ pub fn remove_result(path: &str) {
 }
 
 impl Gate {
+    /// Starts the gate: checks the output and work paths first, so a wrong path is refused before any DRC runs
+    /// (review 12, R6), then runs DRC on the input.
     pub fn begin(work: &Path, board: &str) -> Result<Gate> {
+        check_work(work)?;
         let before = kicad::drc_counts(work, board, "drc_before")?;
         Ok(Gate { work: work.to_path_buf(), input: PathBuf::from(board), before })
     }
@@ -49,6 +87,7 @@ impl Gate {
         let cand = self.work.join("candidate.kicad_pcb");
         // zones inside footprints count too (review 9, 2)
         let text = if has_zones || candidate.contains("(zone") {
+            check_zones(candidate)?;
             let filled = self.work.join("candidate_filled.kicad_pcb");
             std::fs::write(&filled, mark_zones(candidate)?)?;
             kicad::copy_rules(&self.input, &filled)?;

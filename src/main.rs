@@ -295,10 +295,14 @@ fn run(cli: Cli) -> Result<Reply> {
                 return emit(cli.json, true, h, serde_json::to_value(f)?);
             }
             if let Some(n) = net {
+                // a net the board does not have is the caller's mistake (review 12, R7)
+                if !b.nets.contains(&n) {
+                    return Err(contract::refused("unknown-net", format!("no net {n} on this board")));
+                }
                 let pads: Vec<_> = b.footprints.iter().flat_map(|f| f.pads.iter().filter(|p| p.net == n).map(move |p| json!({ "pad": format!("{}.{}", f.reference, p.number), "x": p.x, "y": p.y }))).collect();
                 let tracks: Vec<_> = b.tracks.iter().filter(|t| t.net == n).collect();
                 let vias: Vec<_> = b.vias.iter().filter(|v| v.net == n).collect();
-                let len: f64 = tracks.iter().map(|t| ((t.x1 - t.x0).powi(2) + (t.y1 - t.y0).powi(2)).sqrt()).sum();
+                let len: f64 = tracks.iter().map(|t| ((t.x1 - t.x0).powi(2) + (t.y1 - t.y0).powi(2)).sqrt()).sum::<f64>() + 0.0;
                 let h = format!("{n}: {} pads, {} track segments ({len:.1} mm), {} vias", pads.len(), tracks.len(), vias.len());
                 return emit(cli.json, true, h, json!({ "net": n, "pads": pads, "tracks": tracks, "vias": vias, "track_length_mm": len }));
             }

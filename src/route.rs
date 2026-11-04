@@ -553,6 +553,8 @@ fn seg_key(a: (f64, f64), b: (f64, f64), layer: &str) -> (i64, i64, i64, i64, St
 
 pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let t0 = Instant::now();
+    crate::gate::check_work(&o.work)?;
+    crate::gate::check_out(out_path)?;
     std::fs::create_dir_all(&o.work)?;
     // absolute, because Freerouting runs inside the work directory
     let work = std::fs::canonicalize(&o.work)?;
@@ -619,6 +621,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             return Err(refused("bad-layer", format!("routing layer {l} is not a copper layer of this board")));
         }
     }
+    crate::gate::check_out(out_path)?;
     let gate = Gate::begin(&o.work, board_path)?;
     let b = start;
     let src = &b.src;
@@ -821,19 +824,41 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         let mut free_chain: std::collections::HashSet<usize> = Default::default();
         for (net, q0) in &prewire_free {
             // the chain: segment indices with the vertex each ends on, walking away from the free end
+            // The walk stops at a corner on the board's own copper (a pad, a via, a fill, an input track), where three or
+            // more prewire tracks meet, or where the layer changes: past any of those it would leave this stub (review
+            // 12, R2). The first segment is the one at the free end.
+            let ends_at = |t: &crate::board::Track, q: (f64, f64)| near((t.x0, t.y0), q) || near((t.x1, t.y1), q);
+            let on_own_copper = |layer: &str, q: (f64, f64)| {
+                b.footprints.iter().flat_map(|f| f.pads.iter()).any(|pd| pd.net == *net && pad_on_layer(pd, layer) && in_pad(pd, q))
+                    || b.vias.iter().any(|v| v.net == *net && !rip_via(v) && (q.0 - v.x).hypot(q.1 - v.y) <= v.size / 2.0 + 1e-3)
+                    || b.tracks.iter().any(|t| t.net == *net && t.layer == layer && !prewire_spans.contains(&t.span) && !rip_track(t) && point_seg_dist(q, (t.x0, t.y0), (t.x1, t.y1)) <= 1e-3)
+                    || b.zones.iter().any(|z| {
+                        z.net == *net
+                            && if z.filled.is_empty() {
+                                z.layers.iter().any(|l| l == layer) && point_in_poly(q, &z.outline) && !z.holes.iter().any(|h| point_in_poly(q, h))
+                            } else {
+                                z.filled.iter().any(|(l, poly)| l == layer && point_in_poly(q, poly))
+                            }
+                    })
+            };
             let mut chain: Vec<(usize, (f64, f64))> = vec![];
             let mut q = *q0;
             loop {
-                let next = b.tracks.iter().enumerate().find(|(k, t)| {
-                    !chain.iter().any(|(c, _)| c == k) && t.net == *net && prewire_spans.contains(&t.span) && (near((t.x0, t.y0), q) || near((t.x1, t.y1), q))
-                });
-                match next {
-                    Some((k, t)) => {
-                        q = if near((t.x0, t.y0), q) { (t.x1, t.y1) } else { (t.x0, t.y0) };
-                        chain.push((k, q));
+                let here: Vec<usize> = (0..b.tracks.len()).filter(|k| b.tracks[*k].net == *net && prewire_spans.contains(&b.tracks[*k].span) && ends_at(&b.tracks[*k], q)).collect();
+                let next: Vec<usize> = here.iter().copied().filter(|k| !chain.iter().any(|(c, _)| c == k)).collect();
+                if let Some((last, _)) = chain.last() {
+                    let layer = b.tracks[*last].layer.as_str();
+                    // a junction, the board's own copper, or no single way on: the stub ends here
+                    if here.len() != 2 || next.len() != 1 || on_own_copper(layer, q) || b.tracks[next[0]].layer != layer {
+                        break;
                     }
-                    None => break,
+                } else if next.len() != 1 {
+                    break;
                 }
+                let k = next[0];
+                let t = &b.tracks[k];
+                q = if near((t.x0, t.y0), q) { (t.x1, t.y1) } else { (t.x0, t.y0) };
+                chain.push((k, q));
             }
             for (n_, (k, far)) in chain.iter().enumerate() {
                 let t = &b.tracks[*k];
