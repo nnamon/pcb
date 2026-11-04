@@ -32,16 +32,30 @@ pub struct Report {
     pub passed: Option<String>,
 }
 
-/// pcb.toml's text without its `[gates.*]` tables.
+/// The table a header line opens, spaces inside the brackets removed: `[ gates.layout ]` is `gates.layout`.
+fn header(line: &str) -> Option<String> {
+    let t = line.trim();
+    let t = t.split('#').next().unwrap_or("").trim();
+    if t.starts_with("[[") {
+        return Some(t.trim_start_matches("[[").trim_end_matches("]]").split('.').map(|p| p.trim()).collect::<Vec<_>>().join("."));
+    }
+    t.strip_prefix('[').and_then(|r| r.strip_suffix(']')).map(|r| r.split('.').map(|p| p.trim()).collect::<Vec<_>>().join("."))
+}
+
+fn is_gate(h: &str) -> bool {
+    h == "gates" || h.starts_with("gates.")
+}
+
+/// pcb.toml's text without its `[gates.*]` tables. Comment and blank lines stay: they belong to no table's values.
 fn without_gates(text: &str) -> String {
     let mut out = String::new();
     let mut skip = false;
     for line in text.lines() {
-        let t = line.trim_start();
-        if t.starts_with('[') {
-            skip = t.starts_with("[gates.") || t.starts_with("[gates]");
+        if let Some(h) = header(line) {
+            skip = is_gate(&h);
         }
-        if !skip {
+        let comment = line.trim().is_empty() || line.trim_start().starts_with('#');
+        if !skip || (comment && !line.trim().is_empty()) {
             out.push_str(line);
             out.push('\n');
         }
@@ -53,7 +67,15 @@ fn without_gates(text: &str) -> String {
 /// The inputs' hash, and the files it covers.
 pub fn inputs(l: &Loaded) -> Result<(String, Vec<String>)> {
     let base = l.path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let mut files = vec![l.board_path(), l.path.clone()];
+    let board = l.board_path();
+    let mut files = vec![board.clone(), l.path.clone()];
+    // the board's own design rules: pcb check reads both (review 15, 6)
+    for ext in ["kicad_pro", "kicad_dru"] {
+        let f = board.with_extension(ext);
+        if f.exists() {
+            files.push(f);
+        }
+    }
     let mut extra: Vec<String> = l.project.art.iter().map(|a| a.file.clone()).chain(l.project.text.iter().map(|t| t.font.clone())).collect();
     extra.sort();
     extra.dedup();
@@ -120,11 +142,11 @@ pub fn pass(l: &Loaded, name: &str, work: &Path) -> Result<Report> {
     let mut out = String::new();
     let mut skip = false;
     for line in text.lines() {
-        let t = line.trim_start();
-        if t.starts_with('[') {
-            skip = t == format!("[gates.{name}]");
+        if let Some(h) = header(line) {
+            skip = h == format!("gates.{name}");
         }
-        if !skip {
+        let comment = line.trim_start().starts_with('#');
+        if !skip || comment {
             out.push_str(line);
             out.push('\n');
         }

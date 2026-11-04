@@ -320,6 +320,18 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             let ran = Command::new(pcb).args(["zone", "--project", &again, "-o", &zoned2, "--work", &w("zone_work2")]).output()?;
             let same = ran.status.success() && std::fs::read(&zoned2).ok() == std::fs::read(&zoned).ok();
             s.steps.push(Step { name: format!("{name}: pcb zone again (same bytes)"), ok: same, seconds: t0.elapsed().as_secs_f64(), detail: if same { String::new() } else { String::from_utf8_lossy(&ran.stdout).chars().take(400).collect() } });
+            // pcb check on the zoned board finds exactly what the fixture lists (M3 gate: the badge through pcb check)
+            if let Some(want) = fx.get("check").and_then(|c| c.get("findings")).and_then(|v| v.as_array()) {
+                let want: std::collections::BTreeSet<String> = want.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                let t0 = Instant::now();
+                let o = Command::new(pcb).args(["--json", "check", "--project", &again, "--work", &w("check_work")]).output()?;
+                let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(json!({}));
+                let got: std::collections::BTreeSet<String> = v["data"]["findings"].as_array().into_iter().flatten().map(|f| format!("{} {}", f["check"].as_str().unwrap_or(""), f["item"].as_str().unwrap_or(""))).collect();
+                let cp = contract_problems(&s.root, &o)?;
+                let ok = got == want && cp == "[]";
+                let detail = if ok { String::new() } else { format!("only found: {:?}; only listed: {:?}; contract {cp}; {}", got.difference(&want).collect::<Vec<_>>(), want.difference(&got).collect::<Vec<_>>(), v["error"]) };
+                s.steps.push(Step { name: format!("{name}: pcb check finds what the fixture lists"), ok, seconds: t0.elapsed().as_secs_f64(), detail });
+            }
             if s.fast {
                 s.skip(&format!("{name}: zone mutations"), "--fast");
             } else {

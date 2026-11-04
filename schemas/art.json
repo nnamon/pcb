@@ -57,7 +57,30 @@
         "pieces",
         "area_mm2"
        ],
-       "additionalProperties": false
+       "additionalProperties": false,
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "layers": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        "polygons": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "pieces": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "area_mm2": {
+         "type": "number",
+         "minimum": 0
+        }
+       }
       }
      },
      "fixed": {

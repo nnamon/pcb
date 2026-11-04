@@ -206,6 +206,20 @@ def m3_foreign_net_two_nets():
     c,i=base(); a=c.net("A"); b=c.net("B"); c.strace([i["s2"]],[a]); c.strace([i["s3"]],[b])
     c.add({"type":"pcb_trace","pcb_trace_id":"t1","net_name":"Net-(R1","route":[wire(-4.5,0),wire(4.5,0)]}); return c
 @case
+def m3_foreign_net_into_other_pad():
+    # the trace ends 0.2 mm inside R2 pin 1's pad (net B), off its centre: a short, not a rename (review 15, 14)
+    c,i=base(); a=c.net("A"); b=c.net("B"); c.strace([i["s2"]],[a]); c.strace([i["s3"]],[b])
+    c.add({"type":"pcb_trace","pcb_trace_id":"t1","net_name":"Net-(R1","route":[wire(-4.5,0),wire(4.3,0)]}); return c
+@case
+def m3_foreign_net_pad_other_side():
+    # the trace's end lies over a bottom pad of another net: a pad on the other side is not landed on
+    c,i=base(); a=c.net("A"); b=c.net("B"); c.strace([i["s2"],i["s3"]],[a])
+    sb,pb=c.comp("TP1",0,0.0,0,"bottom"); sp,pp=c.port(sb,pb,"pin1",1,0,0.0); c.pad(pb,pp,0,0.0,width=1,height=1,layer="bottom"); c.strace([sp],[b])
+    for e in c.d:
+        if e.get("pcb_port_id")==pp and e["type"]=="pcb_port": e["layers"]=["bottom"]
+    c.add({"type":"pcb_trace","pcb_trace_id":"t1","net_name":"Net-(R1","route":[wire(-4.5,0),wire(0,0)]})
+    c.add({"type":"pcb_trace","pcb_trace_id":"t2","net_name":"Net-(R1","route":[wire(0,0),wire(4.5,0)]}); return c
+@case
 def m3_silkscreen():
     c,i=base()
     pa=[e for e in c.d if e["type"]=="pcb_component"][0]["pcb_component_id"]
@@ -259,6 +273,8 @@ EXPECT = {
     'm3_foreign_net_name': ('done', None),
     'm3_foreign_net_two_nets': ('refused', 'a short'),
     'm3_silkscreen': ('done', None),
+    'm3_foreign_net_into_other_pad': ('refused', 'a short'),
+    'm3_foreign_net_pad_other_side': ('done', None),
 }
 # what a done case's board must also hold, as (text that must appear, count)
 HOLDS = {

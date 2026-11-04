@@ -57,6 +57,12 @@ item = "silk_overlap <no net>"
 max = 8
 why = "footprint outlines of U1 and C10, and U3 and C12, touch; outlines only, no text"
 
+# GUIDELINES' 0.6 mm floor for silkscreen text
+[[waiver]]
+check = "silk"
+item = "text label18"
+why = "\"Designed in Singapore\" went out on v1.0.0 at 0.5 mm cap height, under the 0.6 mm floor; the next spin raises it"
+
 # the CPL centres of the two connectors, from JLCPCB's own footprints (solved by jlc_files.py for the order)
 [parts.C2765186]
 cpl_offset_mm = [0, 0.125]
@@ -246,7 +252,7 @@ grow_mm = 0.02
 
 [[text]]
 name = "label12"
-text = "v1.0.0"
+text = "v{version}"
 font = "fonts/Inter-ExtraBold.ttf"
 cap_mm = 1.0
 at = [-6.2, 15.95]

@@ -127,8 +127,24 @@ def layer_shape(path):
     return acc
 
 
+def slot(x1, y1, x2, y2, d, pl):
+    """A slot as (centre x, y, width, plated, length between its end centres, direction x, y)."""
+    ln = math.hypot(x2 - x1, y2 - y1)
+    ux, uy = ((x2 - x1) / ln, (y2 - y1) / ln) if ln else (1.0, 0.0)
+    return ((x1 + x2) / 2, (y1 + y2) / 2, d, pl, round(ln, 4), ux, uy)
+
+
+def hole_shape(h):
+    """A hole as a stadium (a slot) or a circle."""
+    from shapely.geometry import LineString, Point
+    x, y, d, _, ln, ux, uy = h
+    if ln <= 0:
+        return Point(x, y).buffer(d / 2, 32)
+    return LineString([(x - ux * ln / 2, y - uy * ln / 2), (x + ux * ln / 2, y + uy * ln / 2)]).buffer(d / 2, 32)
+
+
 def holes(paths):
-    """(x, y, diameter, plated, length) of every hole in the set's Excellon files: a slot at its centre with its length.
+    """(x, y, diameter, plated, length, direction x, y) of every hole in the set's Excellon files: a slot at its centre with its length.
     Read here rather than with gerbonara, which also reports a slot's start as a separate hole. Plating comes from
     each tool's X2 aperture function, else the file's, else the file name."""
     out = []
@@ -165,15 +181,15 @@ def holes(paths):
                 x1, y1 = float(m.group(1)) * k, float(m.group(2)) * k
                 if m.group(3):
                     x2, y2 = float(m.group(3)) * k, float(m.group(4)) * k
-                    out.append(((x1 + x2) / 2, (y1 + y2) / 2, d, pl, round(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5, 4)))
+                    out.append(slot(x1, y1, x2, y2, d, pl))
                 else:
-                    out.append((x1, y1, d, pl, 0.0))
+                    out.append((x1, y1, d, pl, 0.0, 1.0, 0.0))
             elif re.match(r"G85X([-\d.]+)Y([-\d.]+)$", line) and out and out[-1][4] == 0.0:
                 # a slot whose end is written on the next line: the hole before it is its start
                 m2 = re.match(r"G85X([-\d.]+)Y([-\d.]+)$", line)
-                x1, y1, d, pl, _ = out.pop()
+                x1, y1, d, pl = out.pop()[:4]
                 x2, y2 = float(m2.group(1)) * k, float(m2.group(2)) * k
-                out.append(((x1 + x2) / 2, (y1 + y2) / 2, d, pl, round(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5, 4)))
+                out.append(slot(x1, y1, x2, y2, d, pl))
             elif re.match(r"[XY]", line):
                 raise SystemExit(f"{p}: drill line {line!r} not understood")
     return out
@@ -186,13 +202,27 @@ def pieces(g):
     return [q for q in getattr(g, "geoms", [g]) if q.area >= NOISE_MM2 and not q.buffer(-NOISE_WIDTH / 2).is_empty]
 
 
-def zone_fills(board_path, dx, dy):
-    """Each copper layer's zone fills on the board set A was made from, per net, in A's Gerber frame moved onto B's
-    (KiCad plots y up from the board's origin)."""
+def board_centre(b):
+    """The centre of a pcbnew board's outline bounding box, in KiCad's frame (mm, y down)."""
+    import pcbnew
+    xs, ys = [], []
+    for d in b.GetDrawings():
+        if d.GetLayer() == pcbnew.Edge_Cuts:
+            bb = d.GetBoundingBox()
+            xs += [pcbnew.ToMM(bb.GetLeft()), pcbnew.ToMM(bb.GetRight())]
+            ys += [pcbnew.ToMM(bb.GetTop()), pcbnew.ToMM(bb.GetBottom())]
+    return ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+
+
+def zone_fills(board_path):
+    """Each copper layer's zone fills on the board set A was made from, per net, about the outline's centre, y up:
+    the frame pcb release plots in."""
     import pcbnew
     from shapely.geometry import Polygon
     from shapely.ops import unary_union
     b = pcbnew.LoadBoard(board_path)
+    cx, cy = board_centre(b)
+    dx, dy = -cx, cy
     names = {"F.Cu": pcbnew.F_Cu, "B.Cu": pcbnew.B_Cu}
     out = {}
     for z in b.Zones():
@@ -213,25 +243,61 @@ def zone_fills(board_path, dx, dy):
     return {k: unary_union(v) for k, v in out.items()}
 
 
-def compare(a_src, b_src, explain_path=None, board=None):
+EXPLAIN_KEYS = {"layer", "side", "rect", "whole", "thinner_than_mm", "zone_net", "why"}
+
+
+def check_explain(ex):
+    """Problems in explain entries: unknown keys, no reason, no place, a bad side or rect."""
+    out = []
+    for i, e in enumerate(ex):
+        tag = f"explain {i + 1} ({e.get('layer', '?')})"
+        if set(e) - EXPLAIN_KEYS:
+            out.append(f"{tag}: unknown keys {sorted(set(e) - EXPLAIN_KEYS)}")
+        if not str(e.get("why", "")).strip() or not e.get("layer"):
+            out.append(f"{tag}: needs a layer and a why")
+        if e.get("side", "both") not in ("a", "b", "both"):
+            out.append(f"{tag}: side is a, b or both")
+        if not (e.get("whole") or "rect" in e or "zone_net" in e or ("thinner_than_mm" in e and e.get("layer") != "drill")):
+            out.append(f"{tag}: needs rect, whole, zone_net or thinner_than_mm")
+        if "rect" in e and not (isinstance(e["rect"], list) and len(e["rect"]) == 4 and e["rect"][2] > e["rect"][0] and e["rect"][3] > e["rect"][1]):
+            out.append(f"{tag}: rect is [x0, y0, x1, y1]")
+    return out
+
+
+def outline_centre(edge):
+    b = edge.bounds
+    return ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+
+
+def compare(a_src, b_src, explain_path=None, board=None, align=False):
     from shapely.affinity import translate
     from shapely.geometry import box
     ex = tomllib.load(open(explain_path, "rb")).get("explain", []) if explain_path else []
+    bad = check_explain(ex)
+    if bad:
+        return {"ok": False, "error": "; ".join(bad)}
     fa, fb = files_of(a_src), files_of(b_src)
     la, lb = find_layers(fa), find_layers(fb)
-    # a layer in one set only counts when it has something on it
-    res = {"layers": {}, "missing": sorted(k for k in set(la) ^ set(lb) if layer_shape((la.get(k) or lb.get(k))).area > 0), "ok": True}
     if "Edge.Cuts" not in la or "Edge.Cuts" not in lb:
         return {"ok": False, "error": "both sets need a board outline (Edge.Cuts)", "found_a": la, "found_b": lb}
-    ea, eb = layer_shape(la["Edge.Cuts"]).bounds, layer_shape(lb["Edge.Cuts"]).bounds
-    dx, dy = (eb[0] + eb[2] - ea[0] - ea[2]) / 2, (eb[1] + eb[3] - ea[1] - ea[3]) / 2
-    res["outline"] = {"a_size": [round(ea[2] - ea[0], 3), round(ea[3] - ea[1], 3)], "b_size": [round(eb[2] - eb[0], 3), round(eb[3] - eb[1], 3)], "shift": [round(dx, 4), round(dy, 4)]}
+    if len(set(la) & set(lb) - {"Edge.Cuts"}) == 0:
+        return {"ok": False, "error": "the two sets share no layer besides the outline", "found_a": la, "found_b": lb}
+    res = {"layers": {}, "missing": [], "ok": True}
+    ea, eb = layer_shape(la["Edge.Cuts"]), layer_shape(lb["Edge.Cuts"])
+    (cax, cay), (cbx, cby) = outline_centre(ea), outline_centre(eb)
+    ea, eb = ea.bounds, eb.bounds
+    # the sets must share a frame, as the fab and the assembler read them together; --align moves A onto B instead
+    dx, dy = (cbx - cax, cby - cay) if align else (0.0, 0.0)
+    res["outline"] = {"a_size": [round(ea[2] - ea[0], 3), round(ea[3] - ea[1], 3)], "b_size": [round(eb[2] - eb[0], 3), round(eb[3] - eb[1], 3)], "shift": [round(cbx - cax, 4), round(cby - cay, 4)], "aligned": align}
     if max(abs((ea[2] - ea[0]) - (eb[2] - eb[0])), abs((ea[3] - ea[1]) - (eb[3] - eb[1]))) > 0.2:
         res["ok"] = False
         res["error"] = "the board outlines differ in size by more than 0.2 mm"
-    fills = zone_fills(board, dx, dy) if board else {}
+    elif not align and max(abs(cbx - cax), abs(cby - cay)) > 0.05:
+        res["ok"] = False
+        res["error"] = f"the sets use different origins: the outline's centre is at ({cax:.3f}, {cay:.3f}) in A and ({cbx:.3f}, {cby:.3f}) in B"
     if any(e.get("zone_net") for e in ex) and not board:
         return {"ok": False, "error": "an explanation names a zone_net; give the board set A was made from"}
+    fills = {k: translate(v, cax + dx, cay + dy) for k, v in zone_fills(board).items()} if board else {}
 
     def explains(e, key, side, q):
         if e.get("layer") not in (key, "*") or e.get("side", "both") not in (side, "both"):
@@ -239,11 +305,23 @@ def compare(a_src, b_src, explain_path=None, board=None):
         if e.get("zone_net"):
             # A's own copper that is wholly a zone fill of that net (B, the older set, lacks it)
             f = fills.get((key, e["zone_net"]))
-            return side == "a" and f is not None and f.buffer(0.01).contains(q)
+            return side == "a" and f is not None and q.difference(f.buffer(0.01)).area < 1e-4
         where = bool(e.get("whole")) or ("rect" in e and box(*e["rect"]).buffer(0.05).contains(q)) or ("rect" not in e and "thinner_than_mm" in e)
         # thinner_than_mm: only a piece no wider than that anywhere (an outline drawn a little differently)
         thin = "thinner_than_mm" not in e or q.buffer(-e["thinner_than_mm"] / 2).is_empty
         return where and thin
+    # a layer with something on it in one set only: the whole layer differs, unless explained
+    for key in sorted(set(la) ^ set(lb)):
+        side, path = ("a", la[key]) if key in la else ("b", lb[key])
+        g = layer_shape(path)
+        if g.area <= 0:
+            continue
+        why = next((e["why"] for e in ex if e.get("layer") == key and e.get("side", "both") in (side, "both") and e.get("whole")), None)
+        res["missing"].append(key)
+        item = {"side": side, "mm2": round(g.area, 4), "bbox": [round(v, 3) for v in g.bounds], "layer_only_here": True}
+        res["layers"][key] = {"a_mm2": round(g.area, 3) if side == "a" else 0.0, "b_mm2": round(g.area, 3) if side == "b" else 0.0, "explained": [dict(item, why=why)] if why else [], "unexplained": [] if why else [item]}
+        if not why:
+            res["ok"] = False
     for key in sorted(set(la) & set(lb)):
         if key == "Edge.Cuts":
             continue
@@ -262,7 +340,7 @@ def compare(a_src, b_src, explain_path=None, board=None):
         if out["unexplained"]:
             res["ok"] = False
         res["layers"][key] = out
-    ha = [(x + dx, y + dy, d, p, ln) for x, y, d, p, ln in holes(fa)]
+    ha = [(h[0] + dx, h[1] + dy) + tuple(h[2:]) for h in holes(fa)]
     hb = holes(fb)
     used, only_a = set(), []
     for h in ha:
@@ -274,7 +352,7 @@ def compare(a_src, b_src, explain_path=None, board=None):
     only_b = [g for i, g in enumerate(hb) if i not in used]
 
     def hole_why(h, side):
-        return next((e["why"] for e in ex if e.get("layer") == "drill" and e.get("side", "both") in (side, "both") and (e.get("whole") or box(*e["rect"]).contains(box(h[0] - h[2] / 2, h[1] - h[2] / 2, h[0] + h[2] / 2, h[1] + h[2] / 2)))), None)
+        return next((e["why"] for e in ex if e.get("layer") == "drill" and e.get("side", "both") in (side, "both") and (e.get("whole") or ("rect" in e and box(*e["rect"]).contains(hole_shape(h))))), None)
     fmt = lambda h, s: {"side": s, "at": [round(h[0], 3), round(h[1], 3)], "d": round(h[2], 3), "plated": h[3], "slot": h[4], **({"why": hole_why(h, s)} if hole_why(h, s) else {})}
     drill = {"a": len(ha), "b": len(hb), "matched": len(used), "differ": [fmt(h, "a") for h in only_a] + [fmt(h, "b") for h in only_b]}
     if any("why" not in h for h in drill["differ"]):
@@ -285,17 +363,33 @@ def compare(a_src, b_src, explain_path=None, board=None):
 
 # DFM limits from GUIDELINES.md's JLCPCB table (mm)
 DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15)
+# a feature counts as narrow when an opening this much under half the limit removes it (rounding in the plot)
+SLACK = 0.005
+
+
+def narrow_parts(g, width):
+    """What an opening (shrink by half the width, grow back) removes from a shape, past corner trimmings: the parts
+    narrower than `width`."""
+    from shapely.geometry import Polygon
+    if g.is_empty:
+        return []
+    r = width / 2 - SLACK
+    thin = g.difference(g.buffer(-r, quad_segs=8).buffer(r + 0.002, quad_segs=8))
+    # a square corner loses about r²(1 - π/4); a narrow strip is longer than it is wide
+    return [q for q in getattr(thin, "geoms", [thin]) if isinstance(q, Polygon) and q.area > max(0.01, 4 * r * r) and not q.buffer(-0.005).is_empty]
 
 
 def verify(folder, board_path):
     """Connectivity rebuilt from the Gerbers and drill files alone, named by the board's pads, and DFM on the files.
 
-    Each copper layer's islands are joined through plated holes and slots. Each pad of the board is found by its
-    place in an island of a layer it is on. A net in two or more groups of islands is open; a group holding two nets
-    is a short, unless every net in it belongs to one net-tie footprint's pads."""
+    The files are in pcb release's frame: the board outline's centre at the origin, y up. Each copper layer's islands
+    are joined through plated holes and slots. Each pad of the board is found by its place in an island of a layer it
+    is on. A net in two or more groups of islands is open; a group holding two nets is a short, unless every net in it
+    belongs to one net-tie footprint's pads."""
     import pcbnew
     from shapely.geometry import LineString, Point, box
-    from shapely.ops import unary_union
+    from shapely.ops import polygonize, unary_union
+    from shapely.prepared import prep
     from shapely.strtree import STRtree
     paths = files_of(folder)
     lay = find_layers(paths)
@@ -306,6 +400,7 @@ def verify(folder, board_path):
         for q in getattr(shapes[k], "geoms", [shapes[k]]):
             if not q.is_empty:
                 islands.append((k, q))
+    preps = [prep(q) for _, q in islands]
     parent = list(range(len(islands)))
 
     def find(i):
@@ -314,15 +409,19 @@ def verify(folder, board_path):
             i = parent[i]
         return i
     tree = STRtree([q for _, q in islands])
+
+    def islands_at(pt, layer=None):
+        probe = pt.buffer(1e-3, 4)
+        return [int(i) for i in tree.query(probe) if (layer is None or islands[int(i)][0] == layer) and preps[int(i)].intersects(probe)]
     hl = holes(paths)
-    for x, y, d, plated, ln in hl:
-        if not plated:
+    for h in hl:
+        if not h[3]:
             continue
-        pt = Point(x, y)
-        hit = [int(i) for i in tree.query(pt) if islands[int(i)][1].buffer(1e-3).contains(pt)]
+        hit = islands_at(Point(h[0], h[1]))
         for a, b in zip(hit, hit[1:]):
             parent[find(a)] = find(b)
     b = pcbnew.LoadBoard(board_path)
+    cx, cy = board_centre(b)
     ties = []
     for f in b.GetFootprints():
         if f.IsNetTie():
@@ -338,17 +437,15 @@ def verify(folder, board_path):
             net = p.GetNetname()
             if not net:
                 continue
-            pt = Point(pcbnew.ToMM(p.GetPosition().x), -pcbnew.ToMM(p.GetPosition().y))
+            pt = Point(pcbnew.ToMM(p.GetPosition().x) - cx, cy - pcbnew.ToMM(p.GetPosition().y))
             g = None
             for lid in p.GetLayerSet().CuStack():
                 k = names.get(lid)
                 if k not in shapes:
                     continue
-                for i in tree.query(pt):
-                    if islands[int(i)][0] == k and islands[int(i)][1].buffer(1e-3).contains(pt):
-                        g = find(int(i))
-                        break
-                if g is not None:
+                hit = islands_at(pt, k)
+                if hit:
+                    g = find(hit[0])
                     break
             if g is None:
                 unplaced.append(f"{f.GetReference()}.{p.GetNumber()} ({net})")
@@ -360,28 +457,32 @@ def verify(folder, board_path):
             by_net.setdefault(n, set()).add(g)
     opens = sorted(n for n, gs in by_net.items() if len(gs) > 1)
     shorts = sorted(" / ".join(sorted(ns)) for ns in groups.values() if len(ns) > 1 and not any(ns <= t for t in ties))
-    # DFM
     findings = []
+    at = lambda q: [round(v, 3) for v in q.representative_point().coords[0]]
+    # the outline: the drawn band's half width, every ring (cut-outs too), and the board's outer shape
     edge = layer_shape(lay["Edge.Cuts"]) if "Edge.Cuts" in lay else None
-    outline = None
+    board_shape, half = None, 0.0
     if edge is not None and not edge.is_empty:
-        from shapely.ops import polygonize
-        rings = list(polygonize(edge.boundary)) if hasattr(edge, "boundary") else []
-        # the drawn outline is a band; its inside ring grown by half the band's width is the cut line
-        inner = max((r for r in rings if not r.buffer(-1e-3).intersects(edge.buffer(-1e-4))), key=lambda r: r.area, default=None)
-        if inner is not None:
-            half = edge.area / (2 * inner.exterior.length) if inner.exterior.length else 0
-            outline = inner.buffer(half, join_style=2)
-    net_of = {}
-    for g, ns in groups.items():
-        net_of[g] = ns
+        regions = list(polygonize(edge.boundary))
+        inner = [r for r in regions if not r.buffer(-1e-3).intersects(edge.buffer(-1e-4))]
+        if inner:
+            perim = sum(r.exterior.length for r in inner)
+            half = edge.area / (2 * perim) if perim else 0.0
+            outer = max(inner, key=lambda r: r.area)
+            cutouts = [r for r in inner if r is not outer and outer.contains(r.representative_point())]
+            board_shape = outer.buffer(half, join_style=2)
+            for c in cutouts:
+                board_shape = board_shape.difference(c.buffer(-half, join_style=2) if c.area > 4 * half * half else c)
+    net_of = dict(groups)
     for idx, (k, q) in enumerate(islands):
-        if q.buffer(-DFM["trace"] / 2 + 1e-4).is_empty:
-            findings.append({"rule": "trace", "layer": k, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"copper narrower than {DFM['trace']} mm everywhere"})
-        if outline is not None:
-            dist = outline.exterior.distance(q)
+        for t in narrow_parts(q, DFM["trace"]):
+            findings.append({"rule": "trace", "layer": k, "at": at(t), "detail": f"{t.area:.3f} mm² of copper under {DFM['trace']} mm wide"})
+        if edge is not None:
+            if board_shape is not None and not board_shape.buffer(1e-3).contains(q):
+                findings.append({"rule": "off_board", "layer": k, "at": at(q), "detail": "copper outside the board outline"})
+            dist = q.distance(edge) + half if not q.intersects(edge) else 0.0
             if dist < DFM["cu_edge"] - 1e-3:
-                findings.append({"rule": "cu_edge", "layer": k, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"copper {dist:.3f} mm from the board edge"})
+                findings.append({"rule": "cu_edge", "layer": k, "at": at(q), "detail": f"copper {dist:.3f} mm from the board edge"})
     for k in cu:
         idx = [i for i, (kk, _) in enumerate(islands) if kk == k]
         t = STRtree([islands[i][1] for i in idx])
@@ -392,38 +493,34 @@ def verify(folder, board_path):
                     continue
                 dist = islands[a][1].distance(islands[c][1])
                 if dist < DFM["gap"] - 1e-3:
-                    pa, pb = islands[a][1].centroid, islands[c][1].centroid
-                    findings.append({"rule": "gap", "layer": k, "at": [round(pa.x, 3), round(pa.y, 3)], "detail": f"{dist:.3f} mm between {sorted(net_of.get(find(a), {'?'}))} and {sorted(net_of.get(find(c), {'?'}))}"})
-    # each hole's copper group (None for a hole in no copper): holes of one group may sit closer
-    def hole_group(x, y):
-        pt = Point(x, y)
-        for i in tree.query(pt):
-            if islands[int(i)][1].buffer(1e-3).contains(pt):
-                return find(int(i))
-        return None
-    hg = [hole_group(x, y) for x, y, *_ in hl]
+                    findings.append({"rule": "gap", "layer": k, "at": at(islands[a][1]), "detail": f"{dist:.3f} mm between {sorted(net_of.get(find(a), {'?'}))} and {sorted(net_of.get(find(c), {'?'}))}"})
+    # holes, slots as stadiums; holes in one copper group may sit closer
+    hs = [hole_shape(h) for h in hl]
+    hg = []
+    for h in hl:
+        hit = islands_at(Point(h[0], h[1]))
+        hg.append(find(hit[0]) if hit else None)
+    ht = STRtree(hs)
     for i in range(len(hl)):
-        for j in range(i + 1, len(hl)):
-            (x1, y1, d1, p1, l1), (x2, y2, d2, p2, l2) = hl[i], hl[j]
-            gap = math.hypot(x1 - x2, y1 - y2) - (d1 + l1) / 2 - (d2 + l2) / 2
-            if gap < DFM["hole_hole"] - 1e-3 and not (hg[i] is not None and hg[i] == hg[j]):
-                findings.append({"rule": "hole_hole", "layer": "drill", "at": [round(x1, 3), round(y1, 3)], "detail": f"{gap:.3f} mm edge to edge from the hole at ({x2:.3f}, {y2:.3f})"})
+        for jj in ht.query(hs[i].buffer(DFM["hole_hole"])):
+            j = int(jj)
+            if j <= i or (hg[i] is not None and hg[i] == hg[j]):
+                continue
+            gap = hs[i].distance(hs[j])
+            if gap < DFM["hole_hole"] - 1e-3:
+                findings.append({"rule": "hole_hole", "layer": "drill", "at": [round(hl[i][0], 3), round(hl[i][1], 3)], "detail": f"{gap:.3f} mm edge to edge from the hole at ({hl[j][0]:.3f}, {hl[j][1]:.3f})"})
     for side in ("F", "B"):
         sk, mk, ck = f"{side}.Silk", f"{side}.Mask", f"{side}.Cu"
         if sk in lay:
             silk = layer_shape(lay[sk])
-            # thin parts, alone or joined to wider ink: what an opening (shrink, then grow back) removes
-            r = DFM["silk_line"] / 2 - 0.03
-            thin = silk.difference(silk.buffer(-r, join_style=2).buffer(r + 0.005, join_style=2))
-            for q in getattr(thin, "geoms", [thin]):
-                if not q.is_empty and q.area > 0.01 and not q.buffer(-0.01).is_empty:
-                    findings.append({"rule": "silk_line", "layer": sk, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"{q.area:.3f} mm² of silkscreen under {2 * r:.2f} mm wide"})
+            for q in narrow_parts(silk, DFM["silk_line"]):
+                findings.append({"rule": "silk_line", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen under {DFM['silk_line']} mm wide"})
             if mk in lay and ck in shapes:
                 bare = layer_shape(lay[mk]).intersection(shapes[ck])
                 over = silk.intersection(bare)
                 for q in getattr(over, "geoms", [over]):
                     if not q.is_empty and q.area > 0.005:
-                        findings.append({"rule": "silk_on_copper", "layer": sk, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"{q.area:.3f} mm² of silkscreen on exposed copper"})
+                        findings.append({"rule": "silk_on_copper", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen on exposed copper"})
     return {"layers": cu, "islands": len(islands), "plated_holes": sum(1 for h in hl if h[3]), "nets": len(by_net), "opens": opens, "shorts": shorts, "unplaced_pads": unplaced, "dfm": findings}
 
 
@@ -447,6 +544,6 @@ if __name__ == "__main__":
         print(json.dumps(make_zip(sys.argv[2], sys.argv[3])))
     elif cmd == "compare":
         arg = lambda i: sys.argv[i] if len(sys.argv) > i and sys.argv[i] else None
-        print(json.dumps(compare(sys.argv[2], sys.argv[3], arg(4), arg(5))))
+        print(json.dumps(compare(sys.argv[2], sys.argv[3], arg(4), arg(5), arg(6) == "align")))
     else:
         raise SystemExit(f"unknown command {cmd}")

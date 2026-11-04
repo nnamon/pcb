@@ -23,13 +23,13 @@ pub fn helper(work: &Path, args: &[&str]) -> Result<serde_json::Value> {
 }
 
 /// Compare set `a` (the new one) with `b` (the golden one); each a folder or a zip.
-pub fn compare(a: &str, b: &str, explain: Option<&str>, board: Option<&str>, work: &Path) -> Result<serde_json::Value> {
+pub fn compare(a: &str, b: &str, explain: Option<&str>, board: Option<&str>, align: bool, work: &Path) -> Result<serde_json::Value> {
     for p in [a, b].into_iter().chain(explain).chain(board) {
         if !Path::new(p).exists() {
             return Err(refused("usage", format!("{p}: no such file or folder")));
         }
     }
-    let v = helper(work, &["compare", a, b, explain.unwrap_or(""), board.unwrap_or("")])?;
+    let v = helper(work, &["compare", a, b, explain.unwrap_or(""), board.unwrap_or(""), if align { "align" } else { "" }])?;
     if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
         if v.get("layers").is_none() {
             return Err(refused("gerber-set", e.to_string()));

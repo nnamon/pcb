@@ -234,6 +234,9 @@ enum Cmd {
         /// The KiCad board set A was made from, for explanations by zone fill (`zone_net`)
         #[arg(long)]
         board: Option<String>,
+        /// Move A onto B by their outlines' centres; without it the sets must share a frame
+        #[arg(long)]
+        align: bool,
         #[arg(long, default_value = "pcb_work/compare")]
         work: String,
     },
@@ -545,7 +548,7 @@ fn run(cli: Cli) -> Result<Reply> {
             for f in &r.findings {
                 h += &format!("\n  {} {}: {}", if f.waived.is_some() { "waived" } else { "FAIL  " }, f.check, f.message);
             }
-            let warnings: Vec<contract::Warning> = r.unused_waivers.iter().map(|w| contract::warn("waiver-unused", format!("waiver {w} matched nothing"))).collect();
+            let warnings: Vec<contract::Warning> = r.unused_waivers.iter().map(|w| contract::warn("waiver-unused", format!("waiver {w}"))).collect();
             Ok(Reply { outcome: if r.unwaived == 0 { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings, human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Gate { action, name, project: proj, work } => {
@@ -567,7 +570,6 @@ fn run(cli: Cli) -> Result<Reply> {
         }
         Cmd::Release { project: proj, out, work } => {
             let l = project::load(&project::locate(&proj))?;
-            gates::require_fresh(&l)?;
             let r = release::run(&l, &out, std::path::Path::new(&work))?;
             let mut h = format!("{} files in {}: {} BOM lines, {} CPL rows, {} footprints left out", r.files.len(), r.written, r.bom_lines, r.cpl_rows, r.left_out.len());
             for f in &r.files {
@@ -577,7 +579,11 @@ fn run(cli: Cli) -> Result<Reply> {
                 h += &format!("\n  FAIL {x}");
             }
             let outcome = if r.problems.is_empty() { Outcome::Done } else { Outcome::Rejected };
-            Ok(Reply { outcome, error: None, written: Some(r.written.clone()), warnings: vec![], human: h, data: serde_json::to_value(&r)? })
+            let mut warnings = vec![];
+            if !r.version_on_board {
+                warnings.push(contract::warn("version-not-on-board", "no [[text]] entry prints the version on the board; add one with {version} (GUIDELINES: version on the board)".to_string()));
+            }
+            Ok(Reply { outcome, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Paste { project: proj, work, out } => {
             let l = project::load(&project::locate(&proj))?;
@@ -632,8 +638,8 @@ fn run(cli: Cli) -> Result<Reply> {
             warnings.extend(r.stitch_unfilled.iter().map(|s| contract::warn("stitch-no-fill", format!("{s}: the net has no fill on this layer, so no stitching via can go anywhere"))));
             Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
         }
-        Cmd::CompareGerbers { a, b, explain, board, work } => {
-            let v = gerber::compare(&a, &b, explain.as_deref(), board.as_deref(), std::path::Path::new(&work))?;
+        Cmd::CompareGerbers { a, b, explain, board, align, work } => {
+            let v = gerber::compare(&a, &b, explain.as_deref(), board.as_deref(), align, std::path::Path::new(&work))?;
             let ok = v["ok"].as_bool().unwrap_or(false);
             let mut h = format!("{a} against {b}: {}", if ok { "every difference explained" } else { "unexplained differences" });
             if let Some(e) = v["error"].as_str() {

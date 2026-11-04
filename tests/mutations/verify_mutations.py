@@ -3,8 +3,8 @@ released Gerber set in one way, and verify must report it; the unmutated set mus
 
 Mutations, placed from the board (never named here): a copper bridge between the closest pads of two nets on F.Cu
 (short); a cut across a track of a two-pad net routed only on F.Cu (open); copper at the board edge (cu_edge); a
-0.08 mm silkscreen line (silk_line); silkscreen over an exposed pad (silk_on_copper); a hole beside a hole of another
-net (hole_hole).
+0.12 mm silkscreen line (silk_line); silkscreen over an exposed pad (silk_on_copper); a hole beside a hole of another
+net (hole_hole); a 0.10 mm strip from a pad (trace); copper 0.10 mm from a pad (gap).
 
 Usage: python3 verify_mutations.py gerber_dir board.kicad_pcb workdir
 """
@@ -41,8 +41,14 @@ def append(path, lines):
     open(path, "w").write(t[:i] + "\n".join(lines) + "\n" + t[i:])
 
 
+# pcb release's frame: the outline's centre at the origin, y up
+_ex = [mm(p.x) for d in b.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts for p in (d.GetStart(), d.GetEnd())]
+_ey = [mm(p.y) for d in b.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts for p in (d.GetStart(), d.GetEnd())]
+CX, CY = (min(_ex) + max(_ex)) / 2, (min(_ey) + max(_ey)) / 2
+
+
 def gxy(v):
-    return mm(v.x), -mm(v.y)
+    return mm(v.x) - CX, CY - mm(v.y)
 
 
 # places, from the board
@@ -68,12 +74,14 @@ for t in b.GetTracks():
     if all(x.GetLayer() == pcbnew.F_Cu and x.GetClass() == "PCB_TRACK" for x in b.GetTracks() if x.GetNetname() == n) and all(p.GetAttribute() == pcbnew.PAD_ATTRIB_SMD for p in pads_of[n]):
         cut = t
         break
-mx, my = (mm(cut.GetStart().x) + mm(cut.GetEnd().x)) / 2, -(mm(cut.GetStart().y) + mm(cut.GetEnd().y)) / 2
-xs = [mm(p.x) for d in b.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts for p in (d.GetStart(), d.GetEnd())]
-ys = [-mm(p.y) for d in b.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts for p in (d.GetStart(), d.GetEnd())]
+(sx, sy), (tx, ty) = gxy(cut.GetStart()), gxy(cut.GetEnd())
+mx, my = (sx + tx) / 2, (sy + ty) / 2
+xs = [x - CX for x in _ex]
+ys = [CY - y for y in _ey]
 ex0, ey_mid = min(xs), (min(ys) + max(ys)) / 2
 exposed = next(p for f in b.GetFootprints() for p in f.Pads() if p.IsOnLayer(pcbnew.F_Mask) and p.IsOnLayer(pcbnew.F_Cu) and p.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and min(p.GetSize().x, p.GetSize().y) >= pcbnew.FromMM(0.5))
 px, py = gxy(exposed.GetPosition())
+pw = mm(max(exposed.GetSize().x, exposed.GetSize().y))
 via = next(t for t in b.GetTracks() if t.GetClass() == "PCB_VIA")
 vx, vy = gxy(via.GetPosition())
 
@@ -81,7 +89,12 @@ MUT = {
     "short": ("shorts", lambda d: append(gfile(d, "F_Cu.gbr"), region(min(ax, bx) - 0.1, min(ay, by) - 0.1, max(ax, bx) + 0.1, max(ay, by) + 0.1))),
     "open": ("opens", lambda d: append(gfile(d, "F_Cu.gbr"), region(mx - 0.3, my - 0.3, mx + 0.3, my + 0.3, dark=False))),
     "cu_edge": ("cu_edge", lambda d: append(gfile(d, "B_Cu.gbr"), region(ex0 + 0.05, ey_mid, ex0 + 1.0, ey_mid + 1.0))),
-    "silk_line": ("silk_line", lambda d: append(gfile(d, "F_Silkscreen.gbr"), region(ex0 + 1.0, ey_mid + 3.0, ex0 + 3.0, ey_mid + 3.08))),
+    # 0.12 mm: under the 0.15 mm floor, over the 0.09 mm an older rule held (review 15, 8)
+    "silk_line": ("silk_line", lambda d: append(gfile(d, "F_Silkscreen.gbr"), region(ex0 + 1.0, ey_mid + 3.0, ex0 + 3.0, ey_mid + 3.12))),
+    # a 0.10 mm strip from a pad: narrow copper joined to wide copper (review 15, 7)
+    "trace": ("trace", lambda d: append(gfile(d, "F_Cu.gbr"), region(px - 0.05, py, px + 0.05, py + pw / 2 + 1.2))),
+    # a square 0.10 mm from a pad's edge
+    "gap": ("gap", lambda d: append(gfile(d, "F_Cu.gbr"), region(px + pw / 2 + 0.1, py - 0.2, px + pw / 2 + 0.5, py + 0.2))),
     "silk_on_copper": ("silk_on_copper", lambda d: append(gfile(d, "F_Silkscreen.gbr"), region(px - 0.2, py - 0.2, px + 0.2, py + 0.2))),
     "hole_hole": ("hole_hole", None),
 }

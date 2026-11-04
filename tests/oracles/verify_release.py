@@ -5,6 +5,7 @@ Fails unless:
      (mod 360);
   B. the BOM gives each designator the same LCSC part as the golden one, and no designator twice;
   C. CHECKSUMS.txt lists every other file in the folder with its SHA-256, and nothing else;
+  E. the Gerbers share the CPL's frame: the board outline's centre at the origin (within 10 um);
   D. the folder holds exactly one Gerber zip, one BOM and one CPL, named <name>_v<version>_{gerbers.zip,BOM.csv,CPL.csv}.
 The Gerbers themselves are compared by `pcb compare-gerbers`.
 
@@ -69,5 +70,20 @@ else:
             fails.append(f"C: CHECKSUMS.txt gives {f} as {listed.get(f)}, the file is {h}")
     if set(listed) != want - {"CHECKSUMS.txt"}:
         fails.append(f"C: CHECKSUMS.txt lists {sorted(listed)}")
+if not fails:
+    import tempfile
+    import zipfile
+    from gerbonara import GerberFile
+    from gerbonara.utils import MM
+    tmp = tempfile.mkdtemp()
+    zipfile.ZipFile(os.path.join(rel, f"{stem}_gerbers.zip")).extractall(tmp)
+    edge = [f for f in os.listdir(tmp) if "edge" in f.lower() and f.endswith(".gbr")]
+    if len(edge) != 1:
+        fails.append(f"E: {len(edge)} outline files in the zip")
+    else:
+        (x0, y0), (x1, y1) = GerberFile.open(os.path.join(tmp, edge[0])).bounding_box(MM)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        if abs(cx) > 0.01 or abs(cy) > 0.01:
+            fails.append(f"E: the Gerbers' outline centre is at ({cx:.3f}, {cy:.3f}), not the CPL's origin")
 print(json.dumps({"ok": not fails, "fails": fails}, indent=1))
 sys.exit(0 if not fails else 1)

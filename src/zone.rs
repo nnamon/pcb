@@ -340,6 +340,11 @@ fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> R
 }
 
 /// Is point `q` on the pad's copper (its turned bounding rectangle, 1 um slack)?
+/// Is a point on a pad's copper (its turned bounding rectangle)?
+pub(crate) fn pad_has_point(p: &Pad, q: (f64, f64)) -> bool {
+    pad_has(p, q)
+}
+
 fn pad_has(p: &Pad, q: (f64, f64)) -> bool {
     let (lx, ly) = rotate(q.0 - p.x, q.1 - p.y, -p.rot);
     lx.abs() <= p.w / 2.0 + 1e-3 && ly.abs() <= p.h / 2.0 + 1e-3

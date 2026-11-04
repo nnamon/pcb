@@ -161,14 +161,15 @@ impl ttf_parser::OutlineBuilder for Pen {
 
 /// A text entry as polygons in board coordinates: glyphs by their advance widths (no kerning), scaled to the cap
 /// height, the bounding box's middle at the origin, grown, turned, mirrored for the bottom side, then placed.
-fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64)) -> Result<Vec<Polygon<f64>>> {
+fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64), version: &str) -> Result<Vec<Polygon<f64>>> {
     use geo::{Buffer, Rotate, Translate};
     let what = format!("text {:?}", t.name);
     let data = std::fs::read(base.join(&t.font)).map_err(|err| refused("config", format!("{what}: font {}: {err}", t.font)))?;
     let face = ttf_parser::Face::parse(&data, 0).map_err(|err| refused("config", format!("{what}: font {}: {err}", t.font)))?;
     let cap = face.capital_height().filter(|c| *c > 0).ok_or_else(|| refused("config", format!("{what}: font {} gives no capital height", t.font)))? as f64;
     let mut pen = Pen { rings: vec![], cur: vec![], x0: 0.0 };
-    for ch in t.text.chars() {
+    // {version} is the project's version, so the board's label and its files cannot disagree
+    for ch in t.text.replace("{version}", version).chars() {
         let gid = face.glyph_index(ch).ok_or_else(|| refused("config", format!("{what}: the font has no glyph for {ch:?}")))?;
         face.outline_glyph(gid, &mut pen);
         ttf_parser::OutlineBuilder::close(&mut pen);
@@ -283,7 +284,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
                 return Err(refused("config", format!("text {:?}: no net {net} on the board", t.name)));
             }
         }
-        entries.push((t.name.clone(), vec![t.layer.clone()], t.net.clone(), text_polygons(t, &base, (cx, cy))?));
+        entries.push((t.name.clone(), vec![t.layer.clone()], t.net.clone(), text_polygons(t, &base, (cx, cy), &p.project.version)?));
     }
     let mut text = String::new();
     for (name, layers, net_of, polys) in &entries {

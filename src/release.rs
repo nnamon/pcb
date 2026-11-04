@@ -27,6 +27,8 @@ pub struct Report {
     pub cpl_rows: usize,
     /// Footprints left out of the BOM and CPL, with why.
     pub left_out: Vec<String>,
+    /// Whether a `[[text]]` entry prints the version (`{version}`, or the version itself) on the board.
+    pub version_on_board: bool,
     /// Connectivity rebuilt from the Gerbers and drill files written, and DFM on them (`gerber_helper.py verify`).
     pub verify: serde_json::Value,
     /// What `verify` found that no `[[waiver]]` (check "dfm", item "<rule> <layer>") covers: opens, shorts, pads in no
@@ -80,6 +82,25 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     if !problems.is_empty() {
         return Err(refused("config", format!("{} problem(s) in {}: {}", problems.len(), l.path.display(), problems.join("; "))));
     }
+    // a rename may not land on a reference the board has, nor two references on one designator (review 15, 9)
+    if let Some(a) = &p.assembly {
+        let b0 = Board::load(&l.board_path().to_string_lossy())?;
+        let refs: std::collections::BTreeSet<&str> = b0.footprints.iter().map(|f| f.reference.as_str()).collect();
+        let mut to: BTreeMap<&str, &str> = BTreeMap::new();
+        for (from, new) in &a.designators {
+            if !refs.contains(from.as_str()) {
+                return Err(refused("config", format!("assembly.designators: no footprint {from}")));
+            }
+            if refs.contains(new.as_str()) && !a.designators.contains_key(new) {
+                return Err(refused("config", format!("assembly.designators: {from} renamed to {new}, which the board already has")));
+            }
+            if let Some(prev) = to.insert(new.as_str(), from.as_str()) {
+                return Err(refused("config", format!("assembly.designators: {prev} and {from} both renamed to {new}")));
+            }
+        }
+    }
+    // a release needs every recorded gate fresh, and one at least (P1, P2)
+    crate::gates::require_fresh(l)?;
     let out = Path::new(out_dir);
     if out.exists() && std::fs::read_dir(out)?.next().is_some() {
         return Err(refused("exists", format!("{out_dir} is not empty; a release goes into a new or empty folder")));
@@ -91,6 +112,7 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     let b = Board::load(&board_path)?;
     let stem = format!("{}_v{}", p.project.name, p.project.version);
     let mut rep = Report { written: out_dir.to_string(), ..Default::default() };
+    rep.version_on_board = p.text.iter().any(|t| t.text.contains("{version}") || t.text.contains(&p.project.version));
 
     // 1. Gerbers and drill files
     let gdir = work.join("gerbers");
@@ -100,10 +122,26 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     std::fs::create_dir_all(&gdir)?;
     let mut layers: Vec<String> = b.copper_layers.clone();
     layers.extend(["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"].iter().map(|s| s.to_string()));
+    // paste only for the sides the assembler places (no stencil for test pads on a side nobody assembles)
+    let asm = p.assembly.as_ref();
+    let sides: Vec<String> = asm.map(|a| a.machine_sides.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| vec!["top".into()]);
+    layers.retain(|l| match l.as_str() {
+        "F.Paste" => sides.iter().any(|s| s == "top"),
+        "B.Paste" => sides.iter().any(|s| s == "bottom"),
+        _ => true,
+    });
     let lj = layers.join(",");
     let g = gdir.to_string_lossy().to_string();
-    kicad_cli(&["pcb", "export", "gerbers", "--layers", &lj, "--no-protel-ext", "-o", &format!("{g}/"), &board_path])?;
-    kicad_cli(&["pcb", "export", "drill", "--excellon-separate-th", "--excellon-units", "mm", "-o", &format!("{g}/"), &board_path])?;
+    // one frame for every file: the outline's centre at the origin, y up, as the CPL (GUIDELINES checks 11 and 16).
+    // KiCad plots from the drill/place origin when asked, so a copy of the board gets it at the outline's centre
+    let (bx0, by0, bx1, by1) = b.bbox();
+    let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
+    let plot = work.join("plot.kicad_pcb");
+    std::fs::write(&plot, with_aux_origin(&b, cx, cy)?)?;
+    crate::kicad::copy_rules(Path::new(&board_path), &plot)?;
+    let pb = plot.to_string_lossy().to_string();
+    kicad_cli(&["pcb", "export", "gerbers", "--layers", &lj, "--no-protel-ext", "--use-drill-file-origin", "-o", &format!("{g}/"), &pb])?;
+    kicad_cli(&["pcb", "export", "drill", "--excellon-separate-th", "--excellon-units", "mm", "--drill-origin", "plot", "-o", &format!("{g}/"), &pb])?;
     rep.gerber_layers = layers;
     let zip = out.join(format!("{stem}_gerbers.zip"));
     crate::gerber::helper(work, &["zip", &g, zip.to_str().unwrap()])?;
@@ -128,12 +166,8 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     rep.verify = v;
 
     // 2. BOM and CPL
-    let asm = p.assembly.as_ref();
-    let sides: Vec<String> = asm.map(|a| a.machine_sides.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| vec!["top".into()]);
     let hand: Vec<String> = asm.map(|a| a.hand_fit.clone()).unwrap_or_default();
     let rename = |r: &str| asm.and_then(|a| a.designators.get(r)).cloned().unwrap_or_else(|| r.to_string());
-    let (bx0, by0, bx1, by1) = b.bbox();
-    let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
     let mut parts: Vec<Part> = vec![];
     for f in &b.footprints {
         let node = sexpr::parse(&b.src[f.span.0..f.span.1])?;
@@ -202,5 +236,26 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
         rep.files.push(FileMade { name: nm.clone(), sha256: h });
     }
     std::fs::write(out.join("CHECKSUMS.txt"), sums)?;
+    // a release with problems is not an order folder: it moves aside, named so (review 15, 17)
+    if !rep.problems.is_empty() {
+        let aside = format!("{}.rejected", out_dir.trim_end_matches('/'));
+        if Path::new(&aside).exists() {
+            std::fs::remove_dir_all(&aside)?;
+        }
+        std::fs::rename(out, &aside)?;
+        rep.written = aside;
+    }
     Ok(rep)
+}
+
+/// The board's text with its drill/place origin at (x, y).
+fn with_aux_origin(b: &Board, x: f64, y: f64) -> Result<String> {
+    let mut e = sexpr::Edits::default();
+    let setup = b.root.find("setup").ok_or_else(|| refused("refused", "the board has no setup section".to_string()))?;
+    let text = format!("(aux_axis_origin {} {})", sexpr::fmt_num(x), sexpr::fmt_num(y));
+    match setup.find("aux_axis_origin") {
+        Some(a) => e.replace(a.span, text),
+        None => e.insert(setup.span.1 - 1, format!(" {text}")),
+    }
+    e.apply(&b.src)
 }

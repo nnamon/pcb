@@ -15,8 +15,9 @@ why = "KiCad's GND pour reaches further than the old pour script's (as on F.Cu)"
 [[explain]]
 layer = "F.Cu"
 side = "b"
+rect = [5.45, 7.95, 5.65, 8.3]
 thinner_than_mm = 0.1
-why = "slivers of the old pour inside KiCad's clearance"
+why = "a 0.016 mm2 sliver of the old pour inside KiCad's clearance"
 
 [[explain]]
 layer = "F.Silk"

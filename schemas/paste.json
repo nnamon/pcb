@@ -82,7 +82,20 @@
         "pads",
         "apertures"
        ],
-       "additionalProperties": false
+       "additionalProperties": false,
+       "properties": {
+        "pad": {
+         "type": "string"
+        },
+        "pads": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "apertures": {
+         "type": "integer",
+         "minimum": 0
+        }
+       }
       }
      }
     }

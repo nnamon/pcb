@@ -34,7 +34,8 @@
      "left_out",
      "written",
      "verify",
-     "problems"
+     "problems",
+     "version_on_board"
     ],
     "properties": {
      "files": {
@@ -96,6 +97,9 @@
        "unplaced_pads",
        "dfm"
       ]
+     },
+     "version_on_board": {
+      "type": "boolean"
      }
     }
    }

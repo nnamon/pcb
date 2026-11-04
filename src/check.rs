@@ -20,22 +20,24 @@ use std::path::Path;
 
 /// JLCPCB's limits as KiCad custom rules (GUIDELINES.md, "JLCPCB rules and part selection").
 const RULES_2LAYER: &str = r#"
-(rule "pcb fab: track width" (constraint track_width (min 0.15mm)))
-(rule "pcb fab: clearance" (constraint clearance (min 0.15mm)))
-(rule "pcb fab: via drill" (condition "A.Type == 'Via'") (constraint hole_size (min 0.3mm)))
-(rule "pcb fab: via pad" (condition "A.Type == 'Via'") (constraint via_diameter (min 0.6mm)))
-(rule "pcb fab: hole to hole, other nets" (condition "A.Net != B.Net") (constraint hole_to_hole (min 0.5mm)))
-(rule "pcb fab: copper to edge" (constraint edge_clearance (min 0.3mm)))
+(rule "pcb fab: track width" (severity error) (constraint track_width (min 0.15mm)))
+(rule "pcb fab: clearance" (severity error) (constraint clearance (min 0.15mm)))
+(rule "pcb fab: via drill" (severity error) (condition "A.Type == 'Via'") (constraint hole_size (min 0.3mm)))
+(rule "pcb fab: via pad" (severity error) (condition "A.Type == 'Via'") (constraint via_diameter (min 0.6mm)))
+(rule "pcb fab: hole to hole, other nets" (severity error) (condition "A.Net != B.Net") (constraint hole_to_hole (min 0.5mm)))
+(rule "pcb fab: copper to edge" (severity error) (constraint edge_clearance (min 0.3mm)))
 "#;
 const RULES_4LAYER_INNER: &str = r#"
-(rule "pcb fab: inner copper to via holes" (layer inner) (condition "B.Type == 'Via' && A.Net != B.Net") (constraint hole_clearance (min 0.2mm)))
-(rule "pcb fab: inner copper to component holes" (layer inner) (condition "B.Type == 'Pad' && B.Pad_Type == 'Through-hole' && A.Net != B.Net") (constraint hole_clearance (min 0.3mm)))
+(rule "pcb fab: inner copper to via holes" (severity error) (layer inner) (condition "B.Type == 'Via' && A.Net != B.Net") (constraint hole_clearance (min 0.2mm)))
+(rule "pcb fab: inner copper to component holes" (severity error) (layer inner) (condition "B.Type == 'Pad' && B.Pad_Type == 'Through-hole' && A.Net != B.Net") (constraint hole_clearance (min 0.3mm)))
 "#;
 
-pub fn fab_rules(fab: &str) -> Option<String> {
+/// The fab's rules and the copper layer count they are for.
+pub fn fab_rules(fab: &str) -> Option<(String, u32)> {
     match fab {
-        "jlcpcb-2layer-1.6mm" => Some(RULES_2LAYER.to_string()),
-        "jlcpcb-4layer-1.6mm" | "jlcpcb-6layer-1.6mm" => Some(format!("{RULES_2LAYER}{RULES_4LAYER_INNER}")),
+        "jlcpcb-2layer-1.6mm" => Some((RULES_2LAYER.to_string(), 2)),
+        "jlcpcb-4layer-1.6mm" => Some((format!("{RULES_2LAYER}{RULES_4LAYER_INNER}"), 4)),
+        "jlcpcb-6layer-1.6mm" => Some((format!("{RULES_2LAYER}{RULES_4LAYER_INNER}"), 6)),
         _ => None,
     }
 }
@@ -74,10 +76,15 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
         return Err(refused("config", format!("{} problem(s) in {}: {}", problems.len(), l.path.display(), problems.join("; "))));
     }
     let rules = fab_rules(&p.project.fab).ok_or_else(|| refused("config", format!("project.fab {:?} is not a rule set pcb has (jlcpcb-2layer-1.6mm, jlcpcb-4layer-1.6mm, jlcpcb-6layer-1.6mm)", p.project.fab)))?;
+    let (rules, fab_layers) = rules;
     crate::gate::check_work(work)?;
     std::fs::create_dir_all(work)?;
     let board_path = l.board_path();
     let b = Board::load(&board_path.to_string_lossy())?;
+    // a rule set for another layer count would drop or invent rules (review 15, 10)
+    if fab_layers != p.project.layers || fab_layers as usize != b.copper_layers.len() {
+        return Err(refused("config", format!("project.fab {} is for {fab_layers} copper layers; pcb.toml says {} and the board has {}", p.project.fab, p.project.layers, b.copper_layers.len())));
+    }
     let mut f: Vec<Finding> = vec![];
     let mut add = |check: &str, item: String, count: usize, message: String| f.push(Finding { check: check.into(), item, count, message, waived: None });
 
@@ -100,7 +107,8 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
         for layer in &b.copper_layers {
             let outer = layer == "F.Cu" || layer == "B.Cu";
             let need = ipc_width_mm(a, outer);
-            if let Some(w) = b.tracks.iter().filter(|t| &t.net == net && &t.layer == layer).map(|t| t.width).reduce(f64::min) {
+            let widths = b.tracks.iter().filter(|t| &t.net == net && &t.layer == layer).map(|t| t.width).chain(b.arcs.iter().filter(|t| &t.net == net && &t.layer == layer).map(|t| t.width));
+            if let Some(w) = widths.reduce(f64::min) {
                 if w + 1e-6 < need {
                     add("width-current", format!("{net} {layer}"), 1, format!("{net} carries {a} A; its narrowest track on {layer} is {w} mm, IPC-2221 asks {need:.3} mm at a 10 °C rise"));
                 }
@@ -125,9 +133,11 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
             add("side", fp.reference.clone(), 1, format!("{} is assembled on the {side}, a side the assembler does not place ({})", fp.reference, sides.join(", ")));
         }
         let paste = if side == "bottom" { "B.Paste" } else { "F.Paste" };
-        let windows = fp.pads.iter().any(|q| q.number.is_empty() && q.layers.iter().any(|x| x == paste));
+        // a paste window counts for the pad it sits on (review 15, 11)
+        let windows: Vec<&crate::board::Pad> = fp.pads.iter().filter(|q| q.number.is_empty() && q.layers.iter().any(|x| x == paste) && !q.layers.iter().any(|x| x.ends_with(".Cu"))).collect();
         for q in fp.pads.iter().filter(|q| q.kind == "smd" && !q.number.is_empty() && q.layers.iter().any(|x| x.ends_with(".Cu"))) {
-            if !q.layers.iter().any(|x| x == paste) && !windows {
+            let windowed = windows.iter().any(|w| crate::zone::pad_has_point(q, (w.x, w.y)));
+            if !q.layers.iter().any(|x| x == paste) && !windowed {
                 add("paste", format!("{}.{}", fp.reference, q.number), 1, format!("{}.{} is an SMD pad of an assembled part with no paste opening", fp.reference, q.number));
             }
         }
@@ -148,6 +158,43 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
         }
     }
 
+    // silkscreen and holes against GUIDELINES.md's JLCPCB table: lines 0.15 mm, text 0.6 mm cap height; annular
+    // rings 0.13 mm on vias and 0.2 mm on plated pads (check 13)
+    // one finding per width: a footprint library draws its silkscreen at one width, so the width names the fault
+    let mut thin: std::collections::BTreeMap<String, (usize, std::collections::BTreeSet<String>)> = std::collections::BTreeMap::new();
+    for (w, what) in b.silk_widths() {
+        if w + 1e-6 < 0.15 && w > 0.0 {
+            let e = thin.entry(format!("lines {} mm", sexpr::fmt_num(w))).or_default();
+            e.0 += 1;
+            e.1.insert(what);
+        }
+    }
+    for (item, (n, owners)) in thin {
+        let list: Vec<&String> = owners.iter().take(8).collect();
+        add("silk", item.clone(), n, format!("{n} silkscreen {item} wide, under 0.15 mm, on {} ({}{})", owners.len(), list.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", "), if owners.len() > 8 { ", ..." } else { "" }));
+    }
+    for t in &p.text {
+        if t.layer.ends_with("SilkS") && t.cap_mm + 1e-9 < 0.6 {
+            add("silk", format!("text {}", t.name), 1, format!("text {:?} is {} mm cap height, under 0.6 mm", t.text, t.cap_mm));
+        }
+    }
+    for v in &b.vias {
+        let ring = (v.size - v.drill) / 2.0;
+        if ring + 1e-6 < 0.13 {
+            add("ring", format!("via {} {} {}", v.net, sexpr::fmt_num(v.x), sexpr::fmt_num(v.y)), 1, format!("via of {} at ({}, {}): annular ring {ring:.3} mm, under 0.13 mm", v.net, sexpr::fmt_num(v.x), sexpr::fmt_num(v.y)));
+        }
+    }
+    for fp in &b.footprints {
+        for q in fp.pads.iter().filter(|q| q.kind == "thru_hole") {
+            if let Some((dw, dh)) = q.drill {
+                let ring = ((q.w - dw).min(q.h - dh)) / 2.0;
+                if ring + 1e-6 < 0.2 {
+                    add("ring", format!("{}.{}", fp.reference, q.number), 1, format!("{}.{}: annular ring {ring:.3} mm, under 0.2 mm", fp.reference, q.number));
+                }
+            }
+        }
+    }
+
     // waivers
     let mut used = vec![false; p.waiver.len()];
     for x in f.iter_mut() {
@@ -157,7 +204,17 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
         }
     }
     let unwaived = f.iter().filter(|x| x.waived.is_none()).count();
-    let unused_waivers = p.waiver.iter().zip(&used).filter(|(_, u)| !**u).map(|(w, _)| format!("{} {}", w.check, w.item)).collect();
+    // dfm waivers are release's; a waiver exceeded is not unused (review 15, 22)
+    let unused_waivers = p
+        .waiver
+        .iter()
+        .zip(&used)
+        .filter(|(w, u)| !**u && w.check != "dfm")
+        .map(|(w, _)| match f.iter().find(|x| x.check == w.check && x.item == w.item) {
+            Some(x) => format!("{} {} found {} times, more than its max {}", w.check, w.item, x.count, w.max.unwrap_or(1)),
+            None => format!("{} {} matched nothing", w.check, w.item),
+        })
+        .collect();
     Ok(Report { fab: p.project.fab.clone(), findings: f, unwaived, unused_waivers })
 }
 

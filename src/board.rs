@@ -555,6 +555,33 @@ impl Board {
         }
     }
 
+    /// Every stroked silkscreen line, arc, circle, rectangle and polygon outline: its width, and whose it is
+    /// ("board" or the footprint's reference). Filled shapes with no stroke are left out.
+    pub fn silk_widths(&self) -> Vec<(f64, String)> {
+        let mut out = vec![];
+        let width = |g: &Node| g.find("stroke").and_then(|s| s.find("width")).or_else(|| g.find("width")).and_then(|w| w.num(1));
+        let silk = |g: &Node| g.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".SilkS") || l.ends_with(".Silkscreen"));
+        for g in self.root.items().iter().filter(|g| matches!(g.head(), Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly"))) {
+            if silk(g) {
+                if let Some(w) = width(g) {
+                    out.push((w, "board".to_string()));
+                }
+            }
+        }
+        for f in &self.footprints {
+            if let Ok(n) = sexpr::parse(&self.src[f.span.0..f.span.1]) {
+                for g in n.items().iter().filter(|g| matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly"))) {
+                    if silk(g) {
+                        if let Some(w) = width(g) {
+                            out.push((w, f.reference.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn footprint_by_ref(&self, r: &str) -> Option<&Footprint> {
         self.footprints.iter().find(|f| f.reference == r)
     }

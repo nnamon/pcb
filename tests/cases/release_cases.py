@@ -135,6 +135,15 @@ d = build("bad_waiver", SILK + '\n[[waiver]]\ncheck = "vibes"\nitem = "x"\nwhy =
 v = run("bad_waiver", "check", "--project", d, "--work", os.path.join(d, "w"))
 expect("bad_waiver", v.get("outcome") == "refused" and v.get("error", {}).get("code") == "config", f"unknown check in a waiver refused ({v.get('outcome')})")
 
+d = build("fab_layers", SILK)
+open(os.path.join(d, "pcb.toml"), "w").write(BASE_TOML.replace("jlcpcb-2layer-1.6mm", "jlcpcb-4layer-1.6mm") + SILK)
+v = run("fab_layers", "check", "--project", d, "--work", os.path.join(d, "w"))
+expect("fab_layers", v.get("outcome") == "refused" and v.get("error", {}).get("code") == "config" and "4 copper layers" in v.get("error", {}).get("message", ""), f"a 4-layer rule set on a 2-layer board refused ({v.get('error')})")
+
+d = build("rename_collision", SILK + '\n[assembly]\ndesignators = { P1 = "P2" }\n')
+v = run("rename_collision", "release", "--project", d, "-o", os.path.join(d, "order"), "--work", os.path.join(d, "rw"))
+expect("rename_collision", v.get("outcome") == "refused" and v.get("error", {}).get("code") == "config" and "already has" in v.get("error", {}).get("message", ""), f"a rename onto an existing reference refused ({v.get('error')})")
+
 # 2. gate and release, on the board with its GND pours
 FLOW = SILK.split("[[waiver]]\ncheck = \"drc\"\nitem = \"unconnected_items GND\"")[0] + '''
 [[zone]]
@@ -151,6 +160,28 @@ why = "synthetic board: references drawn over pads"
 d = build("flow", FLOW + '\n[nets.P]\ncurrent_a = 3.0\n')
 v = run("flow", "zone", "--project", d, "--work", os.path.join(d, "zw"))
 expect("flow", v.get("outcome") == "done", f"zone done ({v.get('outcome')} {v.get('error')})")
+# paste windows and a version label, each through its own command and the output contract
+font = os.path.abspath(os.path.join(here, "..", "fixtures", "paddle_keyer_v1", "fonts", "Inter-ExtraBold.ttf"))
+open(os.path.join(d, "pcb.toml"), "a").write(f'''
+[[paste]]
+pad = "P1.1"
+windows = [2, 2]
+size_mm = 0.3
+web_mm = 0.2
+
+[[text]]
+name = "version"
+text = "v{{version}}"
+font = "{font}"
+cap_mm = 1.0
+at = [0, -15]
+frame = "centre"
+layer = "F.SilkS"
+''')
+v = run("flow", "paste", "--project", d, "--work", os.path.join(d, "pw"))
+expect("flow", v.get("outcome") == "done" and v["data"]["rules"] == [{"pad": "P1.1", "pads": 1, "apertures": 4}], f"paste done, contract kept ({v.get('outcome')} {v.get('data', {}).get('rules')})")
+v = run("flow", "art", "--project", d, "--work", os.path.join(d, "aw"))
+expect("flow", v.get("outcome") == "done" and v["data"]["art"][0]["name"] == "version", f"art done, contract kept ({v.get('outcome')} {v.get('error')})")
 out = os.path.join(d, "order")
 v = run("flow", "release", "--project", d, "-o", out, "--work", os.path.join(d, "rw"))
 expect("flow", v.get("outcome") == "refused" and v.get("error", {}).get("code") == "gate-missing" and not os.path.exists(out), f"release with no gate refused gate-missing ({v.get('error')})")
@@ -165,6 +196,7 @@ expect("flow", v.get("outcome") == "done" and v["data"]["gates"][0]["fresh"], "s
 v = run("flow", "release", "--project", d, "-o", out, "--work", os.path.join(d, "rw"))
 data = v.get("data", {})
 files = sorted(os.listdir(out)) if os.path.isdir(out) else []
+expect("flow", not any(w.get("code") == "version-not-on-board" for w in v.get("warnings", [])), "the version label is found")
 expect("flow", v.get("outcome") == "done" and files == ["CHECKSUMS.txt", "synth_v0.1.0_BOM.csv", "synth_v0.1.0_CPL.csv", "synth_v0.1.0_gerbers.zip"] and data.get("problems") == [] and data.get("verify", {}).get("opens") == [] and data.get("verify", {}).get("shorts") == [],
        f"release done: {files} problems {data.get('problems')} ({v.get('outcome')} {v.get('error')})")
 v = run("flow", "release", "--project", d, "-o", out, "--work", os.path.join(d, "rw"))

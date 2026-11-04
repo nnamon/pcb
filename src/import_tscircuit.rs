@@ -83,6 +83,21 @@ fn turned(w: f64, h: f64, ccw: f64) -> Result<(f64, f64)> {
     }
 }
 
+/// Does a pad's copper (its bounding rectangle, turned by its rotation; a circle by its radius) hold the point?
+fn pad_holds(pad: &Value, x: f64, y: f64) -> bool {
+    let (Some(cx), Some(cy)) = (f(pad, "x"), f(pad, "y")) else { return false };
+    let r = f(pad, "radius").or_else(|| f(pad, "outer_diameter").map(|d| d / 2.0));
+    if let Some(r) = r.filter(|_| f(pad, "width").is_none() && f(pad, "outer_width").is_none()) {
+        return (x - cx).hypot(y - cy) <= r + 1e-3;
+    }
+    let w = f(pad, "width").or_else(|| f(pad, "outer_width")).unwrap_or(0.0);
+    let h = f(pad, "height").or_else(|| f(pad, "outer_height")).unwrap_or(0.0);
+    let a = -f(pad, "ccw_rotation").or_else(|| f(pad, "rotation")).unwrap_or(0.0).to_radians();
+    let (dx, dy) = (x - cx, y - cy);
+    let (lx, ly) = (dx * a.cos() - dy * a.sin(), dx * a.sin() + dy * a.cos());
+    lx.abs() <= w / 2.0 + 1e-3 && ly.abs() <= h / 2.0 + 1e-3
+}
+
 /// Element types that are read, and types that are deliberately not carried over. Anything else is an error.
 const READ: &[&str] = &[
     "pcb_board", "pcb_component", "pcb_smtpad", "pcb_plated_hole", "pcb_hole", "pcb_courtyard_rect",
@@ -280,8 +295,29 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         let route = t.get("route").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         for p in [route.first(), route.last()].into_iter().flatten() {
             let (Some(px), Some(py)) = (f(p, "x"), f(p, "y")) else { continue };
+            // the nets of every pad whose copper holds the end, and of a port at it (review 15, 14)
+            for pad in d.iter().filter(|e| matches!(s(e, "type"), "pcb_smtpad" | "pcb_plated_hole")) {
+                let ports: Vec<&str> = std::iter::once(s(pad, "pcb_port_id")).chain(pad.get("pcb_port_ids").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str())).filter(|x| !x.is_empty()).collect();
+                // an SMD pad only on its own side; a plated hole on every layer
+                let lay = s(p, "layer");
+                let same_side = s(pad, "type") == "pcb_plated_hole" || lay.is_empty() || s(pad, "layer").is_empty() || s(pad, "layer") == lay;
+                if ports.is_empty() || !same_side || !pad_holds(pad, px, py) {
+                    continue;
+                }
+                for pid in ports {
+                    if let Some(pn) = pcb_port.get(pid).and_then(|pp| port_net.get(s(pp, "source_port_id"))) {
+                        e.insert(pn.clone());
+                    }
+                }
+            }
             for pp in pcb_port.values() {
                 let (Some(qx), Some(qy)) = (f(pp, "x"), f(pp, "y")) else { continue };
+                // a port on the end's layer (a port that names its layers)
+                let lay = s(p, "layer");
+                let layers: Vec<&str> = pp.get("layers").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()).collect();
+                if !lay.is_empty() && !layers.is_empty() && !layers.contains(&lay) {
+                    continue;
+                }
                 if let Some(pn) = port_net.get(s(pp, "source_port_id")) {
                     if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 {
                         e.insert(pn.clone());
@@ -356,6 +392,11 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
             let (Some(px), Some(py)) = (f(p, "x"), f(p, "y")) else { continue };
             for pp in pcb_port.values() {
                 let (Some(qx), Some(qy)) = (f(pp, "x"), f(pp, "y")) else { continue };
+                let lay = s(p, "layer");
+                let layers: Vec<&str> = pp.get("layers").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()).collect();
+                if !lay.is_empty() && !layers.is_empty() && !layers.contains(&lay) {
+                    continue;
+                }
                 let pn = port_net.get(s(pp, "source_port_id")).cloned().unwrap_or_default();
                 if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 && !pn.is_empty() && pn != net {
                     if !allow_cross.iter().any(|a| *a == net) {

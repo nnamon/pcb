@@ -257,7 +257,7 @@ The flow, from a board to the order files: `import-tscircuit` (or, for new proje
 ### Import additions
 
 - Ports a part joins inside itself (`source_component_internal_connection`, a USB-C shell's two holes per pin) are one net.
-- A trace or via `net_name` the circuit has no net for (an older router's name, cut short) takes the one net its traces land on, warned `net-renamed`; landing on two nets is a short and refused.
+- A trace or via `net_name` the circuit has no net for (an older router's name, cut short) takes the one net its traces' ends land on (a port, or anywhere on a pad's copper), warned `net-renamed`; landing on two nets is a short and refused.
 - Silkscreen lines and circles, on footprints and on the board, are carried over. Text and rectangles are not: tscircuit draws text with strokes too thin to print, so labels come from `[[text]]`.
 
 ### `pcb paste`
@@ -270,56 +270,58 @@ The footprint records the pads' own layers in a hidden property `pcb:paste`, and
 
 ### `pcb art`
 
-`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at`, grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
+`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`; `{version}` in the text is the project's version), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at`, grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
 
 ### `pcb check`
 
-KiCad DRC on a copy with the fab's rule set (`project.fab`: `jlcpcb-2layer-1.6mm`, `jlcpcb-4layer-1.6mm`, `jlcpcb-6layer-1.6mm`, from GUIDELINES.md's JLCPCB table) added to the board's own rules, plus checks KiCad lacks:
-- **width-current:** on each net with `current_a`, the narrowest track per layer against the IPC-2221 width at a 10 °C rise (outer 1 oz, inner 0.5 oz).
+KiCad DRC on a copy with the fab's rule set (`project.fab`: `jlcpcb-2layer-1.6mm`, `jlcpcb-4layer-1.6mm`, `jlcpcb-6layer-1.6mm`, from GUIDELINES.md's JLCPCB table) added to the board's own rules. Each fab rule carries its own severity (error), so the project file's severities cannot switch it off, and a rule set for another layer count is refused (`config`). Plus checks KiCad lacks:
+- **width-current:** on each net with `current_a`, the narrowest track or arc per layer against the IPC-2221 width at a 10 °C rise (outer 1 oz, inner 0.5 oz). GUIDELINES check 9 names IPC-2152; IPC-2221 is the more conservative and is what pcb computes.
+- **silk:** silkscreen lines under 0.15 mm, one finding per width (a footprint library draws at one width); `[[text]]` under 0.6 mm cap height.
+- **ring:** annular rings under 0.13 mm on vias and 0.2 mm on plated pads.
 - **side:** an assembled part (LCSC code, not hand fitted, not excluded) on a side not in `[assembly] machine_sides`.
-- **paste:** an SMD pad of an assembled part with no paste opening and no window in its footprint.
+- **paste:** an SMD pad of an assembled part with no paste opening and no paste window on it.
 - **testpoint:** a `[bringup] test_points` reference missing, or with no exposed outer pad.
 
-A `[[waiver]]` (check, item as check names it, `max`, why) covers a finding up to `max`; waived findings are listed with their reason, and a waiver that matches nothing is warned `waiver-unused`. Any unwaived finding makes the outcome rejected.
+A `[[waiver]]` (check, item as check names it, `max`, why) covers a finding up to `max`; waived findings are listed with their reason, and a waiver that matches nothing, or whose finding counts more than `max`, is warned `waiver-unused` (`dfm` waivers are release's). Any unwaived finding makes the outcome rejected.
 
 ### `pcb gate status|pass NAME`
 
-A gate's inputs are the board file, pcb.toml without its `[gates.*]` tables, and every file pcb.toml names (art, fonts), hashed with SHA-256 in that order. `pass` runs `check` and records `[gates.NAME]` (version, date, inputs) only when nothing is unwaived (`gate-check`). `status` says which gates are stale and why.
+A gate's inputs are the board file, pcb.toml without its `[gates.*]` tables (headers read as TOML reads them, `[ gates.x ]` too), the board's `.kicad_pro` and `.kicad_dru` when present, and every file pcb.toml names (art, fonts), hashed with SHA-256 in that order. `pass` runs `check` and records `[gates.NAME]` (version, date, inputs) only when nothing is unwaived (`gate-check`). `status` says which gates are stale and why.
 
 ### `pcb release`
 
-Refuses with no gate recorded (`gate-missing`) or any stale (`gate-stale`), and into a folder that is not empty (`exists`). Then:
-- Gerbers (every copper layer, masks, paste, silkscreen, outline) and PTH and NPTH drill files by `kicad-cli`, zones plotted as filled, zipped with sorted names and a fixed date;
+Refuses a designator rename onto a reference the board has, or two onto one (`config`); with no gate recorded (`gate-missing`) or any stale (`gate-stale`); and into a folder that is not empty (`exists`). Then:
+- Gerbers (every copper layer, masks, silkscreen, outline, and paste for the sides the assembler places) and PTH and NPTH drill files by `kicad-cli`, plotted from a drill/place origin set at the outline's centre on a copy of the board, so every file shares the CPL's frame (centre at the origin, y up; GUIDELINES checks 11 and 16). Zones are plotted as filled. Zipped with sorted names and a fixed date;
 - JLCPCB BOM (grouped by LCSC code, value and footprint) and CPL (centre of the outline as origin, y up, with `[parts.<LCSC>]` rotation and centre offsets), from parts with an LCSC code that are not excluded, not hand fitted and on a machine side; designators follow `[assembly] designators`;
-- the files read back as the fab will read them: copper connectivity rebuilt from the Gerbers and plated holes alone, each board pad found in its island (a net in two groups is open; a group with two nets is a short, unless they are one net-tie footprint's), and DFM against GUIDELINES.md's JLCPCB table: copper wider than 0.15 mm, 0.15 mm between nets, 0.3 mm to the edge, 0.5 mm between holes of different copper, silkscreen 0.15 mm wide and off exposed copper. A finding a `[[waiver]]` (check `dfm`, item "<rule> <layer>") does not cover makes the outcome rejected (P14, P30). `tests/mutations/verify_mutations.py` shows each rule fires;
+- the files read back as the fab will read them, in that frame: copper connectivity rebuilt from the Gerbers and plated holes alone, each board pad found in its island (a net in two groups is open; a group with two nets is a short, unless they are one net-tie footprint's), and DFM against GUIDELINES.md's JLCPCB table: no copper narrower than 0.15 mm anywhere (what an opening removes: a narrow track joined to wide copper too), 0.15 mm between nets, 0.3 mm to every ring of the outline (cut-outs too), no copper off the board, 0.5 mm between holes of different copper (slots as stadiums), silkscreen no narrower than 0.15 mm and off exposed copper. A finding a `[[waiver]]` (check `dfm`, item "<rule> <layer>") does not cover makes the outcome rejected, and the folder moves aside to `<out>.rejected` so it cannot pass for an order (P14, P30). Release warns `version-not-on-board` when no `[[text]]` prints the version. `tests/mutations/verify_mutations.py` shows each rule fires;
 - `CHECKSUMS.txt`.
 
 KiCad stamps a creation date in each Gerber, so two releases of one board differ in those lines only.
 
 ### `pcb compare-gerbers A B [--explain FILE] [--board BOARD]`
 
-Two fabrication sets (folders or zips) compared as shapes, layer by layer (found by X2 file function or name), aligned on the centres of their outlines, and hole by hole (place, size, slot length, plating; Excellon read by pcb, since gerbonara reports a slot's start as a hole too). Pieces under 0.01 mm² or thinner than 0.02 mm are rounding. Every other piece must be explained by an `[[explain]]` entry, or the outcome is rejected:
+Two fabrication sets (folders or zips) compared as shapes, layer by layer (found by X2 file function or name). They must share a frame (outline centres within 0.05 mm), as the fab and the assembler read them together; `--align` moves A onto B by their outline centres instead. A layer with content in one set only differs as a whole unless an entry with `whole = true` explains it; sets sharing no layer are refused. Compared and hole by hole (place, size, slot length, plating; Excellon read by pcb, since gerbonara reports a slot's start as a hole too). Pieces under 0.01 mm² or thinner than 0.02 mm are rounding. Every other piece must be explained by an `[[explain]]` entry, or the outcome is rejected:
 - `layer` (or `*`), `side` ("a", "b" or "both"), `why`;
-- and one of: `rect` (in B's frame), `whole = true`, `thinner_than_mm` (only pieces no wider than that), or `zone_net` (A's copper that is wholly a zone fill of that net on `--board`).
+- and one of: `rect` (in B's frame), `whole = true`, `thinner_than_mm` (only pieces no wider than that; with `rect`, inside it), or `zone_net` (A's copper that is wholly a zone fill of that net on `--board`). Unknown keys and entries with no place are refused (`gerber-set`).
 
 ### The golden test
 
 `tests/fixtures/paddle_keyer_v1` holds the final circuit JSON, a pcb.toml, the art data, the font, the ordered files and `explain.toml`. The suite imports, runs zone, paste, art and `gate pass layout`, releases, and compares:
 - **drill:** all 65 holes the same;
 - **F.Mask, B.Mask, F.Paste, B.Cu art:** no difference;
-- **copper:** everything only in pcb's set is GND pour (KiCad's pour reaches further than the old script's), plus one 0.016 mm² sliver of the old pour;
+- **copper:** everything only in pcb's set is GND pour (KiCad's pour reaches further than the old script's), plus one 0.016 mm² sliver of the old pour, explained by its own rectangle;
 - **silkscreen:** text redrawn from the font differs from matplotlib's by under 0.1 mm at glyph edges;
 - **BOM and CPL:** the same designators, LCSC parts, places and rotations (`verify_release.py`).
 
-The connector CPL offsets in pcb.toml came from the order's own CPL (jlc_files.py solved them against JLCPCB's footprints); M4's `pcb parts` will solve them. The label places came from the order's silk_text.py run, recorded once as data.
+Two inputs come from the order's own pipeline, so they match it by construction: the connector CPL offsets (J1, J2) came from the order's CPL (jlc_files.py solved them against JLCPCB's footprints; M4's `pcb parts` will solve them), and the label places and the Morse and pin-1 marks (`art/silk_marks.json`) were recorded once from its silk_text.py run. The rest of the CPL, and every Gerber layer, is pcb's own.
 
 ### The badge through `pcb check` (4 Nov 2026)
 
-On the zoned badge fixture with the 4-layer JLCPCB rules, `pcb check` finds what the badge's open design work says it should: PMUX_ILM and VBUS_F unconnected (the ILM and VBUS_F links), the LED_A4 via too close to BAT_RAW copper (4 clearance, 8 hole clearance), U501 pad 21 unconnected to GND and one dangling GND via, three starved GND thermals (J102 pad 4, J701 pad 2 and one more), the coil's 0.075 mm clearance at L601 pad 3, and 7 courtyard overlaps. None is waived: they are the badge's work after M4.
+On the zoned badge fixture with the 4-layer JLCPCB rules, `pcb check` finds what the badge's open design work says it should: PMUX_ILM and VBUS_F unconnected (the ILM and VBUS_F links), the LED_A4 via too close to BAT_RAW copper (4 clearance, 8 hole clearance), U501 pad 21 unconnected to GND and one dangling GND via, three starved GND thermals (J102 pad 4, J701 pad 2 and one more), the coil's 0.075 mm clearance at L601 pad 3, 7 courtyard overlaps, 45 silkscreen DRC items (32 overlaps, 8 over copper, 5 at the edge), its footprints' silkscreen lines at 0.10 mm (819) and 0.12 mm (142), under the 0.15 mm floor, and 0.2 mm rings on L601's via pads 3 and 4. None is waived: they are the badge's work after M4. The suite holds this: the fixture lists the findings, and `pcb check` must find exactly them. The release read-back on the badge's files takes about 5 s; it finds the three opens and the LED_A4 via's 0.021 mm gap to BAT_RAW on every layer.
 
 ### Still to do for M3
 
-gerbonara in the CI image.
+The CI image with gerbonara (image 8) is built by the image workflow when this branch is pushed; the same layer on image 7 passes the whole suite locally.
 
 ## Planning drawings
 

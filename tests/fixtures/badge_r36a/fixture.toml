@@ -131,3 +131,15 @@ expect_fill = [
   { net = "VBUS", layer = "F.Cu", min_area = 15.8 },
   { net = "VBUS_F", layer = "F.Cu", min_area = 123.1 },
 ]
+
+# pcb check on the zoned board (4-layer JLCPCB rules) finds exactly these: the badge's open design work after M4
+# (ILM, VBUS_F, the LED_A4 via, U501 pad 21, the starved thermals, the coil's clearance), its footprints'
+# silkscreen at 0.10 and 0.12 mm (under the 0.15 mm floor) and its overlaps, and the coil's via pads' rings
+[check]
+findings = [
+  "drc clearance <no net> NFC_AC1", "drc clearance BAT_RAW LED_A4", "drc courtyards_overlap <no net>",
+  "drc hole_clearance BAT_RAW LED_A4", "drc silk_edge_clearance <no net>", "drc silk_over_copper <no net> BOOST_FB",
+  "drc silk_over_copper <no net> GND", "drc silk_over_copper <no net> VBOOST", "drc silk_overlap <no net>",
+  "drc starved_thermal GND", "drc unconnected_items GND", "drc unconnected_items PMUX_ILM", "drc unconnected_items VBUS_F",
+  "drc via_dangling GND", "silk lines 0.1 mm", "silk lines 0.12 mm", "ring L601.3", "ring L601.4",
+]

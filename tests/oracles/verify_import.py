@@ -300,6 +300,9 @@ for t in d:
         r = t.get("route", [])
         for q in (r[:1] + r[-1:]):
             for e in pp.values():
+                # a port that names its layers counts only on the end's layer
+                if q.get("layer") and e.get("layers") and q["layer"] not in e["layers"]:
+                    continue
                 if abs(e["x"] - q["x"]) < 0.01 and abs(e["y"] - q["y"]) < 0.01 and e["source_port_id"] in port_net:
                     _landed[t["net_name"]].add(port_net[e["source_port_id"]])
 renamed = {g: next(iter(v)) for g, v in _landed.items() if len(v) == 1}
