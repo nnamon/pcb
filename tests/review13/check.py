@@ -157,10 +157,12 @@ want("fill check_splice_masks_shape_fill", c, c is not None and c.get("prefix_id
 # the badge
 b = cases("badge13.py")
 c = b.get("badge_zone")
+# DRC 144 -> 27 at review; 189 -> 72 once the import carried silkscreen over (M3), which adds 45 silkscreen items to
+# both boards
 # the via count follows the fills, which follow the fill priorities (202 at review, 203 once every overlap had its
 # own priority, review 13 closure); the fixture's floor is 190
 want("badge zone", c, done(c) and sorted(c["allowed"]) == ["clearance <no net> NFC_AC1: 0 -> 2", "starved_thermal GND: 0 -> 2"] and list(c["stitch"]) == ["GND"] and c["stitch"]["GND"] >= 190
-     and c["zone_kinds"] == {"keepout": 2, "zone": 4, "fill": 34} and c["before"] == 144 and c["after"] == 27)
+     and c["zone_kinds"] == {"keepout": 2, "zone": 4, "fill": 34} and c["before"] == 189 and c["after"] == 72)
 want("badge verify_zones", b.get("badge_verify_zones"), (b.get("badge_verify_zones") or {}).get("exit") == 0)
 c = b.get("badge_allowed_items")
 st = [i["items"][1] for i in (c or {}).get("items", {}).get("starved_thermal", [])]

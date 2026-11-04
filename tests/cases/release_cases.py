@@ -108,7 +108,16 @@ d = build("side", SILK + '\n[assembly]\nmachine_sides = ["bottom"]\n', lcsc("P1"
 v = run("side", "check", "--project", d, "--work", os.path.join(d, "w"))
 expect("side", v.get("outcome") == "rejected" and ("side", "P1") in findings(v), f"P1 assembled on the top, machine side bottom {list(findings(v))}")
 
-d = build("paste", SILK, lambda t: lcsc("P1")(t).replace('(layers "F.Cu" "F.Mask" "F.Paste")', '(layers "F.Cu" "F.Mask")', 1) if '(layers "F.Cu" "F.Mask" "F.Paste")' in t else lcsc("P1")(t).replace('(layers "F.Cu" "F.Paste" "F.Mask")', '(layers "F.Cu" "F.Mask")', 1))
+def no_paste_on_first_pad(t):
+    # the first pad with paste loses it, and its footprint gets an LCSC code so it counts as assembled
+    m = re.search(r'\(layers "F\.Cu" "F\.(?:Paste" "F\.Mask|Mask" "F\.Paste)"\)', t)
+    fp = t.rfind("(footprint", 0, m.start())
+    ref = re.search(r'\(property "Reference" "([^"]+)"', t[fp:]).group(1)
+    t = t[:m.start()] + '(layers "F.Cu" "F.Mask")' + t[m.end():]
+    return lcsc(ref)(t)
+
+
+d = build("paste", SILK, no_paste_on_first_pad)
 v = run("paste", "check", "--project", d, "--work", os.path.join(d, "w"))
 f = findings(v)
 expect("paste", v.get("outcome") == "rejected" and any(k[0] == "paste" for k in f), f"an assembled pad with no paste found {list(f)}")

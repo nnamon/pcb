@@ -44,8 +44,9 @@ expect = "done"            # no path at 0.3 mm: nothing gets worse, the board is
 still_open = ["VBUS_F"]
 
 # PMUX_SS ripped and laid again in the box beside U106 (M1 gate). Freerouting 2.5.0 finds the path through the
-# 0.15 mm gaps but fails to insert it when the region's keep-outs shape its rooms; the second attempt, with no
-# keep-outs, lays it inside the region.
+# 0.15 mm gaps. Before the import carried silkscreen over (M3) it failed to insert it when the region's keep-outs
+# shaped its rooms, and the second attempt, with no keep-outs, laid it; on the board with silkscreen the first
+# attempt lays it. The second-attempt branch stays covered by review 9's route branches (a stand-in java).
 [[route]]
 name = "reroute_pmux_ss"
 region = [46, 25.5, 52, 31]
@@ -53,7 +54,7 @@ rip = ["PMUX_SS"]
 nets = ["PMUX_SS"]
 targets = ["PMUX_SS"]
 expect = "done"
-attempt_used = 1
+attempt_used = 0
 
 # Edit cases run `pcb edit` on the imported board: the gate on a dense real board, and targets the import leaves
 # without uuids. `ops` is the JSON operation list; `regressions` must each be among the DRC regressions reported.
