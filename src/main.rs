@@ -1,13 +1,16 @@
 //! `pcb`: board tooling for agents. See DESIGN.md.
 
+mod art;
 mod board;
 mod contract;
 mod diff;
 mod doctor;
 mod edit;
 mod freerouting;
+mod gerber;
 mod gate;
 mod kicad;
+mod paste;
 mod project;
 mod import_tscircuit;
 mod render;
@@ -156,6 +159,47 @@ enum Cmd {
         #[arg(short, long)]
         out: Option<String>,
     },
+    /// Artwork from pcb.toml [[art]] (GeoJSON polygons) as board graphics on silkscreen, mask or copper, written
+    /// through the gate. An earlier run's artwork is replaced
+    Art {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        #[arg(long, default_value = "pcb_work/art")]
+        work: String,
+        /// Output board (default: overwrite the project's board)
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// Paste rules from pcb.toml [[paste]] (windows on an exposed pad, pin in paste on a plated pad), applied to
+    /// the footprints and written through the gate. An earlier run's rules are undone first
+    Paste {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        #[arg(long, default_value = "pcb_work/paste")]
+        work: String,
+        /// Output board (default: overwrite the project's board)
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// Compare two fabrication sets (folders or zips) as shapes, layer by layer and hole by hole, aligned on their
+    /// outlines. Every difference must fall in a region the explain file gives a reason for, or the outcome is
+    /// rejected. The golden test for a release
+    CompareGerbers {
+        /// The new set
+        a: String,
+        /// The set it must match (the files that were ordered)
+        b: String,
+        /// TOML with [[explain]] entries: layer, side (a, b or both), rect or whole, why
+        #[arg(long)]
+        explain: Option<String>,
+        /// The KiCad board set A was made from, for explanations by zone fill (`zone_net`)
+        #[arg(long)]
+        board: Option<String>,
+        #[arg(long, default_value = "pcb_work/compare")]
+        work: String,
+    },
     /// The project at a glance: version against VERSION and TAGS.tsv, gates, decisions, the board, its DRC, and
     /// anything in pcb.toml that is wrong or does not match the board. The first command to run in a session.
     Status {
@@ -224,6 +268,9 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Diff { .. } => "diff",
         Cmd::Status { .. } => "status",
         Cmd::Zone { .. } => "zone",
+        Cmd::CompareGerbers { .. } => "compare-gerbers",
+        Cmd::Art { .. } => "art",
+        Cmd::Paste { .. } => "paste",
     }
 }
 
@@ -451,6 +498,38 @@ fn run(cli: Cli) -> Result<Reply> {
             })
         }
         Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
+        Cmd::Paste { project: proj, work, out } => {
+            let l = project::load(&project::locate(&proj))?;
+            let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
+            let r = paste::run(&l, &out, std::path::Path::new(&work))?;
+            let rejected = !r.regressions.is_empty();
+            let mut h = format!("{} paste rules ({} footprints restored, {} apertures removed from an earlier run)", r.rules.len(), r.restored_footprints, r.removed_apertures);
+            for m in &r.rules {
+                h += &format!("\n  {}: {} pads, {} apertures", m.pad, m.pads, m.apertures);
+            }
+            h += &format!("\nDRC {} -> {}; wrote {}", r.drc_total_before, r.drc_total_after, r.written);
+            for g in &r.regressions {
+                h += &format!("\n  worse: {g}");
+            }
+            let warnings: Vec<contract::Warning> = r.allowed.iter().map(|a| contract::warn("drc-allowed", format!("{a} (within pcb.toml drc_allow)"))).collect();
+            Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Art { project: proj, work, out } => {
+            let l = project::load(&project::locate(&proj))?;
+            let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
+            let r = art::run(&l, &out, std::path::Path::new(&work))?;
+            let rejected = !r.regressions.is_empty();
+            let mut h = format!("{} artwork entries ({} groups removed from an earlier run)", r.art.len(), r.removed_groups);
+            for a in &r.art {
+                h += &format!("\n  {}: {} polygons, {} pieces, {} mm² on {}", a.name, a.polygons, a.pieces, a.area_mm2, a.layers.join(", "));
+            }
+            h += &format!("\nDRC {} -> {}; wrote {}", r.drc_total_before, r.drc_total_after, r.written);
+            for g in &r.regressions {
+                h += &format!("\n  worse: {g}");
+            }
+            let warnings: Vec<contract::Warning> = r.allowed.iter().map(|a| contract::warn("drc-allowed", format!("{a} (within pcb.toml drc_allow)"))).collect();
+            Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
+        }
         Cmd::Zone { project: proj, work, out } => {
             let l = project::load(&project::locate(&proj))?;
             let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
@@ -471,6 +550,23 @@ fn run(cli: Cli) -> Result<Reply> {
             warnings.extend(r.fill_overlaps.iter().map(|s| contract::warn("fill-overlap", format!("{s}; set fill_priority on one of them"))));
             warnings.extend(r.stitch_unfilled.iter().map(|s| contract::warn("stitch-no-fill", format!("{s}: the net has no fill on this layer, so no stitching via can go anywhere"))));
             Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::CompareGerbers { a, b, explain, board, work } => {
+            let v = gerber::compare(&a, &b, explain.as_deref(), board.as_deref(), std::path::Path::new(&work))?;
+            let ok = v["ok"].as_bool().unwrap_or(false);
+            let mut h = format!("{a} against {b}: {}", if ok { "every difference explained" } else { "unexplained differences" });
+            if let Some(e) = v["error"].as_str() {
+                h += &format!("\n  {e}");
+            }
+            for (k, l) in v["layers"].as_object().into_iter().flatten() {
+                let un = l["unexplained"].as_array().map(|x| x.len()).unwrap_or(0);
+                let ex = l["explained"].as_array().map(|x| x.len()).unwrap_or(0);
+                h += &format!("\n  {k}: {} mm² against {} mm², {ex} explained, {un} unexplained", l["a_mm2"], l["b_mm2"]);
+            }
+            let dr = &v["drill"];
+            h += &format!("\n  drill: {} against {} holes, {} matched", dr["a"], dr["b"], dr["matched"]);
+            let warnings: Vec<contract::Warning> = v["missing"].as_array().into_iter().flatten().filter_map(|m| m.as_str()).map(|m| contract::warn("layer-missing", format!("{m} is in only one of the two sets"))).collect();
+            Ok(Reply { outcome: if ok { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings, human: h, data: v })
         }
         Cmd::Diff { a, b, png } => {
             let (ba, bb) = (diff::load(&a)?, diff::load(&b)?);

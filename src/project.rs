@@ -46,7 +46,48 @@ pub struct Project {
     /// DRC kinds a zone run may add, each with its most and why: the owner's accepted waivers.
     #[serde(default)]
     pub drc_allow: Vec<DrcAllow>,
+    /// Artwork: polygons from a GeoJSON file on silkscreen, mask or copper (milestone M3, `pcb art`).
+    #[serde(default)]
+    pub art: Vec<Art>,
+    /// Paste rules for named pads (milestone M3, `pcb paste`): windows on an exposed pad, paste on a plated pad.
+    #[serde(default)]
+    pub paste: Vec<PasteRule>,
     pub bringup: Option<Bringup>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasteRule {
+    /// `REF.PAD`; every pad of that number.
+    pub pad: String,
+    /// Windows in place of the pad's own opening: `[columns, rows]`, each `size_mm` square, `web_mm` apart, centred
+    /// on the pad.
+    pub windows: Option<[u32; 2]>,
+    pub size_mm: Option<f64>,
+    pub web_mm: Option<f64>,
+    /// Paste over a plated pad (pin in paste): an opening the shape of the pad.
+    #[serde(default)]
+    pub pin_in_paste: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Art {
+    /// A name of its own; the group `pcb:art:<name>` holds what it makes.
+    pub name: String,
+    /// A GeoJSON file (Polygon, MultiPolygon, a Feature or FeatureCollection, or an object of named geometries),
+    /// relative to pcb.toml.
+    pub file: String,
+    /// Which geometry, when the file is an object of named ones.
+    pub key: Option<String>,
+    /// The file's frame: "centre" (mm, origin at the board outline's bounding-box centre, y up; tscircuit's frame
+    /// for a board centred on 0, 0) or "board" (KiCad's own, y down).
+    pub frame: String,
+    /// The layers it goes on: silkscreen (F.SilkS, B.SilkS), mask openings (F.Mask, B.Mask), copper (F.Cu, B.Cu,
+    /// with `net`).
+    pub layers: Vec<String>,
+    /// The net of its copper; needed for a copper layer.
+    pub net: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -448,6 +489,48 @@ pub fn check(p: &Project) -> Vec<String> {
         if let Some([x0, y0, x1, y1]) = s.rect {
             if !(x1 > x0 && y1 > y0) {
                 e.push(format!("stitch {}: rect must be x0, y0, x1, y1 with x1 > x0 and y1 > y0", s.net));
+            }
+        }
+    }
+    let mut paste_pads = std::collections::BTreeSet::new();
+    for r in &p.paste {
+        if !r.pad.contains('.') || !paste_pads.insert(r.pad.clone()) {
+            e.push(format!("paste {:?}: pad is REF.PAD, once", r.pad));
+        }
+        match (r.windows, r.pin_in_paste) {
+            (Some([c, rw]), false) => {
+                if c == 0 || rw == 0 || c * rw > 64 {
+                    e.push(format!("paste {}: windows needs 1 to 64 windows", r.pad));
+                }
+                if !r.size_mm.is_some_and(|v| v > 0.0 && v.is_finite()) || !r.web_mm.is_some_and(|v| v >= 0.0 && v.is_finite()) {
+                    e.push(format!("paste {}: windows needs size_mm above 0 and web_mm 0 or more", r.pad));
+                }
+            }
+            (None, true) => {
+                if r.size_mm.is_some() || r.web_mm.is_some() {
+                    e.push(format!("paste {}: size_mm and web_mm go with windows", r.pad));
+                }
+            }
+            _ => e.push(format!("paste {}: give windows or pin_in_paste = true, not both", r.pad)),
+        }
+    }
+    let mut art_names = std::collections::BTreeSet::new();
+    for a in &p.art {
+        if a.name.trim().is_empty() || !art_names.insert(a.name.clone()) {
+            e.push(format!("art {:?}: needs a name of its own", a.name));
+        }
+        if !matches!(a.frame.as_str(), "centre" | "board") {
+            e.push(format!("art {:?}: frame is centre or board", a.name));
+        }
+        if a.layers.is_empty() {
+            e.push(format!("art {:?}: layers is empty", a.name));
+        }
+        for l in &a.layers {
+            if !matches!(l.as_str(), "F.SilkS" | "B.SilkS" | "F.Mask" | "B.Mask" | "F.Cu" | "B.Cu") {
+                e.push(format!("art {:?}: layer {l} is not F.SilkS, B.SilkS, F.Mask, B.Mask, F.Cu or B.Cu", a.name));
+            }
+            if l.ends_with(".Cu") && a.net.is_none() {
+                e.push(format!("art {:?}: copper on {l} needs a net", a.name));
             }
         }
     }

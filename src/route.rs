@@ -146,6 +146,22 @@ fn lock(edits: &mut Edits, src: &str, span: (usize, usize)) {
     edits.insert(head_end, " (locked yes)");
 }
 
+/// Insert whole lines (each ending in a newline) as the last children of the item at `span`: at the start of the
+/// line holding its closing paren when that line holds nothing else, so `remove` takes each line out again and
+/// leaves the file as it was; otherwise on lines of their own just before the paren.
+pub(crate) fn insert_lines(edits: &mut Edits, src: &str, span: (usize, usize), lines: &str) {
+    if lines.is_empty() {
+        return;
+    }
+    let close = span.1 - 1;
+    let line_start = src[..close].rfind('\n').map(|k| k + 1).unwrap_or(close);
+    if src[line_start..close].trim().is_empty() {
+        edits.insert(line_start, lines.to_string());
+    } else {
+        edits.insert(close, format!("\n{lines}"));
+    }
+}
+
 /// Remove a top-level item and the newline after it.
 pub(crate) fn remove(edits: &mut Edits, src: &str, span: (usize, usize)) {
     let mut end = span.1;

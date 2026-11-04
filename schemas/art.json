@@ -1,0 +1,94 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:art",
+ "title": "pcb art output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/art/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "removed_groups",
+     "removed_shapes",
+     "art",
+     "fixed",
+     "regressions",
+     "allowed",
+     "drc_total_before",
+     "drc_total_after",
+     "written"
+    ],
+    "properties": {
+     "removed_groups": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "removed_shapes": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "art": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name",
+        "layers",
+        "polygons",
+        "pieces",
+        "area_mm2"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "fixed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "regressions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "allowed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "drc_total_before": {
+      "type": "integer"
+     },
+     "drc_total_after": {
+      "type": "integer"
+     },
+     "written": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

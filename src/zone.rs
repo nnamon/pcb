@@ -85,6 +85,11 @@ fn stitch_uuid(net: &str, x: f64, y: f64) -> String {
     zone_uuid(&format!("pcb:stitch:{net}:{}:{}", n(x), n(y)))
 }
 
+/// A name-derived id in UUID form, for other commands' named items.
+pub(crate) fn name_uuid(name: &str) -> String {
+    zone_uuid(name)
+}
+
 fn zone_uuid(name: &str) -> String {
     let h = |seed: u64| {
         let mut x: u64 = 0xcbf29ce484222325 ^ seed;
@@ -427,8 +432,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
         }
         if !keep.is_empty() {
             let v = keep.iter().map(|(k, c)| format!("{k}:{c}")).collect::<Vec<_>>().join(";");
-            let after = at(node.items()[1].span).1;
-            e.insert(after, format!("\n\t\t(property {} {} (at 0 0 0) (layer \"F.Fab\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))", sexpr::quote(OVERRIDES), sexpr::quote(&v), zone_uuid(&format!("pcb:override:{}", f.reference))));
+            crate::route::insert_lines(&mut e, src, f.span, &format!("\t\t(property {} {} (at 0 0 0) (layer \"F.Fab\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n", sexpr::quote(OVERRIDES), sexpr::quote(&v), zone_uuid(&format!("pcb:override:{}", f.reference))));
         }
     }
     // 3. net ties
