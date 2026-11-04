@@ -4,7 +4,7 @@ released Gerber set in one way, and verify must report it; the unmutated set mus
 Mutations, placed from the board (never named here): a copper bridge between the closest pads of two nets on F.Cu
 (short); a cut across a track of a two-pad net routed only on F.Cu (open); copper at the board edge (cu_edge); a
 0.12 mm silkscreen line (silk_line); silkscreen over an exposed pad (silk_on_copper); a hole beside a hole of another
-net (hole_hole); a 0.10 mm strip from a pad (trace); copper 0.10 mm from a pad (gap).
+net (hole_hole); a track necked to 0.10 mm (trace); copper 0.10 mm from a pad (gap).
 
 Usage: python3 verify_mutations.py gerber_dir board.kicad_pcb workdir
 """
@@ -33,6 +33,13 @@ def gfile(d, suffix):
 def region(x0, y0, x1, y1, dark=True):
     u = lambda v: str(int(round(v * 1e6)))
     return [f"%LP{'D' if dark else 'C'}*%", "G36*", f"X{u(x0)}Y{u(y0)}D02*", f"X{u(x1)}Y{u(y0)}D01*", f"X{u(x1)}Y{u(y1)}D01*", f"X{u(x0)}Y{u(y1)}D01*", f"X{u(x0)}Y{u(y0)}D01*", "G37*", "%LPD*%"]
+
+
+def poly(pts, dark=True):
+    u = lambda v: str(int(round(v * 1e6)))
+    out = [f"%LP{'D' if dark else 'C'}*%", "G36*", f"X{u(pts[0][0])}Y{u(pts[0][1])}D02*"]
+    out += [f"X{u(x)}Y{u(y)}D01*" for x, y in pts[1:] + pts[:1]]
+    return out + ["G37*", "%LPD*%"]
 
 
 def append(path, lines):
@@ -85,6 +92,21 @@ pw = mm(max(exposed.GetSize().x, exposed.GetSize().y))
 via = next(t for t in b.GetTracks() if t.GetClass() == "PCB_VIA")
 vx, vy = gxy(via.GetPosition())
 
+def neck():
+    ux, uy = (tx - sx), (ty - sy)
+    L = math.hypot(ux, uy)
+    ux, uy = ux / L, uy / L
+    nx, ny = -uy, ux
+    w = mm(cut.GetWidth())
+    out = []
+    for side in (1, -1):
+        a0, a1 = 0.05, w / 2 + 0.01
+        pts = [(mx + side * nx * a0 - ux * 0.2, my + side * ny * a0 - uy * 0.2), (mx + side * nx * a1 - ux * 0.2, my + side * ny * a1 - uy * 0.2),
+               (mx + side * nx * a1 + ux * 0.2, my + side * ny * a1 + uy * 0.2), (mx + side * nx * a0 + ux * 0.2, my + side * ny * a0 + uy * 0.2)]
+        out += poly(pts, dark=False)
+    return out
+
+
 MUT = {
     "short": ("shorts", lambda d: append(gfile(d, "F_Cu.gbr"), region(min(ax, bx) - 0.1, min(ay, by) - 0.1, max(ax, bx) + 0.1, max(ay, by) + 0.1))),
     "open": ("opens", lambda d: append(gfile(d, "F_Cu.gbr"), region(mx - 0.3, my - 0.3, mx + 0.3, my + 0.3, dark=False))),
@@ -92,7 +114,9 @@ MUT = {
     # 0.12 mm: under the 0.15 mm floor, over the 0.09 mm an older rule held (review 15, 8)
     "silk_line": ("silk_line", lambda d: append(gfile(d, "F_Silkscreen.gbr"), region(ex0 + 1.0, ey_mid + 3.0, ex0 + 3.0, ey_mid + 3.12))),
     # a 0.10 mm strip from a pad: narrow copper joined to wide copper (review 15, 7)
-    "trace": ("trace", lambda d: append(gfile(d, "F_Cu.gbr"), region(px - 0.05, py, px + 0.05, py + pw / 2 + 1.2))),
+    # a track necked to 0.10 mm: copper cleared from both sides of its middle (review 15, 7; on a board under a
+    # pour, a strip added beside a pad would merge with the pour)
+    "trace": ("trace", lambda d: append(gfile(d, "F_Cu.gbr"), neck())),
     # a square 0.10 mm from a pad's edge
     "gap": ("gap", lambda d: append(gfile(d, "F_Cu.gbr"), region(px + pw / 2 + 0.1, py - 0.2, px + pw / 2 + 0.5, py + 0.2))),
     "silk_on_copper": ("silk_on_copper", lambda d: append(gfile(d, "F_Silkscreen.gbr"), region(px - 0.2, py - 0.2, px + 0.2, py + 0.2))),
@@ -124,7 +148,20 @@ def verify(d):
 
 
 v0 = verify(gdir)
-results = {"unmutated clean": not (v0["opens"] or v0["shorts"] or v0["unplaced_pads"] or v0["dfm"])}
+# the project's own dfm waivers (pcb.toml beside the board): what release accepts is the clean baseline
+waived = {}
+toml = os.path.join(os.path.dirname(os.path.abspath(board)), "pcb.toml")
+if os.path.exists(toml):
+    import tomllib
+    for w in tomllib.load(open(toml, "rb")).get("waiver", []):
+        if w.get("check") == "dfm":
+            waived[w["item"]] = w.get("max", 1)
+counts = {}
+for f in v0["dfm"]:
+    k = f"{f['rule']} {f['layer']}"
+    counts[k] = counts.get(k, 0) + 1
+base = {(f["rule"], f["layer"], tuple(f["at"])) for f in v0["dfm"]}
+results = {"unmutated clean": not (v0["opens"] or v0["shorts"] or v0["unplaced_pads"]) and all(n <= waived.get(k, 0) for k, n in counts.items())}
 for name, (want, fn) in MUT.items():
     d = os.path.join(work, name)
     shutil.rmtree(d, ignore_errors=True)
@@ -135,7 +172,7 @@ for name, (want, fn) in MUT.items():
         ok = bool(v[want])
         got = v[want][:2]
     else:
-        hit = [f for f in v["dfm"] if f["rule"] == want]
+        hit = [f for f in v["dfm"] if f["rule"] == want and (f["rule"], f["layer"], tuple(f["at"])) not in base]
         ok = bool(hit)
         got = hit[:1]
     results[f"{name} caught"] = ok
