@@ -42,39 +42,49 @@ clearance_mm = 0.25
 min_width_mm = 0.3
 priority = 2
 
-# Where two fills meet, the higher fill_priority keeps the copper. Spike 3 left that to KiCad's order among zones of
-# one priority; these give the same choices, so the fill areas the fixture expects still hold: BAT_F over BAT_RAW,
-# both over VBAT, VBUS over VBUS_F, V5_LED over V5_LED_SW.
-[nets.BAT_RAW]
-fill_grow_mm = 2.0
-fill_priority = 3
-[nets.BAT_F]
-fill_grow_mm = 2.5
-fill_priority = 4
-[nets.VBAT]
-fill_grow_mm = 2.5
-[nets.SW_BOOST]
-fill_grow_mm = 1.0
-[nets.VBOOST]
-fill_grow_mm = 1.0
-[nets.VBUS]
-fill_grow_mm = 1.0
-fill_priority = 3
-[nets.VBUS_F]
-fill_grow_mm = 1.0
-[nets.V5]
-fill_grow_mm = 1.0
+# Where two fills meet, the higher fill_priority keeps the copper. Every pair that overlaps has its own priority, so
+# KiCad's zone order never decides (pcb zone warns fill-overlap otherwise). The order gives the fill areas the fixture
+# expects: BAT_F over BAT_RAW, the battery and USB nets over the rest, and the boost switch node SW_BOOST under its
+# neighbours.
 [nets.LYRA_5V]
 fill_grow_mm = 1.0
-[nets.V5_LED_SW]
-fill_grow_mm = 1.0
-[nets.V5_LED]
-fill_grow_mm = 1.0
 fill_priority = 3
-[nets.V5_LYRA]
-fill_grow_mm = 1.0
 [nets.LYRA_5V_D]
 fill_grow_mm = 1.0
+fill_priority = 4
+[nets.SW_BOOST]
+fill_grow_mm = 1.0
+fill_priority = 5
+[nets.V5]
+fill_grow_mm = 1.0
+fill_priority = 6
+[nets.V5_LED_SW]
+fill_grow_mm = 1.0
+fill_priority = 7
+[nets.V5_LYRA]
+fill_grow_mm = 1.0
+fill_priority = 8
+[nets.VBAT]
+fill_grow_mm = 2.5
+fill_priority = 9
+[nets.VBOOST]
+fill_grow_mm = 1.0
+fill_priority = 10
+[nets.VBUS_F]
+fill_grow_mm = 1.0
+fill_priority = 11
+[nets.VBUS]
+fill_grow_mm = 1.0
+fill_priority = 12
+[nets.V5_LED]
+fill_grow_mm = 1.0
+fill_priority = 13
+[nets.BAT_RAW]
+fill_grow_mm = 2.0
+fill_priority = 14
+[nets.BAT_F]
+fill_grow_mm = 2.5
+fill_priority = 15
 
 # the NFC coil, drawn as tracks on its own net, becomes copper inside L601: a net tie joining pads 1 and 3
 [[net_tie]]

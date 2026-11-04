@@ -19,15 +19,20 @@ use crate::board::{rotate, Board, Pad};
 use crate::contract::refused;
 use crate::gate::Gate;
 use crate::project::Loaded;
-use crate::sexpr::{self, fmt_num as n, Edits, Node};
+use crate::sexpr::{self, fmt_num as n, Edits};
 use anyhow::Result;
-use geo::{BooleanOps, Buffer, Contains, Coord, Distance, Euclidean, LineString, MultiPolygon, Point, Polygon, Simplify};
+use geo::{Area, BooleanOps, Buffer, Contains, Coord, Distance, Euclidean, LineString, MultiPolygon, Point, Polygon, Simplify};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Every zone this command makes has a name starting with this.
 pub const PREFIX: &str = "pcb:";
+/// The hidden footprint property that records the pads' own zone connections under an override (`NUM:CODE;...`,
+/// -1 for none of their own).
+const OVERRIDES: &str = "pcb:pad_override";
+/// The most grid points one `[[stitch]]` entry may try.
+const MAX_STITCH_POINTS: f64 = 1.0e6;
 
 #[derive(Serialize, Default)]
 pub struct Report {
@@ -41,6 +46,10 @@ pub struct Report {
     /// Per net tie: the footprint, its pad group, and what the absorbed net's copper became.
     pub net_ties: Vec<TieMade>,
     pub stitch_vias: BTreeMap<String, usize>,
+    /// `NET:LAYER` for each stitching net with no fill on a copper layer, where it can place no via.
+    pub stitch_unfilled: Vec<String>,
+    /// Fills of two nets that overlap at one priority, so KiCad's zone order alone decides which keeps the copper.
+    pub fill_overlaps: Vec<String>,
     pub fixed: Vec<String>,
     pub regressions: Vec<String>,
     /// DRC kinds that grew within an owner's allowance.
@@ -191,6 +200,13 @@ fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> R
         if !b.nets.contains(an) {
             return Err(refused("config", format!("net_tie {}: no net {an} on the board, and the footprint has no tie group {group:?} from an earlier run", t.footprint)));
         }
+        // the vias' net must be on the board, and the absorbed net must be tracks and vias only (review 13, 11 and 14)
+        if !b.nets.contains(&vnet) {
+            return Err(refused("config", format!("net_tie {}: absorb_vias_net {vnet} is not a net on the board", t.footprint)));
+        }
+        if let Some((g, q)) = b.footprints.iter().flat_map(|g| g.pads.iter().map(move |q| (g, q))).find(|(_, q)| &q.net == an) {
+            return Err(refused("config", format!("net_tie {}: {an} has pad {}.{}; pcb zone absorbs only a net of tracks and vias", t.footprint, g.reference, q.number)));
+        }
         // vias become plated pads, numbered on from the footprint's highest pad number, in x then y order
         let mut vias: Vec<&crate::board::Via> = b.vias.iter().filter(|v| &v.net == an).collect();
         vias.sort_by(|a, c| (a.x, a.y).partial_cmp(&(c.x, c.y)).unwrap());
@@ -208,11 +224,17 @@ fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> R
             crate::route::remove(e, src, v.span);
             next += 1;
         }
-        // the net a run end meets: a pad of another net, or one of the new via pads
-        let pad_net = |q: (f64, f64)| -> Option<String> {
-            b.footprints.iter().flat_map(|g| g.pads.iter()).find(|p| p.net != *an && !p.net.is_empty() && pad_has(p, q)).map(|p| p.net.clone())
-                .or_else(|| nodes.iter().find(|(c, _, r)| (q.0 - c.0).hypot(q.1 - c.1) <= *r + 1e-3).map(|(_, nn, _)| nn.clone()))
+        // what a run end meets on its layer: a pad of another net (with whether it is the tie footprint's), or one
+        // of the new via pads; a pad on another layer is not met (review 13, 10)
+        let met = |q: (f64, f64), layer: &str| -> Option<(String, bool)> {
+            b.footprints
+                .iter()
+                .flat_map(|g| g.pads.iter().map(move |p| (g, p)))
+                .find(|(_, p)| p.net != *an && !p.net.is_empty() && on_layer(p, layer) && pad_has(p, q))
+                .map(|(g, p)| (p.net.clone(), g.span == f.span))
+                .or_else(|| nodes.iter().find(|(c, _, r)| (q.0 - c.0).hypot(q.1 - c.1) <= *r + 1e-3).map(|(_, nn, _)| (nn.clone(), true)))
         };
+        let pad_net = |q: (f64, f64), layer: &str| met(q, layer).map(|m| m.0);
         // runs of absorbed-net tracks between nodes: a run whose two ends meet one net takes it, otherwise it is
         // copper inside the footprint
         let tracks: Vec<usize> = (0..b.tracks.len()).filter(|k| &b.tracks[*k].net == an).collect();
@@ -231,7 +253,7 @@ fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> R
                 let mut cur = k0;
                 loop {
                     let lay = &b.tracks[cur].layer;
-                    if pad_net(q).is_some() {
+                    if pad_net(q, lay).is_some() {
                         break;
                     }
                     let nxt: Vec<usize> = tracks.iter().copied().filter(|&j| j != cur && b.tracks[j].layer == *lay && (near((b.tracks[j].x0, b.tracks[j].y0), q) || near((b.tracks[j].x1, b.tracks[j].y1), q))).collect();
@@ -244,9 +266,20 @@ fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> R
                     let t2 = &b.tracks[cur];
                     q = if near((t2.x0, t2.y0), q) { (t2.x1, t2.y1) } else { (t2.x0, t2.y0) };
                 }
-                ends.push(q);
+                ends.push((q, b.tracks[cur].layer.clone()));
             }
-            let (na, nb) = (pad_net(ends[0]), pad_net(ends[1]));
+            let (ma, mb) = (met(ends[0].0, &ends[0].1), met(ends[1].0, &ends[1].1));
+            // a run must end at a pad or via pad at each end; tie copper must join the tie footprint's own pads
+            for (m, (q, l)) in [(&ma, &ends[0]), (&mb, &ends[1])] {
+                if m.is_none() {
+                    return Err(refused("config", format!("net_tie {}: an {an} run ends at ({}, {}) on {l} on no pad or via (a junction or a free end), which pcb zone cannot place", t.footprint, n(q.0), n(q.1))));
+                }
+            }
+            let (ma, mb) = (ma.unwrap(), mb.unwrap());
+            if ma.0 != mb.0 && !(ma.1 && mb.1) {
+                return Err(refused("config", format!("net_tie {}: an {an} run joins {} and {}, not both at pads of {} or its via pads, so it would short other parts", t.footprint, ma.0, mb.0, t.footprint)));
+            }
+            let (na, nb) = (Some(ma.0), Some(mb.0));
             match (na, nb) {
                 (Some(x), Some(y)) if x == y => {
                     for &k in &run {
@@ -341,13 +374,13 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
             rep.removed_stitch_vias += 1;
         }
     }
-    // 2. pad overrides
+    // 2. pad overrides. A footprint a run overrides keeps the pads' own settings in a hidden property, so a later
+    // run without the entry puts them back (review 13, 7).
+    let mut want: BTreeMap<(usize, usize), BTreeMap<String, i32>> = BTreeMap::new();
     for o in &p.pad_override {
         let (r, num) = o.pad.split_once('.').unwrap_or((&o.pad, ""));
         let f = b.footprint_by_ref(r).ok_or_else(|| refused("config", format!("pad_override {}: no footprint {r}", o.pad)))?;
-        let node = sexpr::parse(&src[f.span.0..f.span.1])?;
-        let pads: Vec<&Node> = node.items().iter().filter(|c| c.is("pad") && c.arg(1) == Some(num)).collect();
-        if pads.is_empty() {
+        if !f.pads.iter().any(|q| q.number == num) {
             return Err(refused("config", format!("pad_override {}: {r} has no pad {num}", o.pad)));
         }
         let code = match o.zone_connection.as_str() {
@@ -355,14 +388,48 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
             "thermal" => 1,
             _ => 2,
         };
-        for pd in pads {
-            let at = |sp: (usize, usize)| (f.span.0 + sp.0 - node.span.0, f.span.0 + sp.1 - node.span.0);
-            match pd.find("zone_connect") {
-                Some(z) => e.replace(at(z.span), format!("(zone_connect {code})")),
-                None => e.insert(f.span.0 + pd.span.1 - 1 - node.span.0, format!(" (zone_connect {code})")),
+        want.entry(f.span).or_default().insert(num.to_string(), code);
+        rep.pad_overrides.push(format!("{} {}", o.pad, o.zone_connection));
+    }
+    for f in &b.footprints {
+        let node = sexpr::parse(&src[f.span.0..f.span.1])?;
+        let at = |sp: (usize, usize)| (f.span.0 + sp.0 - node.span.0, f.span.0 + sp.1 - node.span.0);
+        let prop = node.find_all("property").find(|q| q.arg(1) == Some(OVERRIDES));
+        let recorded: BTreeMap<String, i32> = prop
+            .and_then(|q| q.arg(2))
+            .map(|v| v.split(';').filter_map(|kv| kv.split_once(':')).filter_map(|(k, c)| c.parse().ok().map(|c| (k.to_string(), c))).collect())
+            .unwrap_or_default();
+        let w = want.get(&f.span);
+        if prop.is_none() && w.is_none() {
+            continue;
+        }
+        if let Some(q) = prop {
+            crate::route::remove(&mut e, src, at(q.span));
+        }
+        let mut keep: BTreeMap<String, i32> = BTreeMap::new();
+        for pd in node.items().iter().filter(|c| c.is("pad")) {
+            let num = pd.arg(1).unwrap_or("").to_string();
+            let zc = pd.find("zone_connect");
+            let current = zc.and_then(|z| z.arg(1)).and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
+            let original = recorded.get(&num).copied().unwrap_or(current);
+            let desired = w.and_then(|w| w.get(&num)).copied().unwrap_or(original);
+            if w.is_some_and(|w| w.contains_key(&num)) {
+                keep.entry(num.clone()).or_insert(original);
+            }
+            if desired == current {
+                continue;
+            }
+            match (zc, desired) {
+                (Some(z), -1) => crate::route::remove(&mut e, src, at(z.span)),
+                (Some(z), d) => e.replace(at(z.span), format!("(zone_connect {d})")),
+                (None, d) => e.insert(f.span.0 + pd.span.1 - 1 - node.span.0, format!(" (zone_connect {d})")),
             }
         }
-        rep.pad_overrides.push(format!("{} {}", o.pad, o.zone_connection));
+        if !keep.is_empty() {
+            let v = keep.iter().map(|(k, c)| format!("{k}:{c}")).collect::<Vec<_>>().join(";");
+            let after = at(node.items()[1].span).1;
+            e.insert(after, format!("\n\t\t(property {} {} (at 0 0 0) (layer \"F.Fab\") (hide yes) (uuid \"{}\") (effects (font (size 1 1) (thickness 0.15))))", sexpr::quote(OVERRIDES), sexpr::quote(&v), zone_uuid(&format!("pcb:override:{}", f.reference))));
+        }
     }
     // 3. net ties
     for t in &p.net_tie {
@@ -375,7 +442,8 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     let all = rect(bx0, by0, bx1, by1);
     let all_cu: Vec<String> = b1.copper_layers.clone();
     let mut zones = String::new();
-    let mut pour_keepouts = MultiPolygon::new(vec![]);
+    let mut pour_keepouts: BTreeMap<String, MultiPolygon<f64>> = BTreeMap::new();
+    let mut via_keepouts: Vec<Polygon<f64>> = vec![];
     for k in &p.keepout {
         let g = k.grow_mm.unwrap_or(0.0);
         let poly = rect(k.rect[0] - g, k.rect[1] - g, k.rect[2] + g, k.rect[3] + g);
@@ -385,8 +453,15 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
         };
         let name = format!("{PREFIX}keepout:{}", k.name);
         zones.push_str(&keepout_text(&name, &layers, &k.forbid, &poly));
+        // a pour keep-out cuts fills only on its own layers (review 13, 6)
         if k.forbid.iter().any(|f| f == "pour") {
-            pour_keepouts = pour_keepouts.union(&MultiPolygon::new(vec![poly]));
+            for l in &layers {
+                let m = pour_keepouts.remove(l).unwrap_or_else(|| MultiPolygon::new(vec![]));
+                pour_keepouts.insert(l.clone(), m.union(&MultiPolygon::new(vec![poly.clone()])));
+            }
+        }
+        if k.forbid.iter().any(|f| f == "via") {
+            via_keepouts.push(poly.clone());
         }
         rep.zones.push(ZoneMade { name, kind: "keepout".into(), net: String::new(), layers, priority: 0 });
     }
@@ -411,11 +486,14 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     let fr = p.fill.as_ref();
     let outer: Vec<String> = ["F.Cu", "B.Cu"].iter().map(|s| s.to_string()).filter(|l| all_cu.contains(l)).collect();
     let fill_layers = fr.and_then(|f| f.layers.clone()).unwrap_or(outer);
+    // each fill's outline and priority, per layer, to find overlaps KiCad would settle by zone ids alone
+    let mut outlines: Vec<(String, String, u32, MultiPolygon<f64>)> = vec![];
     for (net, r) in &p.nets {
         let Some(grow) = r.fill_grow_mm else { continue };
         for layer in &fill_layers {
-            let shape = grown_copper(&b1, net, layer, grow).intersection(&MultiPolygon::new(vec![all.clone()])).difference(&pour_keepouts);
+            let shape = grown_copper(&b1, net, layer, grow).intersection(&MultiPolygon::new(vec![all.clone()])).difference(pour_keepouts.get(layer).unwrap_or(&MultiPolygon::new(vec![])));
             let shape = shape.simplify(0.01);
+            outlines.push((net.clone(), layer.clone(), r.fill_priority.or(fr.and_then(|f| f.priority)).unwrap_or(2), shape.clone()));
             for (i, poly) in shape.0.iter().enumerate() {
                 let s = Spec {
                     name: format!("{PREFIX}fill:{net}:{layer}:{i}"),
@@ -433,11 +511,31 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
             }
         }
     }
+    // two nets' fills that overlap at one priority: which keeps the copper follows the zone ids, a choice nobody
+    // made, so the owner is told to set fill_priority (P27, a one-pass fill that starved VBOOST)
+    for (i, a) in outlines.iter().enumerate() {
+        for c in &outlines[i + 1..] {
+            if a.0 != c.0 && a.1 == c.1 && a.2 == c.2 {
+                let area = a.3.intersection(&c.3).unsigned_area();
+                if area > 0.01 {
+                    rep.fill_overlaps.push(format!("{} and {} on {}: {area:.2} mm² at priority {}", a.0, c.0, a.1, a.2));
+                }
+            }
+        }
+    }
     let close = b1.root.span.1 - 1;
     let mut e2 = Edits::default();
     e2.insert(close, zones);
     let mut text2 = e2.apply(&text1)?;
-    // 5. stitching vias, from the fills KiCad makes for these zones
+    // 5. stitching vias, from the fills KiCad makes for these zones; a grid too fine for its area is refused
+    // before any fill (review 13, 5)
+    for st in &p.stitch {
+        let [x0, y0, x1, y1] = st.rect.unwrap_or([bx0, by0, bx1, by1]);
+        let count = ((x1 - x0) / st.pitch_mm + 1.0) * ((y1 - y0) / st.pitch_mm + 1.0);
+        if !(count <= MAX_STITCH_POINTS) {
+            return Err(refused("config", format!("stitch {}: a {} mm pitch over that area tries {count:.0} points, more than {MAX_STITCH_POINTS:.0}", st.net, st.pitch_mm)));
+        }
+    }
     if !p.stitch.is_empty() {
         let filled_path = work.join("stitch_filled.kicad_pcb");
         std::fs::write(&filled_path, &text2)?;
@@ -445,8 +543,15 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
         crate::kicad::helper(work, &["fill", filled_path.to_str().unwrap()])?;
         let bf = Board::load(filled_path.to_str().unwrap())?;
         let mut vias = String::new();
+        let mut placed: Vec<(f64, f64, f64)> = vec![];
         for st in &p.stitch {
-            let pts = stitch_points(&bf, st);
+            for l in &bf.copper_layers {
+                if !bf.zones.iter().any(|z| z.net == st.net && z.filled.iter().any(|(fl, _)| fl == l)) {
+                    rep.stitch_unfilled.push(format!("{}:{l}", st.net));
+                }
+            }
+            let pts = stitch_points(&bf, st, &via_keepouts, &placed);
+            placed.extend(pts.iter().map(|(x, y)| (*x, *y, st.size_mm)));
             for (x, y) in &pts {
                 vias.push_str(&format!("\t(via (at {} {}) (size {}) (drill {}) (layers \"F.Cu\" \"B.Cu\") (net {}) (uuid \"{}\"))\n", n(*x), n(*y), n(st.size_mm), n(st.drill_mm), sexpr::quote(&st.net), stitch_uuid(&st.net, *x, *y)));
             }
@@ -470,8 +575,9 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
 }
 
 /// Grid points where a via of `st` sits inside the net's fill on every copper layer, its edge at least the margin
-/// inside each fill, and clear of every pad and via by its own size plus the margin.
-fn stitch_points(b: &Board, st: &crate::project::Stitch) -> Vec<(f64, f64)> {
+/// inside each fill, clear of every pad's outline and every via (on the board, or placed by an earlier entry) by the
+/// margin, and outside keep-outs that forbid vias.
+fn stitch_points(b: &Board, st: &crate::project::Stitch, keepouts: &[Polygon<f64>], placed: &[(f64, f64, f64)]) -> Vec<(f64, f64)> {
     let r = st.size_mm / 2.0;
     let margin = st.margin_mm.unwrap_or(0.3);
     let (bx0, by0, bx1, by1) = b.bbox();
@@ -492,7 +598,8 @@ fn stitch_points(b: &Board, st: &crate::project::Stitch) -> Vec<(f64, f64)> {
         }
         per_layer.push(polys);
     }
-    let pads: Vec<&Pad> = b.footprints.iter().flat_map(|f| f.pads.iter()).collect();
+    // pads by their turned outline, so a via cannot sit on a square pad's corner (review 13, 3)
+    let pads: Vec<MultiPolygon<f64>> = b.footprints.iter().flat_map(|f| f.pads.iter()).map(pad_rect).collect();
     let mut out = vec![];
     let mut y = y0 + st.pitch_mm / 2.0;
     while y < y1 {
@@ -501,8 +608,10 @@ fn stitch_points(b: &Board, st: &crate::project::Stitch) -> Vec<(f64, f64)> {
             let pt = Point::new(x, y);
             let ok = per_layer.iter().all(|polys| {
                 polys.iter().any(|pg| pg.contains(&pt) && Euclidean.distance(&pt, pg.exterior()) >= r + margin && pg.interiors().iter().all(|h| Euclidean.distance(&pt, h) >= r + margin))
-            }) && pads.iter().all(|p| (x - p.x).hypot(y - p.y) >= r + margin + p.w.max(p.h) / 2.0)
-                && b.vias.iter().all(|v| (x - v.x).hypot(y - v.y) >= r + margin + v.size / 2.0);
+            }) && pads.iter().all(|p| !p.contains(&pt) && Euclidean.distance(&pt, p) >= r + margin)
+                && b.vias.iter().all(|v| (x - v.x).hypot(y - v.y) >= r + margin + v.size / 2.0)
+                && placed.iter().all(|(vx, vy, vs)| (x - vx).hypot(y - vy) >= r + margin + vs / 2.0)
+                && keepouts.iter().all(|k| !k.contains(&pt) && Euclidean.distance(&pt, k) >= r);
             if ok {
                 out.push((x, y));
             }

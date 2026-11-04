@@ -13,6 +13,7 @@
 | `review10/` | Review 10's probes (zone pairing without uuids and in copied footprints, joins through stale or empty fills, diff on KiCad re-saves and copper graphics, multi-segment prewire stubs), with their verdicts in `check.py` |
 | `review11/` | Review 11's probes (the gate's markers on never-filled, hand-written and copied zones; prewire stubs anchored in a never-filled zone or joined at a bend; diff misses and KiCad re-saves of hand-written text), with their verdicts in `check.py` |
 | `review12/` | Review 12's probes (markers against colliding ids, shared uuids, groups and pasted footprints; copper text and graphics changes and re-saves; two prewire stubs at one pad), with their verdicts in `check.py` |
+| `review13/` | Review 13's probes of `pcb zone` (stitching, features, net ties, refusals, the fill flag, the badge), with their verdicts in `check.py` |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

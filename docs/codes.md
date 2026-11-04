@@ -47,6 +47,8 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `still-open` | route | A requested net is still not fully connected |
 | `pinless-net` | route | A net with copper but no pads was declared to Freerouting |
 | `repeated-ref` | diff | A reference appears more than once on a board; repeats are matched in file order |
+| `fill-overlap` | zone | Two nets' fills overlap at the same priority, so which keeps the copper follows KiCad's zone order, not a choice; set `fill_priority` on one |
+| `stitch-no-fill` | zone | A `[[stitch]]` net has no fill on some copper layer, so it gets no stitching vias; the message names the net and layer |
 | `drc-allowed` | zone | A DRC kind grew within its `pcb.toml [[drc_allow]]` allowance; the message names it |
 | `second-run-failed` | route | The router's second run (no region keep-outs) failed or timed out; the first run's result stands |
 | `join-outside-region` | route | The router joined tracks wholly outside the region in their middle; they were left unsplit |

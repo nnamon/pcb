@@ -143,6 +143,8 @@ if v.get("outcome") == "done":
            "every stitching via sits inside the GND fill on both layers")
     left = [t for t in drc(out) if t != "silk_over_copper"]
     expect("full", left == [] and data.get("regressions") == [], f"DRC after, apart from silk: {left}")
+    # P29: pours once cut the rings of their own vias; every stitching via joins the pour
+    expect("full", "via_dangling" not in left and "unconnected_items" not in left, "P29: no stitching via left floating")
 
     # 2. the same input twice gives the same bytes
     v2, out2 = run("full_twice", d)
@@ -200,7 +202,57 @@ if v.get("outcome") == "done":
         if want == "done" and ok:
             expect(name, any(w.get("code") == "drc-allowed" for w in vv.get("warnings", [])), "an allowed growth is a drc-allowed warning")
 
-# 6. refusals: nothing written, the code and the cause named
+    # 6. P28: a fill grown over pads of the pour's net cuts them off; the gate rejects the run and names the net
+    dd = os.path.join(work, "fill_isolates_gnd")
+    shutil.copytree(d3, dd)
+    open(os.path.join(dd, "pcb.toml"), "w").write(open(os.path.join(d3, "pcb.toml")).read().replace("fill_grow_mm = 1.0", "fill_grow_mm = 12.0"))
+    vv, oo = run("fill_isolates_gnd", dd)
+    regs = vv.get("data", {}).get("regressions", [])
+    expect("fill_isolates_gnd", vv.get("outcome") == "rejected" and any(x.startswith("unconnected_items GND") for x in regs) and not os.path.exists(oo),
+           f"P28: rejected with GND cut off (got {vv.get('outcome')} {regs})")
+
+    # 7. a dropped pad override puts the pad's own setting back
+    dd = os.path.join(work, "override_dropped")
+    shutil.copytree(d3, dd)
+    open(os.path.join(dd, "pcb.toml"), "w").write(open(os.path.join(d3, "pcb.toml")).read().replace('[[pad_override]]\npad = "G3.1"\nzone_connection = "solid"\n', ""))
+    vv, oo = run("override_dropped", dd)
+    if vv.get("outcome") == "done":
+        ro = inspect(oo)
+        expect("override_dropped", ro["fps"]["G3"]["pads"]["1"]["conn"] == -1 and "pcb:pad_override" not in open(oo).read(), f"G3.1 back to the zone's setting ({ro['fps']['G3']['pads']['1']['conn']})")
+    else:
+        expect("override_dropped", False, f"done (got {vv.get('outcome')} {vv.get('error')})")
+
+# 8. P27: two nets' fills overlapping at one priority are warned; a fill_priority settles it and the warning goes
+grow_a = lambda t: t + "\n[nets.A]\nfill_grow_mm = 11.5\n"
+for name, edit, warned in [("overlap_warned", grow_a, True), ("overlap_settled", lambda t: grow_a(t).replace("[nets.P]\nfill_grow_mm = 1.0", "[nets.P]\nfill_grow_mm = 1.0\nfill_priority = 5"), False)]:
+    dd = build(name, edit=edit)
+    vv, oo = run(name, dd)
+    w = [x for x in vv.get("warnings", []) if x.get("code") == "fill-overlap"]
+    expect(name, vv.get("outcome") == "done" and bool(w) == warned and (not warned or "A and P on F.Cu" in w[0]["message"]), f"P27: fill-overlap {'warned' if warned else 'not warned'} (got {vv.get('outcome')} {vv.get('error')} {w})")
+    if name == "overlap_settled" and vv.get("outcome") == "done":
+        rr = inspect(oo)
+        pz = [z for z in rr["zones"] if z["net"] == "P" and z["name"].startswith("pcb:fill")]
+        pa = sum(Polygon(q).buffer(0).area for z in pz for _, q in z["filled"])
+        expect(name, pa > 30, f"P27: P keeps its fill under the bigger A fill ({pa:.1f} mm²)")
+
+# 9. stitching around a via keep-out and a big own-net pad; a pour keep-out on one layer leaves the other's fill
+dd = build("stitch_limits", edit=lambda t: t.replace('forbid = ["pour"]', 'forbid = ["pour", "via"]').replace('layers = "all"', 'layers = ["B.Cu"]').replace("pitch_mm = 8", "pitch_mm = 2"))
+vv, oo = run("stitch_limits", dd)
+if vv.get("outcome") == "done":
+    from shapely.geometry import Polygon, box, Point
+    rs = inspect(oo)
+    sv = [x for x in rs["vias"] if x["net"] == "GND"]
+    expect("stitch_limits", sv and not any(box(44, 2, 58, 14).buffer(0.3).contains(Point(x["x"], x["y"])) for x in sv), f"{len(sv)} vias, none in the via keep-out")
+    pads = [(n, p) for n, f in rs["fps"].items() for p in f["pads"].values()]
+    near = [(x["x"], x["y"]) for x in sv for n, p in pads if box(p["x"] - 0.5, p["y"] - 0.5, p["x"] + 0.5, p["y"] + 0.5).distance(Point(x["x"], x["y"])) < 0.3 + 0.3 - 1e-6]
+    expect("stitch_limits", not near, f"no via within its radius plus margin of a pad outline {near[:3]}")
+    fF = [z for z in rs["zones"] if z["name"] == "pcb:zone:GND:F.Cu"][0]
+    aF = sum(Polygon(q).buffer(0).intersection(box(44, 2, 58, 14)).area for _, q in fF["filled"])
+    expect("stitch_limits", aF > 50, f"a B.Cu-only pour keep-out leaves the F.Cu pour inside it ({aF:.1f} mm²)")
+else:
+    expect("stitch_limits", False, f"done (got {vv.get('outcome')} {vv.get('error')})")
+
+# 10. refusals: nothing written, the code and the cause named
 refused("unknown_zone_net", "base", lambda t: t.replace('net = "GND"\nlayers = ["F.Cu", "B.Cu"]', 'net = "NOPE"\nlayers = ["F.Cu", "B.Cu"]'), "config", "NOPE")
 refused("unknown_fill_net", "base", lambda t: t.replace("[nets.P]", "[nets.Q]"), "config", "Q")
 refused("unknown_layer", "base", lambda t: t.replace('layers = ["F.Cu", "B.Cu"]', 'layers = ["F.Cu", "In1.Cu"]'), "config", "In1.Cu")
@@ -217,7 +269,16 @@ refused("allow_without_why", "base", lambda t: t + '\n[[drc_allow]]\nkind = "cle
 # a tie whose absorbed net is gone from a board that never had the tie group is not an earlier run's work
 refused("net_tie_absorbed_net_missing", "nox", lambda t: t.replace('pads = ["1", "2"]', 'pads = ["1", "2"]\nabsorb_net = "X"\nabsorb_vias_net = "B"'), "config", "X")
 
-# 7. a tie with no absorbing: the group is set and nothing else changes in the footprint
+refused("dup_zone", "base", lambda t: t + '\n[[zone]]\nnet = "GND"\nlayers = ["F.Cu"]\nclearance_mm = 0.3\n', "config", "twice")
+refused("dup_keepout", "base", lambda t: t + '\n[[keepout]]\nname = "k"\nrect = [1, 1, 5, 5]\nlayers = "all"\nforbid = ["pour"]\n', "config", "twice")
+refused("forbid_nothing", "base", lambda t: t.replace('forbid = ["pour"]', "forbid = []"), "config", "forbid")
+refused("clearance_inf", "base", lambda t: t.replace("clearance_mm = 0.3", "clearance_mm = inf"), "config", "finite")
+refused("pitch_tiny", "base", lambda t: t.replace("pitch_mm = 8", "pitch_mm = 0.0001\nmargin_mm = 0"), "config", "pitch")
+refused("grid_too_big", "base", lambda t: t.replace("pitch_mm = 8", "pitch_mm = 1\nrect = [-1e6, -1e6, 1e6, 1e6]"), "config", "points")
+refused("pitch_below_size", "base", lambda t: t.replace("pitch_mm = 8", "pitch_mm = 0.7"), "config", "pitch_mm")
+refused("vias_net_missing", "base", lambda t: t.replace('absorb_vias_net = "B"', 'absorb_vias_net = "NOPE"'), "config", "NOPE")
+
+# 11. a tie with no absorbing: the group is set and nothing else changes in the footprint
 dn = build("tie_only", "nox")
 vn, on = run("tie_only", dn)
 if vn.get("outcome") == "done":

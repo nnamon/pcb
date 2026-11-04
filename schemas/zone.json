@@ -33,6 +33,8 @@
      "pad_overrides",
      "net_ties",
      "stitch_vias",
+     "stitch_unfilled",
+     "fill_overlaps",
      "fixed",
      "regressions",
      "allowed",
@@ -107,6 +109,18 @@
         "retyped_tracks",
         "via_pads"
        ]
+      }
+     },
+     "fill_overlaps": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "stitch_unfilled": {
+      "type": "array",
+      "items": {
+       "type": "string"
       }
      },
      "stitch_vias": {

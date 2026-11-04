@@ -16,7 +16,9 @@ fills expected and the DRC kinds the zoned board may add. Reads both boards with
      `npth_gap` (default 0.2 mm); a stale fill fails here;
   H. every fill the fixture expects exists, with at least its minimum area;
   I. KiCad DRC (zones refilled, one board per process) finds no more violations of any kind and nets than on the
-     base, except the kinds the fixture allows, each with its reason.
+     base, except the kinds the fixture allows, each with its reason;
+  J. with `stitch = { net, min_new_vias }`: the zoned board has at least that many vias of the net the base lacks
+     (by position), none touching a pad's copper and none within its own radius of a keep-out (review 13, 2).
 It also prints copper area per net and layer next to an old pour file (circuit JSON), for comparison only.
 
 Usage: python3 verify_zones.py base.kicad_pcb zoned.kicad_pcb fixture.toml [old_pours.json]
@@ -98,6 +100,8 @@ if tie:
     coil_tracks = sorted((xy(t.GetStart()), xy(t.GetEnd()), t.GetWidth(), t.GetLayerName()) for t in base.GetTracks() if t.GetNetname() == tie["former_net"] and t.GetClass() != "PCB_VIA")
     coil_tracks = sorted(tuple(sorted((a, c))) + (w, l) for a, c, w, l in coil_tracks)
     coil_vias = sorted((xy(t.GetPosition()), t.GetWidth(pcbnew.F_Cu), t.GetDrillValue()) for t in base.GetTracks() if t.GetNetname() == tie["former_net"] and t.GetClass() == "PCB_VIA")
+st = Z.get("stitch")
+old_vias = {xy(t.GetPosition()) for t in base.GetTracks() if t.GetClass() == "PCB_VIA" and t.GetNetname() == st["net"]} if st else set()
 del base
 
 b = pcbnew.LoadBoard(zoned_p)
@@ -282,6 +286,21 @@ d0, d1 = child_drc(base_p), child_drc(zoned_p)
 for k in sorted(set(d0) | set(d1)):
     if d1[k] > d0[k] and d1[k] > allowed.get(k, d0[k]):
         fails.append(f"I: DRC {k} {d0[k]} -> {d1[k]}" + (f" (allowed {allowed[k]})" if k in allowed else ""))
+
+# J: stitching vias
+if st:
+    new = [t for t in b.GetTracks() if t.GetClass() == "PCB_VIA" and t.GetNetname() == st["net"] and xy(t.GetPosition()) not in old_vias]
+    if len(new) < st["min_new_vias"]:
+        fails.append(f"J: {len(new)} new {st['net']} vias, expected at least {st['min_new_vias']}")
+    pads_all = [(f.GetReference(), pd.GetNumber(), pad_poly(pd)) for f in b.GetFootprints() for pd in f.Pads()]
+    ptree = STRtree([g for _, _, g in pads_all])
+    for t in new:
+        c = Point(t.GetPosition().x / IU, t.GetPosition().y / IU).buffer(t.GetWidth(pcbnew.F_Cu) / IU / 2)
+        for i in ptree.query(c):
+            if pads_all[i][2].intersects(c):
+                fails.append(f"J: {st['net']} via at {xy(t.GetPosition())} touches pad {pads_all[i][0]}.{pads_all[i][1]}")
+        if keep_all.intersects(c):
+            fails.append(f"J: {st['net']} via at {xy(t.GetPosition())} is in a keep-out")
 
 # area comparison with the old pours
 area = {k: round(v.area, 1) for k, v in fill.items()}

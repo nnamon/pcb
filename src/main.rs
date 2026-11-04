@@ -467,7 +467,9 @@ fn run(cli: Cli) -> Result<Reply> {
             for g in &r.regressions {
                 h += &format!("\n  worse: {g}");
             }
-            let warnings: Vec<contract::Warning> = r.allowed.iter().map(|a| contract::warn("drc-allowed", format!("{a} (within pcb.toml drc_allow)"))).collect();
+            let mut warnings: Vec<contract::Warning> = r.allowed.iter().map(|a| contract::warn("drc-allowed", format!("{a} (within pcb.toml drc_allow)"))).collect();
+            warnings.extend(r.fill_overlaps.iter().map(|s| contract::warn("fill-overlap", format!("{s}; set fill_priority on one of them"))));
+            warnings.extend(r.stitch_unfilled.iter().map(|s| contract::warn("stitch-no-fill", format!("{s}: the net has no fill on this layer, so no stitching via can go anywhere"))));
             Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Diff { a, b, png } => {

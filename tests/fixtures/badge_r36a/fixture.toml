@@ -95,6 +95,10 @@ drc_allowed = [
   { kind = "starved_thermal GND", max = 2, why = "J102 pad 4: one top-layer spoke, and a solid pad override would remove its plane reliefs (check D; review 4, Z9); J701 pad 2: its top-layer relief reaches only an island of the GND pour, on every run with either zone ids (review 7, C5), and was hidden by the old allowance without a count; the plated hole still joins the GND planes; open: badge design after M4" },
   { kind = "clearance <no net> NFC_AC1", max = 2, why = "coil turn 0.075 mm from the inner via, now L601 pad 3 (review 4, Z6; open: badge design after M4); KiCad 10 reports it, KiCad 7 hid it inside the net tie" },
 ]
+# GND stitching vias pcb zone adds (202 on a 5 mm grid on 4 Nov 2026), none on a pad or in a keep-out
+stitch = { net = "GND", min_new_vias = 190 }
+# a plated GND pad whose solid override the oracle must catch (check D): J102 pad 4, one spoke on F.Cu (review 13, 2)
+solid_override_pad = "J102.4"
 # minimum spoke width (mm) for thermal reliefs on every GND zone
 spoke_min = 0.5
 # non-plated holes to fill: JLCPCB's minimum; review 4 (Z8) asks for 0.3, to be set in milestone M2

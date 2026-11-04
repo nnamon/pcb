@@ -31,6 +31,8 @@ else:
     tie = {"footprint": "", "pads": {}}
     tie_nets, moved_pad, wrong_group = [""], "", ""
 power = next(e["net"] for e in Z["expect_fill"] if e["net"] != plane)
+st_net = Z.get("stitch", {}).get("net", "")
+solid_pad = tuple(Z["solid_override_pad"].split(".", 1)) if Z.get("solid_override_pad") else ("", "")
 fx = repr
 
 # name -> (pcbnew code with `b` the loaded board, refill after?)
@@ -129,6 +131,28 @@ for s_, e_ in ((c, tip), (tip, c2)):
     t.SetNet(pad.GetNet())
     b.Add(t)
 """, True),
+    # review 13, 2: the stitching vias and a solid override on a plated plane pad
+    "stitch_removed": (f"""
+base_b = pcbnew.LoadBoard({base!r})
+old = {{(v.GetPosition().x, v.GetPosition().y) for v in base_b.GetTracks() if v.GetClass() == 'PCB_VIA' and v.GetNetname() == {fx(st_net)}}}
+for v in [v for v in b.GetTracks() if v.GetClass() == 'PCB_VIA' and v.GetNetname() == {fx(st_net)} and (v.GetPosition().x, v.GetPosition().y) not in old]:
+    b.Remove(v)
+""", True),
+    "stitch_on_pad": (f"""
+base_b = pcbnew.LoadBoard({base!r})
+old = {{(v.GetPosition().x, v.GetPosition().y) for v in base_b.GetTracks() if v.GetClass() == 'PCB_VIA' and v.GetNetname() == {fx(st_net)}}}
+v = next(v for v in b.GetTracks() if v.GetClass() == 'PCB_VIA' and v.GetNetname() == {fx(st_net)} and (v.GetPosition().x, v.GetPosition().y) not in old)
+pd = next(p for f in b.GetFootprints() for p in f.Pads() if p.GetNetname() == {fx(st_net)} and p.GetAttribute() == pcbnew.PAD_ATTRIB_SMD)
+v.SetPosition(pd.GetPosition())
+""", True),
+    "plated_pad_solid": (f"""
+ref, num = {fx(solid_pad)}
+if ref:
+    pd = next(p for p in b.FindFootprintByReference(ref).Pads() if p.GetNumber() == num)
+else:
+    pd = next(p for f in b.GetFootprints() for p in f.Pads() if p.GetNetname() == {fx(plane)} and p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH)
+pd.SetLocalZoneConnection(pcbnew.ZONE_CONNECTION_FULL)
+""", True),
     "stale_fill_short": (f"""
 z = next(z for z in b.Zones() if not z.GetIsRuleArea() and z.GetNetname() == {fx(plane)} and z.IsOnLayer(pcbnew.B_Cu))
 bb = z.GetBoundingBox()
@@ -149,10 +173,11 @@ b.Add(t)
 TARGET = {"tie_copper_moved": "A", "tie_track_dropped": "A", "tie_pad_wrong_net": "A", "tie_wrong_group": "A",
           "keepout_removed": "B", "plane_wrong_net": "C", "plane_solid_to_holes": "D", "plane_clearance_small": "E",
           "islands_kept": "F", "power_fill_lost": "H", "outer_pours_lost": "H", "thin_spokes": "D", "stale_fill_short": "G",
-          "allowed_kind_exceeded": "I"}
+          "allowed_kind_exceeded": "I", "stitch_removed": "J", "stitch_on_pad": "J", "plated_pad_solid": "D"}
 NEEDS = {k: bool(Z.get("net_tie")) for k in TARGET if k.startswith("tie_")}
 NEEDS["allowed_kind_exceeded"] = bool(Z.get("net_tie")) and bool(Z.get("drc_allowed"))
 NEEDS["keepout_removed"] = bool(Z.get("keepouts"))
+NEEDS["stitch_removed"] = NEEDS["stitch_on_pad"] = bool(Z.get("stitch"))
 
 
 def verify(path):
@@ -168,6 +193,16 @@ def first_fail(v):
 
 results = {"unmutated passes": verify(zoned).returncode == 0}
 pro = os.path.splitext(zoned)[0] + ".kicad_pro"
+# control: the unmutated board refilled by KiCad must pass too, or a check firing on a refilled mutation proves
+# nothing (review 13, 1)
+ctl = os.path.join(work, "unmutated_refilled.kicad_pcb")
+shutil.copy(zoned, ctl)
+if os.path.exists(pro):
+    shutil.copy(pro, os.path.splitext(ctl)[0] + ".kicad_pro")
+subprocess.run([sys.executable, helper, "fill", ctl], capture_output=True, check=True)
+vc = verify(ctl)
+results["unmutated refilled passes"] = vc.returncode == 0
+print(f"{'ok  ' if vc.returncode == 0 else 'FAIL'} unmutated refilled passes {first_fail(vc) if vc.returncode else ''}")
 for name, (code, refill) in MUT.items():
     if not NEEDS.get(name, True):
         print(f"skip {name}: the fixture has nothing it needs")
@@ -185,7 +220,7 @@ for name, (code, refill) in MUT.items():
         subprocess.run([sys.executable, helper, "fill", out], capture_output=True, check=True)
     v = verify(out)
     import re
-    fired = sorted({m.group(1) for m in re.finditer(r'^\s*"([A-I]): ', v.stdout, re.M)})
+    fired = sorted({m.group(1) for m in re.finditer(r'^\s*"([A-J]): ', v.stdout, re.M)})
     ok = v.returncode != 0 and TARGET[name] in fired
     results[name + " caught"] = ok
     print(f"{'ok  ' if ok else 'FAIL'} {name} caught by {TARGET[name]} (fired: {''.join(fired)})")

@@ -156,16 +156,32 @@ fn mark(i: usize) -> String {
     format!("00000000-0000-4000-8000-{i:012}")
 }
 
+/// The marker of each zone, in `all_zones` order. KiCad fills zones of one priority in uuid order, so the markers
+/// sort as the zones' own uuids do (file order where they tie or a zone has none): the copy then fills the way the
+/// written board will on a KiCad refill (review 13, 1).
+fn marks(zones: &[&crate::sexpr::Node]) -> Vec<String> {
+    let key = |i: usize| (zones[i].find("uuid").and_then(|u| u.arg(1)).map(|u| u.to_ascii_lowercase()).unwrap_or_else(|| "~".into()), i);
+    let mut order: Vec<usize> = (0..zones.len()).collect();
+    order.sort_by_key(|&i| key(i));
+    let mut m = vec![String::new(); zones.len()];
+    for (rank, i) in order.into_iter().enumerate() {
+        m[i] = mark(rank);
+    }
+    m
+}
+
 /// The candidate with every zone's uuid replaced by (or, without one, given) a marker of its own, for the copy pcbnew
 /// fills. pcbnew keeps zone uuids through a fill and a save, so the markers pair each zone with its fill whatever
 /// the zones' own uuids, settings or order (review 11, N1).
 pub fn mark_zones(candidate: &str) -> Result<String> {
     let root = crate::sexpr::parse(candidate)?;
     let mut e = crate::sexpr::Edits::default();
-    for (i, z) in all_zones(&root).into_iter().enumerate() {
+    let zones = all_zones(&root);
+    let m = marks(&zones);
+    for (i, z) in zones.into_iter().enumerate() {
         match z.find("uuid") {
-            Some(u) => e.replace(u.span, format!("(uuid \"{}\")", mark(i))),
-            None => e.insert(z.items()[0].span.1, format!(" (uuid \"{}\")", mark(i))),
+            Some(u) => e.replace(u.span, format!("(uuid \"{}\")", m[i])),
+            None => e.insert(z.items()[0].span.1, format!(" (uuid \"{}\")", m[i])),
         }
     }
     e.apply(candidate)
@@ -178,8 +194,9 @@ pub fn splice_fills(candidate: &str, filled: &str) -> Result<String> {
     let (za, zb) = (all_zones(&a), all_zones(&b));
     anyhow::ensure!(za.len() == zb.len(), "the filled board has {} zones, the candidate {}", zb.len(), za.len());
     let mut e = crate::sexpr::Edits::default();
+    let ids = marks(&za);
     for (i, z) in za.iter().enumerate() {
-        let id = mark(i);
+        let id = &ids[i];
         let m = zb
             .iter()
             .find(|y| y.find("uuid").and_then(|u| u.arg(1)) == Some(id.as_str()))

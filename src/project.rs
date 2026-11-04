@@ -328,6 +328,62 @@ pub fn check(p: &Project) -> Vec<String> {
             }
         }
     }
+    // every number a zone setting holds must be finite (review 13, 12)
+    let mut fin = |what: String, v: f64| {
+        if !v.is_finite() {
+            e.push(format!("{what} is {v}; it must be a finite number"));
+        }
+    };
+    for k in &p.keepout {
+        k.rect.iter().for_each(|v| fin(format!("keepout {:?}: rect", k.name), *v));
+        k.grow_mm.iter().for_each(|v| fin(format!("keepout {:?}: grow_mm", k.name), *v));
+    }
+    for z in &p.zone {
+        fin(format!("zone {}: clearance_mm", z.net), z.clearance_mm);
+        if let Some(t) = &z.thermal {
+            fin(format!("zone {}: thermal gap_mm", z.net), t.gap_mm);
+            fin(format!("zone {}: thermal spoke_mm", z.net), t.spoke_mm);
+        }
+    }
+    for (net, r) in &p.nets {
+        for (k, v) in [("current_a", r.current_a), ("width_mm", r.width_mm), ("fill_grow_mm", r.fill_grow_mm)] {
+            v.iter().for_each(|v| fin(format!("nets.{net}.{k}"), *v));
+        }
+    }
+    for st in &p.stitch {
+        for (k, v) in [("pitch_mm", Some(st.pitch_mm)), ("size_mm", Some(st.size_mm)), ("drill_mm", Some(st.drill_mm)), ("margin_mm", st.margin_mm)] {
+            v.iter().for_each(|v| fin(format!("stitch {}: {k}", st.net), *v));
+        }
+        st.rect.iter().flatten().for_each(|v| fin(format!("stitch {}: rect", st.net), *v));
+    }
+    // names a run turns into zone names and ids must be unique, and a layer listed once (review 13, 8)
+    let mut seen = std::collections::BTreeSet::new();
+    for k in &p.keepout {
+        if !seen.insert(k.name.clone()) {
+            e.push(format!("keepout {:?}: the name is used twice", k.name));
+        }
+        if k.forbid.is_empty() {
+            e.push(format!("keepout {:?}: forbid is empty, so the keep-out would forbid nothing", k.name));
+        }
+        if let Layers::List(v) = &k.layers {
+            if v.iter().collect::<std::collections::BTreeSet<_>>().len() != v.len() {
+                e.push(format!("keepout {:?}: a layer is listed twice", k.name));
+            }
+        }
+    }
+    let mut zl = std::collections::BTreeSet::new();
+    for z in &p.zone {
+        for l in &z.layers {
+            if !zl.insert((z.net.clone(), l.clone())) {
+                e.push(format!("zone {}: {l} is given twice (in one entry or two)", z.net));
+            }
+        }
+    }
+    if let Some(v) = p.fill.as_ref().and_then(|f| f.layers.as_ref()) {
+        if v.iter().collect::<std::collections::BTreeSet<_>>().len() != v.len() {
+            e.push("fill.layers: a layer is listed twice".to_string());
+        }
+    }
     for k in &p.keepout {
         let [x0, y0, x1, y1] = k.rect;
         if !(x1 > x0 && y1 > y0) {
@@ -383,6 +439,11 @@ pub fn check(p: &Project) -> Vec<String> {
         }
         if s.margin_mm.is_some_and(|m| !(m >= 0.0 && m.is_finite())) {
             e.push(format!("stitch {}: margin_mm must be 0 or more", s.net));
+        }
+        // vias closer than their size plus the margin would break the hole and via rules (review 13, 9)
+        let m = s.margin_mm.unwrap_or(0.3);
+        if s.pitch_mm.is_finite() && s.size_mm.is_finite() && s.pitch_mm < s.size_mm + m {
+            e.push(format!("stitch {}: pitch_mm {} is below size_mm plus margin_mm ({})", s.net, s.pitch_mm, s.size_mm + m));
         }
         if let Some([x0, y0, x1, y1]) = s.rect {
             if !(x1 > x0 && y1 > y0) {

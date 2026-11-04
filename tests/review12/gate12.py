@@ -28,8 +28,9 @@ def no_fills(t):
         out.append(t[i:s])
         i = e
     out.append(t[i:])
-    # the zone's filled flag is part of its fill state, which the gate takes from pcbnew (M2)
-    return re.sub(r"\n[ \t]*\n", "\n", "".join(out)).replace("(fill yes", "(fill")
+    # the zone's filled flag, `(fill yes` then its settings, is part of its fill state, which the gate takes from
+    # pcbnew (M2); a filled graphic shape's `(fill yes)` is not touched (review 13, 17)
+    return re.sub(r"\(fill yes(?=\s)", "(fill", re.sub(r"\n[ \t]*\n", "\n", "".join(out)))
 
 
 def zone_uuids(t):
