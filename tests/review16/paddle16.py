@@ -62,7 +62,8 @@ L.emit("control", gate=L.slim(g), release=L.slim(r), gerber_layers=r["data"].get
 from shapely.geometry import Point  # noqa: E402
 gz = L.unzip(os.path.join(CTL_OUT, ZIP), W("control_z"))
 paste = L.gshape(L.find(gz, r"F_Paste"))
-cents = [q.centroid for q in getattr(paste, "geoms", [paste])]
+# designer's edit (CI): the CI image's older shapely leaves empty pieces in the union, whose centroid is empty
+cents = [q.centroid for q in getattr(paste, "geoms", [paste]) if not q.is_empty and q.area > 1e-6]
 edge = L.gshape(L.find(gz, r"Edge_Cuts")).bounds
 cp = L.cpl(os.path.join(CTL_OUT, f"{L.STEM}_CPL.csv"))
 checked, bad = 0, []

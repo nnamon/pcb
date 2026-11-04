@@ -85,8 +85,14 @@ def nearest(x):
 offs = sorted(((round(x.centroid.distance(nearest(x).centroid), 3), (round(x.centroid.x, 2), round(x.centroid.y, 2)), [round(v, 2) for v in (x.bounds[2] - x.bounds[0], x.bounds[3] - x.bounds[1])],
                [round(v, 2) for v in (nearest(x).bounds[2] - nearest(x).bounds[0], nearest(x).bounds[3] - nearest(x).bounds[1])]) for x in gparts), reverse=True)
 empty = [(round(x.centroid.x, 3), round(x.centroid.y, 3)) for x in mparts if not any(x.contains(y.centroid) for y in gparts)]
-gh = [(x - gc.x, y - gc.y, w, l) for x, y, w, l in holes(pick(g, "drill-L1", "PTH.drl", "pth")) + holes(pick(g, "npth"))]
-mh = [(x - mc.x, y - mc.y, w, l) for f in glob.glob(os.path.join(m, "*.drl")) for x, y, w, l in holes(f)]
+# designer's edit (CI): `pick` took whichever drill file the folder listed first, so on one filesystem the set held
+# v1.0.0's vias (which routing places anew) and on another only its NPTH holes; read every drill file of both sets and
+# compare component holes (over 0.4 mm), as the control means
+gh = [(x - gc.x, y - gc.y, w, l) for f in sorted(glob.glob(os.path.join(g, "*.drl"))) for x, y, w, l in holes(f) if w > 0.4]
+mh = [(x - mc.x, y - mc.y, w, l) for f in sorted(glob.glob(os.path.join(m, "*.drl"))) for x, y, w, l in holes(f) if w > 0.4]
+# gerbonara also reports a slot written as a hole line and a G85 line (v1.0.0's files) as a hole at its start
+gh = [h for h in gh if h[3] > 0 or not any(k[3] > 0 and abs(k[2] - h[2]) < 0.02 and ((k[0] - h[0]) ** 2 + (k[1] - h[1]) ** 2) ** 0.5 <= k[3] / 2 + 0.01 for k in gh)]
+mh = [h for h in mh if h[3] > 0 or not any(k[3] > 0 and abs(k[2] - h[2]) < 0.02 and ((k[0] - h[0]) ** 2 + (k[1] - h[1]) ** 2) ** 0.5 <= k[3] / 2 + 0.01 for k in mh)]
 unmatched = []
 for h in gh:
     best = min(mh, key=lambda k: (k[0] - h[0]) ** 2 + (k[1] - h[1]) ** 2)
