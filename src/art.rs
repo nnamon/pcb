@@ -326,6 +326,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     }
     e.insert(b.root.span.1 - 1, text);
     let candidate = e.apply(src)?;
+    let candidate = crate::stamp::write(&candidate, "art", crate::stamp::inputs(l, "art")?.as_deref())?;
     // 3. the gate
     let has_zones = !b.zones.is_empty();
     let gate = Gate::begin(work, &board_path)?;

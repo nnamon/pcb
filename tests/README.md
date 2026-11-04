@@ -16,6 +16,7 @@
 | `review13/` | Review 13's probes of `pcb zone` (stitching, features, net ties, refusals, the fill flag, the badge), with their verdicts in `check.py` |
 | `review14/` | Review 14's probes confirming review 13's closures (fills against refills, overrides, stitching around custom pads and rule areas, ties, refusals, the badge), with their verdicts in `check.py` |
 | `review15/` | Review 15's probes of milestone M3 (check, gates, release and its read-back, compare-gerbers, paste, art, the import's additions, the badge), with their verdicts in `check.py` |
+| `review16/` | Review 16's probes confirming review 15's closures (the paddle keyer through check, gate and release with stale inputs, read-back limits, compare-gerbers, import, the badge), with their verdicts in `check.py` |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

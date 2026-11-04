@@ -100,7 +100,11 @@ def prim_shape(p):
     if isinstance(p, Arc):
         p = p.to_arc_poly()
     if isinstance(p, ArcPoly):
-        pts = [tuple(q) for q, _, _ in p.approximate_arcs().segments]
+        try:
+            pts = [tuple(q) for q, _, _ in p.approximate_arcs().segments]
+        except ZeroDivisionError:
+            # an arc of no radius (KiCad writes one for a zero-length arc): its end points are the shape
+            pts = [tuple(q) for q in p.outline]
         return Polygon(pts).buffer(0) if len(pts) >= 3 else None
     raise TypeError(f"gerber primitive {type(p).__name__}")
 
@@ -269,6 +273,23 @@ def outline_centre(edge):
     return ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
 
 
+def same_way(g, h):
+    """Two slots run the same way, up to sign (review 16, 31); round holes always do."""
+    if g[4] <= HOLE_TOL and h[4] <= HOLE_TOL:
+        return True
+    return abs(g[5] * h[6] - g[6] * h[5]) <= 0.02
+
+
+def unread(paths, found):
+    """Gerber files a set holds that no layer was read from, and layers two files claim (review 16, 34)."""
+    used = set(found.values())
+    out = []
+    for p in paths:
+        if re.search(r"\.(gbr|g[a-z0-9]{2}|gm1)$", p, re.I) and p not in used and not re.search(r"\.(gbrjob)$", p, re.I):
+            out.append(f"{os.path.basename(p)} (function {file_function(p) or 'none'}) is not a layer compare-gerbers reads")
+    return out
+
+
 def compare(a_src, b_src, explain_path=None, board=None, align=False):
     from shapely.affinity import translate
     from shapely.geometry import box
@@ -282,6 +303,10 @@ def compare(a_src, b_src, explain_path=None, board=None, align=False):
         return {"ok": False, "error": "both sets need a board outline (Edge.Cuts)", "found_a": la, "found_b": lb}
     if len(set(la) & set(lb) - {"Edge.Cuts"}) == 0:
         return {"ok": False, "error": "the two sets share no layer besides the outline", "found_a": la, "found_b": lb}
+    for nm, fl, lay in (("A", fa, la), ("B", fb, lb)):
+        extra = unread(fl, lay)
+        if extra:
+            return {"ok": False, "error": f"set {nm}: " + "; ".join(extra)}
     res = {"layers": {}, "missing": [], "ok": True}
     ea, eb = layer_shape(la["Edge.Cuts"]), layer_shape(lb["Edge.Cuts"])
     (cax, cay), (cbx, cby) = outline_centre(ea), outline_centre(eb)
@@ -344,7 +369,7 @@ def compare(a_src, b_src, explain_path=None, board=None, align=False):
     hb = holes(fb)
     used, only_a = set(), []
     for h in ha:
-        k = next((i for i, g in enumerate(hb) if i not in used and abs(g[0] - h[0]) <= HOLE_TOL and abs(g[1] - h[1]) <= HOLE_TOL and abs(g[2] - h[2]) <= HOLE_TOL and g[3] == h[3] and abs(g[4] - h[4]) <= HOLE_TOL), None)
+        k = next((i for i, g in enumerate(hb) if i not in used and abs(g[0] - h[0]) <= HOLE_TOL and abs(g[1] - h[1]) <= HOLE_TOL and abs(g[2] - h[2]) <= HOLE_TOL and g[3] == h[3] and abs(g[4] - h[4]) <= HOLE_TOL and same_way(g, h)), None)
         if k is None:
             only_a.append(h)
         else:
@@ -362,18 +387,21 @@ def compare(a_src, b_src, explain_path=None, board=None, align=False):
 
 
 # DFM limits from GUIDELINES.md's JLCPCB table (mm)
-DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15)
-# a feature counts as narrow when an opening this much under half the limit removes it (rounding in the plot)
-SLACK = 0.005
+DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15, npth_copper=0.1)
+# a feature counts as narrow when an opening this much under half the limit removes it: rounding in the plot. Copper
+# 0.0005 (review 16, 32: 0.005 let 0.14 mm through); silkscreen 0.005, as the art grown for print on the ordered
+# paddle-keyer has pieces of 0.14 to 0.15 mm, which printed
+SLACK = 0.0005
+SILK_SLACK = 0.005
 
 
-def narrow_parts(g, width):
+def narrow_parts(g, width, slack=None):
     """What an opening (shrink by half the width, grow back) removes from a shape, past corner trimmings: the parts
     narrower than `width`."""
     from shapely.geometry import Polygon
     if g.is_empty:
         return []
-    r = width / 2 - SLACK
+    r = width / 2 - (SLACK if slack is None else slack)
     thin = g.difference(g.buffer(-r, quad_segs=8).buffer(r + 0.002, quad_segs=8))
     # a square corner loses about r²(1 - π/4); a narrow strip is longer than it is wide
     return [q for q in getattr(thin, "geoms", [thin]) if isinstance(q, Polygon) and q.area > max(0.01, 4 * r * r) and not q.buffer(-0.005).is_empty]
@@ -509,11 +537,20 @@ def verify(folder, board_path):
             gap = hs[i].distance(hs[j])
             if gap < DFM["hole_hole"] - 1e-3:
                 findings.append({"rule": "hole_hole", "layer": "drill", "at": [round(hl[i][0], 3), round(hl[i][1], 3)], "detail": f"{gap:.3f} mm edge to edge from the hole at ({hl[j][0]:.3f}, {hl[j][1]:.3f})"})
+    # copper over or beside an unplated hole: a fill made before the hole, or plotted stale (review 16, 30)
+    for i, h in enumerate(hl):
+        if h[3]:
+            continue
+        near = hs[i].buffer(DFM["npth_copper"])
+        for k in cu:
+            if shapes[k].intersects(near):
+                gap = shapes[k].distance(hs[i])
+                findings.append({"rule": "npth_copper", "layer": k, "at": [round(h[0], 3), round(h[1], 3)], "detail": f"copper {gap:.3f} mm from an unplated hole of {h[2]:.3f} mm"})
     for side in ("F", "B"):
         sk, mk, ck = f"{side}.Silk", f"{side}.Mask", f"{side}.Cu"
         if sk in lay:
             silk = layer_shape(lay[sk])
-            for q in narrow_parts(silk, DFM["silk_line"]):
+            for q in narrow_parts(silk, DFM["silk_line"], SILK_SLACK):
                 findings.append({"rule": "silk_line", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen under {DFM['silk_line']} mm wide"})
             if mk in lay and ck in shapes:
                 bare = layer_shape(lay[mk]).intersection(shapes[ck])

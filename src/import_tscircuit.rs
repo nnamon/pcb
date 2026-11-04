@@ -1,10 +1,10 @@
 //! `pcb import-tscircuit`: write a KiCad 10 board from a tscircuit circuit JSON (the badge carrier's routed design).
 //!
 //! Carried over: the outline, nets (ports a part joins inside itself are one net), every footprint with its pads,
-//! holes, courtyard and silkscreen lines and circles, the footprint type, the LCSC code and do-not-place flag, every
+//! holes, courtyard and silkscreen paths, lines, rectangles and circles, the footprint type, the LCSC code and do-not-place flag, every
 //! trace segment and via, board silkscreen lines and circles, and the mounting holes. A trace or via net name the
 //! circuit has no net for (an older router's, cut short) takes the one net its traces land on (`net-renamed`). Not
-//! carried over: silkscreen text and rectangles (tscircuit's strokes are too thin to print), fabrication drawings,
+//! carried over: silkscreen text (tscircuit's strokes are too thin to print), fabrication drawings,
 //! solder paste (KiCad derives paste from the pads; tscircuit's 70 % paste is a known trap) and copper pours (`pcb`
 //! makes pours as KiCad zones). Any other `pcb_*` element stops the import rather than being
 //! dropped (review 1, S6).
@@ -103,7 +103,21 @@ const READ: &[&str] = &[
     "pcb_board", "pcb_component", "pcb_smtpad", "pcb_plated_hole", "pcb_hole", "pcb_courtyard_rect",
     "pcb_courtyard_outline", "pcb_trace", "pcb_via", "pcb_port", "source_component", "source_port", "source_net",
     "source_trace", "source_component_internal_connection", "pcb_silkscreen_path", "pcb_silkscreen_circle",
+    "pcb_silkscreen_line", "pcb_silkscreen_rect",
 ];
+
+/// A silkscreen stroke as a polyline: a path's route, a line's two ends, a rectangle's outline (review 16, 36).
+fn silk_pts(e: &Value) -> Result<Vec<(f64, f64)>> {
+    Ok(match s(e, "type") {
+        "pcb_silkscreen_line" => vec![(f(e, "x1").context("silk line x1")?, f(e, "y1").context("silk line y1")?), (f(e, "x2").context("silk line x2")?, f(e, "y2").context("silk line y2")?)],
+        "pcb_silkscreen_rect" => {
+            let (cx, cy) = (e.pointer("/center/x").and_then(|v| v.as_f64()).context("silk rect x")?, e.pointer("/center/y").and_then(|v| v.as_f64()).context("silk rect y")?);
+            let (w, h) = (f(e, "width").context("silk rect width")? / 2.0, f(e, "height").context("silk rect height")? / 2.0);
+            vec![(cx - w, cy - h), (cx + w, cy - h), (cx + w, cy + h), (cx - w, cy + h), (cx - w, cy - h)]
+        }
+        _ => e.get("route").and_then(|v| v.as_array()).context("silk route")?.iter().filter_map(|p| Some((f(p, "x")?, f(p, "y")?))).collect(),
+    })
+}
 const IGNORED_PREFIX: &[&str] = &[
     "pcb_silkscreen_", "pcb_fabrication_note_", "pcb_solder_paste", "pcb_copper_pour", "pcb_note_", "schematic_",
     "cad_component", "source_group", "source_board", "source_project_metadata", "pcb_group",
@@ -445,7 +459,7 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
     let mut items: HashMap<&str, Vec<&Value>> = HashMap::new();
     for e in d.iter() {
         let t = s(e, "type");
-        if matches!(t, "pcb_smtpad" | "pcb_plated_hole" | "pcb_hole" | "pcb_courtyard_rect" | "pcb_courtyard_outline" | "pcb_silkscreen_path" | "pcb_silkscreen_circle") {
+        if matches!(t, "pcb_smtpad" | "pcb_plated_hole" | "pcb_hole" | "pcb_courtyard_rect" | "pcb_courtyard_outline" | "pcb_silkscreen_path" | "pcb_silkscreen_circle" | "pcb_silkscreen_line" | "pcb_silkscreen_rect") {
             let c = s(e, "pcb_component_id");
             if !c.is_empty() {
                 items.entry(c).or_default().push(e);
@@ -704,10 +718,10 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                     let _ = writeln!(o, "    (fp_poly (pts{prim}) (layer {}) (width 0.05) (fill none))", q(crt));
                 }
                 // silkscreen on the footprint, as drawn (M3: the release carries it)
-                "pcb_silkscreen_path" => {
+                "pcb_silkscreen_path" | "pcb_silkscreen_line" | "pcb_silkscreen_rect" => {
                     let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
                     let w = f(e, "stroke_width").unwrap_or(0.15);
-                    let pts: Vec<(f64, f64)> = e.get("route").and_then(|v| v.as_array()).context("silk route")?.iter().filter_map(|p| Some((f(p, "x")?, f(p, "y")?))).collect();
+                    let pts = silk_pts(e)?;
                     for seg in pts.windows(2) {
                         let (a, b) = (local(seg[0].0, seg[0].1), local(seg[1].0, seg[1].1));
                         let _ = writeln!(o, "    (fp_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {}))", n(a.0), n(a.1), n(b.0), n(b.1), n(w), q(lay));
@@ -729,10 +743,10 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
     }
 
     // silkscreen that belongs to no footprint: board graphics
-    for e in by(&d, "pcb_silkscreen_path").filter(|e| s(e, "pcb_component_id").is_empty()) {
+    for e in d.iter().filter(|e| matches!(s(e, "type"), "pcb_silkscreen_path" | "pcb_silkscreen_line" | "pcb_silkscreen_rect") && s(e, "pcb_component_id").is_empty()) {
         let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
         let w = f(e, "stroke_width").unwrap_or(0.15);
-        let pts: Vec<(f64, f64)> = e.get("route").and_then(|v| v.as_array()).context("silk route")?.iter().filter_map(|p| Some((f(p, "x")?, f(p, "y")?))).collect();
+        let pts = silk_pts(e)?;
         for seg in pts.windows(2) {
             let (a, b) = (x.pt(seg[0].0, seg[0].1), x.pt(seg[1].0, seg[1].1));
             let _ = writeln!(o, "  (gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {}))", n(a.0), n(a.1), n(b.0), n(b.1), n(w), q(lay));

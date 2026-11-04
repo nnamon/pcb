@@ -19,6 +19,7 @@ mod import_tscircuit;
 mod render;
 mod route;
 mod sexpr;
+mod stamp;
 mod zone;
 
 use anyhow::{Context, Result, bail};

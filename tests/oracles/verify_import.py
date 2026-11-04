@@ -557,9 +557,19 @@ kg = [g for g in b.GetDrawings() if g.GetLayer() in silk_layer.values()] + [g fo
 kseg = [(g.GetLayer(), (mm(g.GetStart().x), mm(g.GetStart().y)), (mm(g.GetEnd().x), mm(g.GetEnd().y)), mm(g.GetWidth())) for g in kg if g.GetShape() == pcbnew.SHAPE_T_SEGMENT]
 kcir = [(g.GetLayer(), (mm(g.GetCenter().x), mm(g.GetCenter().y)), mm(g.GetRadius()), mm(g.GetWidth())) for g in kg if g.GetShape() == pcbnew.SHAPE_T_CIRCLE]
 used_s, used_c, n_silk = set(), set(), 0
+def silk_route(e):
+    # a line is its two ends; a rectangle its outline, closed (review 16, 36)
+    if e["type"] == "pcb_silkscreen_line":
+        return [{"x": e["x1"], "y": e["y1"]}, {"x": e["x2"], "y": e["y2"]}]
+    if e["type"] == "pcb_silkscreen_rect":
+        c, w, h = e["center"], e["width"] / 2, e["height"] / 2
+        return [{"x": c["x"] + dx, "y": c["y"] + dy} for dx, dy in ((-w, -h), (w, -h), (w, h), (-w, h), (-w, -h))]
+    return e.get("route", [])
+
+
 for e in d:
-    if e["type"] == "pcb_silkscreen_path":
-        r = e.get("route", [])
+    if e["type"] in ("pcb_silkscreen_path", "pcb_silkscreen_line", "pcb_silkscreen_rect"):
+        r = silk_route(e)
         for a_, b_ in zip(r, r[1:]):
             n_silk += 1
             A, B = T(a_["x"], a_["y"]), T(b_["x"], b_["y"])

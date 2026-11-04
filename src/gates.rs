@@ -42,26 +42,18 @@ fn header(line: &str) -> Option<String> {
     t.strip_prefix('[').and_then(|r| r.strip_suffix(']')).map(|r| r.split('.').map(|p| p.trim()).collect::<Vec<_>>().join("."))
 }
 
-fn is_gate(h: &str) -> bool {
-    h == "gates" || h.starts_with("gates.")
-}
-
-/// pcb.toml's text without its `[gates.*]` tables. Comment and blank lines stay: they belong to no table's values.
+/// pcb.toml's content without its `[gates.*]` tables, as canonical TOML: parsed, the gates removed, written back
+/// with keys in order. Comments and layout do not count; a line inside a multi-line string that looks like a table
+/// header is a string, as TOML reads it (review 16, 33).
 fn without_gates(text: &str) -> String {
-    let mut out = String::new();
-    let mut skip = false;
-    for line in text.lines() {
-        if let Some(h) = header(line) {
-            skip = is_gate(&h);
+    match toml::from_str::<toml::Table>(text) {
+        Ok(mut t) => {
+            t.remove("gates");
+            toml::to_string(&t).unwrap_or_else(|_| text.to_string())
         }
-        let comment = line.trim().is_empty() || line.trim_start().starts_with('#');
-        if !skip || (comment && !line.trim().is_empty()) {
-            out.push_str(line);
-            out.push('\n');
-        }
+        // a file that does not parse is refused by load before this; hash it as it is
+        Err(_) => text.to_string(),
     }
-    // blank lines at the end are layout, not content: writing a gate table must not move the hash
-    format!("{}\n", out.trim_end())
 }
 
 /// The inputs' hash, and the files it covers.
@@ -186,7 +178,11 @@ mod tests {
     fn gates_left_out_of_the_hash() {
         let a = "schema = 1\n[project]\nname = \"x\"\n[gates.layout]\nversion = \"1\"\n[nets.A]\nwidth_mm = 1\n";
         let b = "schema = 1\n[project]\nname = \"x\"\n[nets.A]\nwidth_mm = 1\n";
-        assert_eq!(without_gates(a), b);
+        assert_eq!(without_gates(a), without_gates(b));
+        // a header inside a multi-line string is a string
+        let c = "schema = 1\n[[waiver]]\nwhy = \"\"\"x\n[gates.zz]\n\"\"\"\nmax = 9\n";
+        let d = c.replace("max = 9", "max = 400");
+        assert_ne!(without_gates(&c), without_gates(&d));
     }
 
     #[test]

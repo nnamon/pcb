@@ -1,7 +1,8 @@
 //! `pcb check`: the checks a board must pass before a gate (milestone M3; DESIGN.md, "Check and release").
 //!
-//! - **drc:** KiCad DRC with the fab's rule set (`project.fab`) added to the board's own rules, on a copy. Each
-//!   violation kind and its nets is one finding, with its count.
+//! - **drc:** KiCad DRC on two copies, one with the board's own rules and one with the fab's rule set
+//!   (`project.fab`) in their place, so neither hides the other. Each violation kind and its nets is one finding,
+//!   with the larger of its two counts.
 //! - **width-current:** on every net with `current_a`, the narrowest track on each layer against the IPC-2221 width
 //!   for that current at a 10 °C rise (outer 1 oz, inner 0.5 oz copper).
 //! - **side:** an assembled part on a side the assembler does not place (`[assembly] machine_sides`).
@@ -91,30 +92,43 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     let mut f: Vec<Finding> = vec![];
     let mut add = |check: &str, item: String, count: usize, message: String| f.push(Finding { check: check.into(), item, count, message, waived: None });
 
-    // drc, on a copy with the fab's rules added to the board's own
-    let copy = work.join("check.kicad_pcb");
-    std::fs::copy(&board_path, &copy)?;
-    crate::kicad::copy_rules(&board_path, &copy)?;
-    let dru = copy.with_extension("kicad_dru");
-    let own = std::fs::read_to_string(&dru).unwrap_or_default();
-    let own_rules = own.trim().trim_start_matches("(version 1)");
-    std::fs::write(&dru, format!("(version 1)\n{own_rules}\n{rules}"))?;
-    // the project file's severities would still hide what the fab rules report under the standard kinds
-    // (review 15, 5): in the copy, those kinds are errors
-    let pro = copy.with_extension("kicad_pro");
-    if let Ok(text) = std::fs::read_to_string(&pro) {
-        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(sev) = v.pointer_mut("/board/design_settings/rule_severities").and_then(|x| x.as_object_mut()) {
-                for k in FAB_KINDS {
-                    sev.insert(k.to_string(), serde_json::json!("error"));
+    // drc, twice on copies: once with the board's own rules, once with the fab's in their place. KiCad lets the
+    // later of two custom rules win, so one rules file holding both would drop the board's stricter ones (review
+    // 16, 28). Each kind and its nets counts the larger of its two counts. In both copies the kinds the fab rules
+    // report under, and unconnected and shorted items, are errors whatever the project file says (review 15, 5;
+    // review 16, 37)
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (tag, fab_only) in [("own", false), ("fab", true)] {
+        let copy = work.join(format!("check_{tag}.kicad_pcb"));
+        std::fs::copy(&board_path, &copy)?;
+        crate::kicad::copy_rules(&board_path, &copy)?;
+        let dru = copy.with_extension("kicad_dru");
+        if fab_only {
+            std::fs::write(&dru, format!("(version 1)\n{rules}"))?;
+        }
+        let pro = copy.with_extension("kicad_pro");
+        if let Ok(text) = std::fs::read_to_string(&pro) {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(sev) = v.pointer_mut("/board/design_settings/rule_severities").and_then(|x| x.as_object_mut()) {
+                    for k in FAB_KINDS.iter().chain(["unconnected_items", "shorting_items"].iter()) {
+                        sev.insert(k.to_string(), serde_json::json!("error"));
+                    }
                 }
+                std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
             }
-            std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
+        }
+        for (k, c) in crate::kicad::drc_counts(work, &copy.to_string_lossy(), &format!("check_drc_{tag}"))? {
+            let e = counts.entry(k).or_default();
+            *e = (*e).max(c);
         }
     }
-    let counts = crate::kicad::drc_counts(work, &copy.to_string_lossy(), "check_drc")?;
     for (k, c) in &counts {
         add("drc", k.clone(), *c, format!("KiCad DRC: {k} ({c})"));
+    }
+
+    // the board carries what pcb.toml says (review 16, 25 and 29)
+    for (cmd, why) in crate::stamp::stale(l, &b)? {
+        add("stale", cmd.clone(), 1, why);
     }
 
     // width-current

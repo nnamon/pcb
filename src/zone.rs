@@ -599,7 +599,8 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
         e3.insert(tb.root.span.1 - 1, vias);
         text2 = e3.apply(&text2)?;
     }
-    // 6. the gate
+    // 6. the gate, with what this run read recorded on the board
+    let text2 = crate::stamp::write(&text2, "zone", crate::stamp::inputs(l, "zone")?.as_deref())?;
     let gate = Gate::begin(work, &board_path)?;
     let g = gate.finish_allowing(&text2, out_path, true, &p.drc_allow)?;
     rep.fixed = g.fixed;
