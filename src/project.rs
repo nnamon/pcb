@@ -547,7 +547,7 @@ pub fn check(p: &Project) -> Vec<String> {
         }
         // vias closer than their size plus the margin would break the hole and via rules (review 13, 9)
         let m = s.margin_mm.unwrap_or(0.3);
-        if s.pitch_mm.is_finite() && s.size_mm.is_finite() && s.pitch_mm < s.size_mm + m {
+        if s.pitch_mm.is_finite() && s.size_mm.is_finite() && s.pitch_mm < s.size_mm + m - 1e-9 {
             e.push(format!("stitch {}: pitch_mm {} is below size_mm plus margin_mm ({})", s.net, s.pitch_mm, s.size_mm + m));
         }
         if let Some([x0, y0, x1, y1]) = s.rect {

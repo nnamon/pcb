@@ -160,7 +160,12 @@ fn mark(i: usize) -> String {
 /// sort as the zones' own uuids do (file order where they tie or a zone has none): the copy then fills the way the
 /// written board will on a KiCad refill (review 13, 1).
 fn marks(zones: &[&crate::sexpr::Node]) -> Vec<String> {
-    let key = |i: usize| (zones[i].find("uuid").and_then(|u| u.arg(1)).map(|u| u.to_ascii_lowercase()).unwrap_or_else(|| "~".into()), i);
+    // by value, as KiCad compares ids: hex digits without dashes, a short legacy id right-aligned (review 14, R14-5)
+    let value = |u: &str| {
+        let h: String = u.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>().to_ascii_lowercase();
+        format!("{h:0>32}")
+    };
+    let key = |i: usize| (zones[i].find("uuid").and_then(|u| u.arg(1)).map(value).unwrap_or_else(|| "~".into()), i);
     let mut order: Vec<usize> = (0..zones.len()).collect();
     order.sort_by_key(|&i| key(i));
     let mut m = vec![String::new(); zones.len()];

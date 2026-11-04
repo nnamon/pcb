@@ -26,6 +26,40 @@ pub struct Pad {
     pub kind: String,
     pub drill: Option<(f64, f64)>,
     pub layers: Vec<String>,
+    /// A custom pad's primitives' extent about its anchor, in the pad's own frame (x0, y0, x1, y1).
+    #[serde(skip)]
+    pub prims: Option<(f64, f64, f64, f64)>,
+}
+
+/// The extent of a custom pad's primitives (polygons, lines, rectangles, circles, arcs) with their widths, in the
+/// pad's frame.
+fn prim_extent(p: &Node) -> Option<(f64, f64, f64, f64)> {
+    let pr = p.find("primitives")?;
+    let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let mut add = |x: f64, y: f64, r: f64| b = (b.0.min(x - r), b.1.min(y - r), b.2.max(x + r), b.3.max(y + r));
+    for g in pr.items() {
+        let w = g.find("width").or_else(|| g.find("stroke").and_then(|s| s.find("width"))).and_then(|w| w.num(1)).unwrap_or(0.0) / 2.0;
+        let pt = |k: &str| g.find(k).and_then(|n| Some((n.num(1)?, n.num(2)?)));
+        if let Some(pts) = g.find("pts") {
+            for xy in pts.find_all("xy") {
+                if let (Some(x), Some(y)) = (xy.num(1), xy.num(2)) {
+                    add(x, y, w);
+                }
+            }
+        }
+        if g.is("gr_circle") {
+            if let (Some((cx, cy)), Some((ex, ey))) = (pt("center"), pt("end")) {
+                add(cx, cy, (ex - cx).hypot(ey - cy) + w);
+            }
+        } else {
+            for k in ["start", "mid", "end"] {
+                if let Some((x, y)) = pt(k) {
+                    add(x, y, w);
+                }
+            }
+        }
+    }
+    (b.0 <= b.2).then_some(b)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +140,10 @@ pub struct Zone {
     pub owner: Option<String>,
     /// Filled polygons per layer (empty until KiCad fills the zone).
     pub filled: Vec<(String, Vec<(f64, f64)>)>,
+    /// A rule area that forbids vias.
+    pub forbids_vias: bool,
+    /// Fill priority (KiCad's, 0 when the file gives none).
+    pub priority: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -274,7 +312,9 @@ fn parse_zone(n: &Node, owner: Option<String>, origin: (f64, f64)) -> Zone {
     let holes = polys;
     let filled = n.find_all("filled_polygon").map(|f| (f.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(), pts(f))).collect();
     let net = n.find("net").and_then(|x| x.arg(1)).unwrap_or("").to_string();
-    Zone { net, layers, outline, holes, settings: zone_canon(n, origin), owner, filled }
+    let forbids_vias = n.find("keepout").and_then(|k| k.find("vias")).and_then(|v| v.arg(1)) == Some("not_allowed");
+    let priority = n.find("priority").and_then(|p| p.num(1)).unwrap_or(0.0) as u32;
+    Zone { net, layers, outline, holes, settings: zone_canon(n, origin), owner, filled, forbids_vias, priority }
 }
 
 /// Points along a three-point arc (start, mid, end), 16 segments; a straight line if the points are collinear.
@@ -474,6 +514,7 @@ impl Board {
                 kind: p.arg(2).unwrap_or("").to_string(),
                 drill,
                 layers: p.find("layers").map(|l| l.args().into_iter().map(String::from).collect()).unwrap_or_default(),
+                prims: prim_extent(p),
             });
         }
         let mut cy: Option<(f64, f64, f64, f64)> = None;

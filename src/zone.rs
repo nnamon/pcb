@@ -156,14 +156,18 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Polygon<f64> {
     Polygon::new(LineString::from(vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]), vec![])
 }
 
-/// A pad's turned bounding rectangle.
+/// A pad's turned bounding rectangle, a custom pad's primitives included.
 fn pad_rect(p: &Pad) -> MultiPolygon<f64> {
     let corner = |lx: f64, ly: f64| {
         let (dx, dy) = rotate(lx, ly, p.rot);
         (p.x + dx, p.y + dy)
     };
-    let (w, h) = (p.w / 2.0, p.h / 2.0);
-    MultiPolygon::new(vec![Polygon::new(LineString::from(vec![corner(-w, -h), corner(w, -h), corner(w, h), corner(-w, h), corner(-w, -h)]), vec![])])
+    // a custom pad: its anchor and every primitive (review 14, 3)
+    let (mut x0, mut y0, mut x1, mut y1) = (-p.w / 2.0, -p.h / 2.0, p.w / 2.0, p.h / 2.0);
+    if let Some((a, b, c, d)) = p.prims {
+        (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(c), y1.max(d));
+    }
+    MultiPolygon::new(vec![Polygon::new(LineString::from(vec![corner(x0, y0), corner(x1, y0), corner(x1, y1), corner(x0, y1), corner(x0, y0)]), vec![])])
 }
 
 fn on_layer(p: &Pad, layer: &str) -> bool {
@@ -206,6 +210,9 @@ fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> R
             return Err(refused("config", format!("net_tie {}: no net {an} on the board, and the footprint has no tie group {group:?} from an earlier run", t.footprint)));
         }
         // the vias' net must be on the board, and the absorbed net must be tracks and vias only (review 13, 11 and 14)
+        if &vnet == an {
+            return Err(refused("config", format!("net_tie {}: absorb_vias_net is the absorbed net {an} itself; name the net its vias join", t.footprint)));
+        }
         if !b.nets.contains(&vnet) {
             return Err(refused("config", format!("net_tie {}: absorb_vias_net {vnet} is not a net on the board", t.footprint)));
         }
@@ -412,14 +419,21 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
             crate::route::remove(&mut e, src, at(q.span));
         }
         let mut keep: BTreeMap<String, i32> = BTreeMap::new();
-        for pd in node.items().iter().filter(|c| c.is("pad")) {
+        // each pad its own record: NUM, or NUM#K for the K-th of several pads with one number (review 14, R14-2)
+        let mut seen_num: BTreeMap<String, usize> = BTreeMap::new();
+        let pads: Vec<&crate::sexpr::Node> = node.items().iter().filter(|c| c.is("pad")).collect();
+        for pd in pads.iter().copied() {
             let num = pd.arg(1).unwrap_or("").to_string();
+            let k = seen_num.entry(num.clone()).or_insert(0);
+            *k += 1;
+            let many = pads.iter().filter(|q| q.arg(1) == Some(num.as_str())).count() > 1;
+            let rk = if many { format!("{num}#{k}") } else { num.clone() };
             let zc = pd.find("zone_connect");
             let current = zc.and_then(|z| z.arg(1)).and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
-            let original = recorded.get(&num).copied().unwrap_or(current);
+            let original = recorded.get(&rk).copied().unwrap_or(current);
             let desired = w.and_then(|w| w.get(&num)).copied().unwrap_or(original);
             if w.is_some_and(|w| w.contains_key(&num)) {
-                keep.entry(num.clone()).or_insert(original);
+                keep.entry(rk.clone()).or_insert(original);
             }
             if desired == current {
                 continue;
@@ -515,6 +529,20 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
             }
         }
     }
+    // the pours from [[zone]] and the board's own copper zones join the comparison (review 14, R14-1)
+    for z in &p.zone {
+        for layer in &z.layers {
+            let none = MultiPolygon::new(vec![]);
+            let shape = MultiPolygon::new(vec![all.clone()]).difference(pour_keepouts.get(layer).unwrap_or(&none));
+            outlines.push((z.net.clone(), layer.clone(), z.priority.unwrap_or(0), shape));
+        }
+    }
+    for z in b1.zones.iter().filter(|z| !z.net.is_empty() && z.outline.len() >= 3) {
+        let poly = Polygon::new(LineString::from(z.outline.clone()), z.holes.iter().map(|h| LineString::from(h.clone())).collect());
+        for layer in &z.layers {
+            outlines.push((z.net.clone(), layer.clone(), z.priority, MultiPolygon::new(vec![poly.clone()])));
+        }
+    }
     // two nets' fills that overlap at one priority: which keeps the copper follows the zone ids, a choice nobody
     // made, so the owner is told to set fill_priority (P27, a one-pass fill that starved VBOOST)
     for (i, a) in outlines.iter().enumerate() {
@@ -601,6 +629,11 @@ fn stitch_points(b: &Board, st: &crate::project::Stitch, keepouts: &[Polygon<f64
             return vec![];
         }
         per_layer.push(polys);
+    }
+    // rule areas on the board or in footprints that forbid vias, besides pcb.toml's (review 14, 4)
+    let mut keepouts: Vec<Polygon<f64>> = keepouts.to_vec();
+    for z in b.zones.iter().filter(|z| z.forbids_vias && z.outline.len() >= 3) {
+        keepouts.push(Polygon::new(LineString::from(z.outline.clone()), z.holes.iter().map(|h| LineString::from(h.clone())).collect()));
     }
     // pads by their turned outline, so a via cannot sit on a square pad's corner (review 13, 3)
     let pads: Vec<MultiPolygon<f64>> = b.footprints.iter().flat_map(|f| f.pads.iter()).map(pad_rect).collect();
