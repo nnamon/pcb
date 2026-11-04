@@ -8,7 +8,7 @@
 # version in it is listed in /opt/pcb-ci/packages.txt, and the tests always run on a published tag.
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
-ARG IMAGE_VERSION=7
+ARG IMAGE_VERSION=8
 # KiCad 10 from the KiCad project's PPA (Ubuntu 24.04 ships 7.0.11). The PPA keeps only its newest build, so when it
 # moves on this pin stops installing: bump it and KICAD_VERSION in src/doctor.rs together and re-run the suite. Images
 # already published keep working.
@@ -39,6 +39,10 @@ RUN apt-get update \
 # jsonschema 4.18 or later (noble ships 4.10, which lacks the registry the contract checker uses; review 5, 1)
 RUN pip3 install --break-system-packages --no-deps jsonschema==4.26.0 referencing==0.37.0 jsonschema-specifications==2025.9.1 rpds-py==2026.9.1 attrs==26.1.0 typing_extensions==4.16.0 \
  && python3 -c "import pcbnew, shapely, jsonschema, referencing; assert pcbnew.Version().startswith('10.'); jsonschema.Draft202012Validator({}, registry=referencing.Registry())"
+
+# gerbonara reads Gerbers for compare-gerbers and release's read-back (M3); its web viewer's quart is not needed
+RUN pip3 install --break-system-packages --no-deps gerbonara==1.6.3 click==8.5.0 rtree==1.4.1 \
+ && python3 -c "from gerbonara import GerberFile; from gerbonara.graphic_primitives import ArcPoly"
 
 # Freerouting (headless since 2.x, so no display server), checked against the upstream release's SHA-256
 RUN mkdir -p /opt/freerouting \
