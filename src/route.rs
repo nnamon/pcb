@@ -1213,7 +1213,7 @@ mod prune_tests {
     use super::*;
 
     fn pad(x: f64, y: f64, rot: f64, w: f64, h: f64) -> crate::board::Pad {
-        crate::board::Pad { number: "1".into(), net: "N".into(), x, y, rot, w, h, shape: "rect".into(), kind: "smd".into(), drill: None, layers: vec!["F.Cu".into()] }
+        crate::board::Pad { number: "1".into(), net: "N".into(), x, y, rot, w, h, shape: "rect".into(), kind: "smd".into(), drill: None, layers: vec!["F.Cu".into()], prims: None }
     }
 
     #[test]
@@ -1237,7 +1237,7 @@ mod prune_tests {
         let tee_b = vec![seg((0.0, 0.0), (10.0, 0.0), "F.Cu"), seg((5.0, 0.0), (5.0, 5.0), "B.Cu")];
         assert_eq!(open_nets(&nets, &tee_b, &[true; 2], &[], &far, &[]), nets);
         // two pads in one fill on their layer are joined by it
-        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], holes: vec![], settings: String::new(), owner: None, filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
+        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], holes: vec![], settings: String::new(), owner: None, filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])], forbids_vias: false, priority: 0 };
         assert!(open_nets(&nets, &[], &[], &[], &pads, std::slice::from_ref(&z)).is_empty());
         let zb = crate::board::Zone { filled: vec![("B.Cu".into(), z.filled[0].1.clone())], ..z.clone() };
         assert_eq!(open_nets(&nets, &[], &[], &[], &pads, &[zb]), nets);
