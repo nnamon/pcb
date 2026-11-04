@@ -94,10 +94,31 @@ LAYERS = "F.Cu,B.Cu,F.Mask,B.Mask,F.Paste,B.Paste,F.SilkS,B.SilkS,Edge.Cuts"
 
 
 def export(board, d):
-    """Gerbers and drill files as pcb release asks kicad-cli for them (src/release.rs), into folder d."""
+    """Gerbers and drill files as pcb release asks kicad-cli for them (src/release.rs), into folder d. Since review
+    15's closure (finding 4) release plots from a drill/place origin at the outline's centre, on a copy, and plots
+    paste only for the machine sides (finding 2); this does the same (designer's edit to the probe)."""
+    import shutil as _sh
     os.makedirs(d, exist_ok=True)
-    subprocess.run(["kicad-cli", "pcb", "export", "gerbers", "--layers", LAYERS, "--no-protel-ext", "-o", d + "/", board], check=True, capture_output=True)
-    subprocess.run(["kicad-cli", "pcb", "export", "drill", "--excellon-separate-th", "--excellon-units", "mm", "-o", d + "/", board], check=True, capture_output=True)
+    plot = os.path.join(d, "_plot.kicad_pcb")
+    prog = ("import pcbnew, sys\n"
+            "b = pcbnew.LoadBoard(sys.argv[1])\n"
+            "xs, ys = [], []\n"
+            "for g in b.GetDrawings():\n"
+            "    if g.GetLayer() == pcbnew.Edge_Cuts:\n"
+            "        for p in (g.GetStart(), g.GetEnd()):\n"
+            "            xs.append(p.x); ys.append(p.y)\n"
+            "b.GetDesignSettings().SetAuxOrigin(pcbnew.VECTOR2I((min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2))\n"
+            "b.Save(sys.argv[2])\n")
+    subprocess.run([sys.executable, "-c", prog, board, plot], check=True, capture_output=True)
+    pro = os.path.splitext(board)[0] + ".kicad_pro"
+    if os.path.exists(pro):
+        _sh.copy(pro, os.path.splitext(plot)[0] + ".kicad_pro")
+    layers = ",".join(l for l in LAYERS.split(",") if l != "B.Paste")
+    subprocess.run(["kicad-cli", "pcb", "export", "gerbers", "--layers", layers, "--no-protel-ext", "--use-drill-file-origin", "-o", d + "/", plot], check=True, capture_output=True)
+    subprocess.run(["kicad-cli", "pcb", "export", "drill", "--excellon-separate-th", "--excellon-units", "mm", "--drill-origin", "plot", "-o", d + "/", plot], check=True, capture_output=True)
+    for f in os.listdir(d):
+        if f.startswith("_plot") and not f.endswith((".gbr", ".drl")):
+            os.remove(os.path.join(d, f))
     return d
 
 

@@ -132,6 +132,7 @@ fn main() -> Result<()> {
     s.py("check, gate and release cases", "tests/cases/release_cases.py", &[&pcb, &s.w("release_cases")]);
     s.py("review 13: zone probes", "tests/review13/check.py", &[&pcb, &s.w("review13")]);
     s.py("review 14: zone confirmation probes", "tests/review14/check.py", &[&pcb, &s.w("review14")]);
+    s.py("review 15: check, gate, release and compare probes", "tests/review15/check.py", &[&pcb, &s.w("review15")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
             let j = j.clone();

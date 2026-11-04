@@ -15,6 +15,7 @@
 | `review12/` | Review 12's probes (markers against colliding ids, shared uuids, groups and pasted footprints; copper text and graphics changes and re-saves; two prewire stubs at one pad), with their verdicts in `check.py` |
 | `review13/` | Review 13's probes of `pcb zone` (stitching, features, net ties, refusals, the fill flag, the badge), with their verdicts in `check.py` |
 | `review14/` | Review 14's probes confirming review 13's closures (fills against refills, overrides, stitching around custom pads and rule areas, ties, refusals, the badge), with their verdicts in `check.py` |
+| `review15/` | Review 15's probes of milestone M3 (check, gates, release and its read-back, compare-gerbers, paste, art, the import's additions, the badge), with their verdicts in `check.py` |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

@@ -41,8 +41,9 @@ FAULTS = {
 LABELS = {
     "label_shift_03": ('at = [-6.2, 15.95]', 'at = [-5.9, 15.95]'),
     "label_shift_008": ('at = [-6.2, 15.95]', 'at = [-6.12, 15.95]'),
-    "label_text": ('text = "v1.0.0"', 'text = "v1.0.1"'),
-    "label_cap": ('text = "v1.0.0"\nfont = "fonts/Inter-ExtraBold.ttf"\ncap_mm = 1.0', 'text = "v1.0.0"\nfont = "fonts/Inter-ExtraBold.ttf"\ncap_mm = 0.9'),
+    # the fixture prints the version as v{version} since review 15's closure (25) (designer's edit to the probe)
+    "label_text": ('text = "v{version}"', 'text = "v1.0.1"'),
+    "label_cap": ('text = "v{version}"\nfont = "fonts/Inter-ExtraBold.ttf"\ncap_mm = 1.0', 'text = "v{version}"\nfont = "fonts/Inter-ExtraBold.ttf"\ncap_mm = 0.9'),
 }
 
 
@@ -103,6 +104,9 @@ gz = L.unzip(os.path.join(work, "origin_out", "paddle-keyer_v1.0.0_gerbers.zip")
 e = L.gshape(L.find(gz, r"Edge_Cuts")).bounds
 cpl = {r["Designator"]: (float(r["Mid X"][:-2]), float(r["Mid Y"][:-2])) for r in L.rows(os.path.join(work, "origin_out", "paddle-keyer_v1.0.0_CPL.csv"))}
 # U1's centre pad (57) in the Gerbers: the largest F.Paste-less pad is hard to name, so use the board's own pad place
-u1 = L.pyq(os.path.join(d, "board.kicad_pcb"), 'f = b.FindFootprintByReference("U1"); p = f.GetPosition(); print(json.dumps([mm(p.x), -mm(p.y)]))')
+# U1's place in the Gerbers' own frame: the board's outline centre lands on the Gerber outline's centre (release plots
+# from an origin there since review 15's closure, 4; designer's edit, which also makes the probe frame-independent)
+u1 = L.pyq(os.path.join(d, "board.kicad_pcb"), 'f = b.FindFootprintByReference("U1"); p = f.GetPosition(); bb = b.GetBoardEdgesBoundingBox(); c = bb.GetCenter(); print(json.dumps([mm(p.x) - mm(c.x), mm(c.y) - mm(p.y)]))')
+u1 = [u1[0] + (e[0] + e[2]) / 2, u1[1] + (e[1] + e[3]) / 2]
 L.emit("origin", release=L.slim(rr) if rr else L.slim(gr), gerber_outline_centre=[round((e[0] + e[2]) / 2, 3), round((e[1] + e[3]) / 2, 3)],
        u1_gerber=[round(v, 3) for v in u1], u1_cpl=cpl.get("U1"))

@@ -33,6 +33,9 @@ const RULES_4LAYER_INNER: &str = r#"
 "#;
 
 /// The fab's rules and the copper layer count they are for.
+/// The DRC kinds the fab rules report under.
+const FAB_KINDS: &[&str] = &["track_width", "clearance", "hole_size", "via_diameter", "hole_to_hole", "copper_edge_clearance", "hole_clearance"];
+
 pub fn fab_rules(fab: &str) -> Option<(String, u32)> {
     match fab {
         "jlcpcb-2layer-1.6mm" => Some((RULES_2LAYER.to_string(), 2)),
@@ -96,6 +99,19 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     let own = std::fs::read_to_string(&dru).unwrap_or_default();
     let own_rules = own.trim().trim_start_matches("(version 1)");
     std::fs::write(&dru, format!("(version 1)\n{own_rules}\n{rules}"))?;
+    // the project file's severities would still hide what the fab rules report under the standard kinds
+    // (review 15, 5): in the copy, those kinds are errors
+    let pro = copy.with_extension("kicad_pro");
+    if let Ok(text) = std::fs::read_to_string(&pro) {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(sev) = v.pointer_mut("/board/design_settings/rule_severities").and_then(|x| x.as_object_mut()) {
+                for k in FAB_KINDS {
+                    sev.insert(k.to_string(), serde_json::json!("error"));
+                }
+            }
+            std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
+        }
+    }
     let counts = crate::kicad::drc_counts(work, &copy.to_string_lossy(), "check_drc")?;
     for (k, c) in &counts {
         add("drc", k.clone(), *c, format!("KiCad DRC: {k} ({c})"));

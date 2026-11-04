@@ -58,6 +58,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `stitch-no-fill` | zone | A `[[stitch]]` net has no fill on some copper layer, so it gets no stitching vias; the message names the net and layer |
 | `layer-missing` | compare-gerbers | A layer with something on it is in only one of the two sets |
 | `waiver-unused` | check | A `[[waiver]]` matched no finding (stale or misspelt), or its finding counts more than its `max` |
+| `bottom-cpl-unverified` | release | The CPL has bottom-side parts, whose rotation convention pcb has not checked against JLCPCB's |
 | `version-not-on-board` | release | No `[[text]]` entry prints the project version on the board (`{version}`) |
 | `drc-allowed` | zone | A DRC kind grew within its `pcb.toml [[drc_allow]]` allowance; the message names it |
 | `second-run-failed` | route | The router's second run (no region keep-outs) failed or timed out; the first run's result stands |

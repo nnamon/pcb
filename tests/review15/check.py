@@ -82,7 +82,8 @@ if g is not None:
 k = cases("compare15.py")
 if k is not None:
     for x in ("zip_vs_folder", "x2_names_only"):
-        want(f"compare {x}", k.get(x), out(k.get(x), "done") and len(k[x]["layers"]) == 8)
+        # 7: release plots no B.Paste for a top-only assembly since review 15's closure (2) (designer's edit)
+        want(f"compare {x}", k.get(x), out(k.get(x), "done") and len(k[x]["layers"]) == 7)
     want("compare unknown_layers", k.get("unknown_layers"), out(k.get("unknown_layers"), "rejected", "refused"), "#1")
     want("compare slot_longer", k.get("slot_longer"), out(k.get("slot_longer"), "rejected"))
     c = k.get("drill_explain_norect")
@@ -117,7 +118,9 @@ if r is not None:
     c = r.get("rb_thin_track")
     want("release rb_thin_track", c, c is not None and out(c["release"], "rejected") and any("trace" in p for p in c["problems"]), "#7")
     c = r.get("rb_thin_silk")
-    want("release rb_thin_silk", c, c is not None and any("silk_line" in p and ("-30.0]" in p or "-31.0]" in p) for p in c["problems"]), "#8")
+    # since review 15's closure (26) pcb check finds silk lines under 0.15 mm, so the gate stops them before release;
+    # the read-back's own 0.12 mm case is verify_mutations' silk_line (designer's edit)
+    want("release rb_thin_silk", c, c is not None and (any("silk_line" in p and ("-30.0]" in p or "-31.0]" in p) for p in c["problems"]) or ("lines 0.12 mm" in c.get("check_found", []) and "lines 0.1 mm" in c.get("check_found", []))), "#8")
     c = r.get("rb_cutout")
     want("release rb_cutout", c, c is not None and out(c["release"], "rejected") and any("cu_edge" in p for p in c["problems"]), "#16")
     c = r.get("rb_off_board")

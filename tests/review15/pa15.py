@@ -112,22 +112,23 @@ g = L.export(rej[0] if r["outcome"] == "rejected" and rej else b, W("art_g"))
 cx, cy = L.pyq(b, 'bb = b.GetBoardEdgesBoundingBox(); print(json.dumps([mm(bb.GetCenter().x), mm(bb.GetCenter().y)]))')
 fm = L.gshape(L.find(g, r"F_Mask"))
 # the GeoJSON is y down in the board frame; Gerbers are y up
-got = fm.intersection(box(-1, -10, 15, 1))
-exp = sscale(want, 1, -1, origin=(0, 0))
+# release's frame since review 15's closure (4): the outline's centre at the origin, y up (designer's edit)
+got = fm.intersection(box(-1 - cx, -10 + cy, 15 - cx, 1 + cy))
+exp = translate(sscale(want, 1, -1, origin=(0, 0)), -cx, cy)
 holes_err = got.symmetric_difference(exp).area
 # text on F.Cu and B.Cu around (cx, cy + 10) in Gerber frame (y up: -cy + -10 + ... ); compare B with F mirrored about x = cx
 fc, bc = L.gshape(L.find(g, r"F_Mask")), L.gshape(L.find(g, r"B_Mask"))
-win = box(cx + 16, -cy - 10 - 1.6, cx + 24, -cy - 10 + 1.6)
+win = box(16, -10 - 1.6, 24, -10 + 1.6)
 ft, bt = fc.intersection(win), bc.intersection(win)
-mirror_err = sscale(ft, -1, 1, origin=(cx + 20, 0)).symmetric_difference(bt).area
+mirror_err = sscale(ft, -1, 1, origin=(20, 0)).symmetric_difference(bt).area
 ftb = ft.bounds
 # "8" and "R" have counters: holes in the plotted text
 n_holes = sum(len(p.interiors) for p in getattr(ft, "geoms", [ft]))
 bm = L.gshape(L.find(g, r"B_Mask"))
-h = bm.intersection(box(cx + 18, -cy + 5 - 2, cx + 22, -cy + 5 + 2))
+h = bm.intersection(box(18, 5 - 2, 22, 5 + 2))
 hb = h.bounds if not h.is_empty else None
 L.emit("art", first=L.slim(r), second=L.slim(r2), second_same_bytes=same, holes_sym_diff_mm2=round(holes_err, 4), holes_area=round(exp.area, 3),
-       text_mirror_sym_diff_mm2=round(mirror_err, 4), text_area=round(ft.area, 3), text_centre=[round((ftb[0] + ftb[2]) / 2 - cx - 20, 3), round((ftb[1] + ftb[3]) / 2 + cy, 3)] if ft.bounds else None,
+       text_mirror_sym_diff_mm2=round(mirror_err, 4), text_area=round(ft.area, 3), text_centre=[round((ftb[0] + ftb[2]) / 2 - 20, 3), round((ftb[1] + ftb[3]) / 2, 3)] if ft.bounds else None,
        counters=n_holes, h_rot90_size=[round(hb[2] - hb[0], 3), round(hb[3] - hb[1], 3)] if hb else None)
 
 # dropping an entry removes its group and shapes

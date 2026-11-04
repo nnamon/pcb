@@ -580,6 +580,9 @@ fn run(cli: Cli) -> Result<Reply> {
             }
             let outcome = if r.problems.is_empty() { Outcome::Done } else { Outcome::Rejected };
             let mut warnings = vec![];
+            if r.bottom_parts > 0 {
+                warnings.push(contract::warn("bottom-cpl-unverified", format!("{} bottom-side parts in the CPL: their rotations are KiCad's board angles, not checked against JLCPCB's bottom-side convention; check them in JLCPCB's placement preview", r.bottom_parts)));
+            }
             if !r.version_on_board {
                 warnings.push(contract::warn("version-not-on-board", "no [[text]] entry prints the version on the board; add one with {version} (GUIDELINES: version on the board)".to_string()));
             }

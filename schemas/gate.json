@@ -93,7 +93,9 @@
               "width-current",
               "side",
               "paste",
-              "testpoint"
+              "testpoint",
+              "silk",
+              "ring"
              ]
             },
             "item": {

@@ -29,6 +29,9 @@ pub struct Report {
     pub left_out: Vec<String>,
     /// Whether a `[[text]]` entry prints the version (`{version}`, or the version itself) on the board.
     pub version_on_board: bool,
+    /// Parts in the CPL on the bottom side: their rotation is KiCad's board angle, not yet checked against
+    /// JLCPCB's bottom-side convention.
+    pub bottom_parts: usize,
     /// Connectivity rebuilt from the Gerbers and drill files written, and DFM on them (`gerber_helper.py verify`).
     pub verify: serde_json::Value,
     /// What `verify` found that no `[[waiver]]` (check "dfm", item "<rule> <layer>") covers: opens, shorts, pads in no
@@ -223,6 +226,7 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     }
     rep.bom_lines = groups.len();
     rep.cpl_rows = parts.len();
+    rep.bottom_parts = parts.iter().filter(|q| q.bottom).count();
     std::fs::write(out.join(format!("{stem}_BOM.csv")), bom)?;
     std::fs::write(out.join(format!("{stem}_CPL.csv")), cpl)?;
 

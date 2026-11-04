@@ -27,6 +27,9 @@ def W(*p):
 
 
 def cpl(out):
+    # a rejected release moves aside to <out>.rejected since review 15's closure (17) (designer's edit)
+    if not os.path.exists(out) and os.path.exists(out + ".rejected"):
+        out = out + ".rejected"
     return {r["Designator"]: (float(r["Mid X"][:-2]), float(r["Mid Y"][:-2]), r["Layer"], float(r["Rotation"])) for r in L.rows(os.path.join(out, f"{STEM}_CPL.csv"))}
 
 
@@ -150,7 +153,7 @@ L.toml_sub(d, "cpl_offset_mm = [-0.1, 0]", "cpl_offset_mm = [-0.1, 0.2]")
 L.toml_add(d, f'[parts.{orc["C2_lcsc"]}]\ncpl_offset_mm = [0.3, -0.2]\nsource = "probe"\n')
 g = force_gate(d, "cpl")
 r = release(d, "cpl") if g["outcome"] == "done" else g
-got = cpl(W("cpl_out")) if os.path.exists(W("cpl_out", f"{STEM}_CPL.csv")) else {}
+got = cpl(W("cpl_out")) if os.path.exists(W("cpl_out", f"{STEM}_CPL.csv")) or os.path.exists(W("cpl_out.rejected", f"{STEM}_CPL.csv")) else {}
 cx, cy = orc["centre"]
 want = {k: [round(orc[k][0] - cx, 3), round(cy - orc[k][1], 3)] for k in ("J2", "J1", "C2")}
 # KiCad's own position file for the same board, for the rotation it gives a bottom part

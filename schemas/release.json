@@ -35,7 +35,8 @@
      "written",
      "verify",
      "problems",
-     "version_on_board"
+     "version_on_board",
+     "bottom_parts"
     ],
     "properties": {
      "files": {
@@ -100,6 +101,10 @@
      },
      "version_on_board": {
       "type": "boolean"
+     },
+     "bottom_parts": {
+      "type": "integer",
+      "minimum": 0
      }
     }
    }
