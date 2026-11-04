@@ -19,7 +19,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `edit-unjoined` | refused | New copper touches no copper of its net at an end | Fix the point, or mark the end free (`free_start`, `free_end`, `free`) |
 | `unknown-net` | refused | A net named in `--nets` or `--rip` is not on the board | Check the name with `pcb info --net` |
 | `non-ascii-net` | refused | A net name has non-ASCII characters, which Freerouting cannot take | Rename the net |
-| `arc-unsupported` | refused | The board has track arcs, which `pcb route` does not handle yet | Replace the arcs with segments, or route by hand |
+| `arc-unsupported` | refused | The board has track arcs, which `pcb route` does not handle yet, or a net `pcb zone` absorbs into a net tie has arcs | Replace the arcs with segments, or route by hand |
 | `bad-layer` | refused | A routing layer is not a copper layer of the board | Use the board's copper layer names |
 | `tools-mismatch` | refused | `pcb doctor` found a tool version or behaviour other than the pinned one | Install the pinned versions (tools/pcb/ci/Dockerfile) or re-test pcb on the new ones |
 | `rejected-onto-input` | refused | A rejected result's file name is the input board | Choose another `--out` |
@@ -47,5 +47,6 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `still-open` | route | A requested net is still not fully connected |
 | `pinless-net` | route | A net with copper but no pads was declared to Freerouting |
 | `repeated-ref` | diff | A reference appears more than once on a board; repeats are matched in file order |
+| `drc-allowed` | zone | A DRC kind grew within its `pcb.toml [[drc_allow]]` allowance; the message names it |
 | `second-run-failed` | route | The router's second run (no region keep-outs) failed or timed out; the first run's result stands |
 | `join-outside-region` | route | The router joined tracks wholly outside the region in their middle; they were left unsplit |

@@ -34,14 +34,15 @@ def items(path):
 
 
 def without_fill(n, src):
-    """An item's text; a zone's without its filled_polygon blocks, which the write gate refills on every write."""
+    """An item's text; a zone's without its filled_polygon blocks, which the write gate refills on every write, and
+    with its filled flag (`(fill yes`) read as part of the fill state (M2)."""
     t = n.text(src)
     if n.head != "zone":
         return t
     for f in sorted((c for c in n.items if isinstance(c, kisexp.Node) and c.head == "filled_polygon"), key=lambda c: -c.span[0]):
         a, b = f.span[0] - n.span[0], f.span[1] - n.span[0]
         t = t[:a] + t[b:]
-    return re.sub(r"\n[ \t]*(?=\n)", "", t)
+    return re.sub(r"\n[ \t]*(?=\n)", "", t).replace("(fill yes", "(fill")
 
 
 def near(a, b):

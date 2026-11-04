@@ -28,7 +28,8 @@ def no_fills(t):
         out.append(t[i:s])
         i = e
     out.append(t[i:])
-    return re.sub(r"\n[ \t]*\n", "\n", "".join(out))
+    # the zone's filled flag is part of its fill state, which the gate takes from pcbnew (M2)
+    return re.sub(r"\n[ \t]*\n", "\n", "".join(out)).replace("(fill yes", "(fill")
 
 
 def zone_uuids(t):

@@ -38,7 +38,56 @@ pub struct Project {
     pub pad_override: Vec<PadOverride>,
     #[serde(default)]
     pub net_tie: Vec<NetTie>,
+    /// Defaults for power fills (`nets.<NET>.fill_grow_mm`).
+    pub fill: Option<FillRule>,
+    /// Stitching vias placed in a net's fills after filling.
+    #[serde(default)]
+    pub stitch: Vec<Stitch>,
+    /// DRC kinds a zone run may add, each with its most and why: the owner's accepted waivers.
+    #[serde(default)]
+    pub drc_allow: Vec<DrcAllow>,
     pub bringup: Option<Bringup>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FillRule {
+    /// Layers the fills go on (default: the outer copper layers).
+    pub layers: Option<Vec<String>>,
+    /// Clearance to other nets (default 0.25 mm).
+    pub clearance_mm: Option<f64>,
+    /// Minimum copper width (default 0.3 mm).
+    pub min_width_mm: Option<f64>,
+    /// Zone priority (default 2): above the pours, so a fill keeps its copper where they overlap.
+    pub priority: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stitch {
+    pub net: String,
+    /// Grid pitch (mm).
+    pub pitch_mm: f64,
+    /// Via size and drill (mm).
+    pub size_mm: f64,
+    pub drill_mm: f64,
+    /// How far inside every fill of the net the via's edge must sit (default 0.3 mm).
+    pub margin_mm: Option<f64>,
+    /// Only inside this rectangle, x0, y0, x1, y1 mm (default: the whole board).
+    pub rect: Option<[f64; 4]>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DrcAllow {
+    /// KiCad DRC type, e.g. "starved_thermal".
+    pub kind: String,
+    /// The nets on the item, as DRC reports them (`<no net>` for an item without one); empty for any.
+    #[serde(default)]
+    pub nets: Vec<String>,
+    /// The most of this kind and nets the result may have above the input.
+    pub max: usize,
+    pub why: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -88,8 +137,10 @@ pub struct NetRule {
     pub current_a: Option<f64>,
     /// Track width the net is routed at.
     pub width_mm: Option<f64>,
-    /// How far a power fill grows from the net's copper (M2).
+    /// How far a power fill grows from the net's copper (M2); a net with it gets fills.
     pub fill_grow_mm: Option<f64>,
+    /// This net's fill priority, above `fill.priority`'s default, where two fills meet.
+    pub fill_priority: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -120,6 +171,12 @@ pub struct ZoneRule {
     pub layers: Vec<String>,
     pub clearance_mm: f64,
     pub thermal: Option<Thermal>,
+    /// Zone priority (default 0); a higher one fills first where zones overlap.
+    pub priority: Option<u32>,
+    /// Minimum copper width (default 0.25 mm).
+    pub min_width_mm: Option<f64>,
+    /// How pads join it: "thermal" (default), "solid" or "none".
+    pub connect: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -142,7 +199,13 @@ pub struct PadOverride {
 #[serde(deny_unknown_fields)]
 pub struct NetTie {
     pub footprint: String,
+    /// The pads the tie joins: the footprint's net-tie pad group.
     pub pads: Vec<String>,
+    /// A net whose copper becomes the tie: its tracks between pads of different nets become copper inside the
+    /// footprint, its tracks between pads of one net take that net, and its vias become plated pads of the footprint.
+    pub absorb_net: Option<String>,
+    /// The net the absorbed vias' pads take.
+    pub absorb_vias_net: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -295,6 +358,47 @@ pub fn check(p: &Project) -> Vec<String> {
                 e.push(format!("zone {}: thermal gap_mm and spoke_mm must be above 0", z.net));
             }
         }
+        if z.min_width_mm.is_some_and(|w| !(w > 0.0 && w.is_finite())) {
+            e.push(format!("zone {}: min_width_mm must be above 0", z.net));
+        }
+        if let Some(c) = &z.connect {
+            if !matches!(c.as_str(), "thermal" | "solid" | "none") {
+                e.push(format!("zone {}: connect is thermal, solid or none", z.net));
+            }
+        }
+        if z.layers.is_empty() {
+            e.push(format!("zone {}: layers is empty", z.net));
+        }
+    }
+    if let Some(f) = &p.fill {
+        for (k, v) in [("clearance_mm", f.clearance_mm), ("min_width_mm", f.min_width_mm)] {
+            if v.is_some_and(|v| !(v > 0.0 && v.is_finite())) {
+                e.push(format!("fill.{k} must be above 0"));
+            }
+        }
+    }
+    for s in &p.stitch {
+        if !(s.pitch_mm > 0.0 && s.size_mm > s.drill_mm && s.drill_mm > 0.0 && s.pitch_mm.is_finite() && s.size_mm.is_finite()) {
+            e.push(format!("stitch {}: needs pitch_mm above 0 and size_mm above drill_mm above 0", s.net));
+        }
+        if s.margin_mm.is_some_and(|m| !(m >= 0.0 && m.is_finite())) {
+            e.push(format!("stitch {}: margin_mm must be 0 or more", s.net));
+        }
+        if let Some([x0, y0, x1, y1]) = s.rect {
+            if !(x1 > x0 && y1 > y0) {
+                e.push(format!("stitch {}: rect must be x0, y0, x1, y1 with x1 > x0 and y1 > y0", s.net));
+            }
+        }
+    }
+    for a in &p.drc_allow {
+        if a.kind.trim().is_empty() || a.why.trim().is_empty() {
+            e.push(format!("drc_allow {:?}: needs a kind and a why", a.kind));
+        }
+    }
+    for t in &p.net_tie {
+        if t.absorb_net.is_some() != t.absorb_vias_net.is_some() && t.absorb_vias_net.is_some() {
+            e.push(format!("net_tie {}: absorb_vias_net needs absorb_net", t.footprint));
+        }
     }
     for o in &p.pad_override {
         if !o.pad.contains('.') {
@@ -339,6 +443,21 @@ pub fn check_against(p: &Project, b: &Board) -> Vec<Warning> {
             for l in ls.iter().filter(|l| !has_layer(l)) {
                 add(format!("keepout {:?}: no copper layer {l}", k.name));
             }
+        }
+    }
+    for (n, r) in &p.nets {
+        if r.fill_grow_mm.is_some() && !b.nets.contains(n) {
+            add(format!("nets.{n}.fill_grow_mm: no such net on the board"));
+        }
+    }
+    for s in &p.stitch {
+        if !b.nets.contains(&s.net) {
+            add(format!("stitch {}: no such net on the board", s.net));
+        }
+    }
+    if let Some(ls) = p.fill.as_ref().and_then(|f| f.layers.as_ref()) {
+        for l in ls.iter().filter(|l| !has_layer(l)) {
+            add(format!("fill.layers: no copper layer {l}"));
         }
     }
     for z in &p.zone {

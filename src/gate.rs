@@ -23,6 +23,8 @@ pub struct Gate {
 pub struct GateResult {
     pub fixed: Vec<String>,
     pub regressions: Vec<String>,
+    /// Kinds that grew within an owner's allowance (`finish_allowing`).
+    pub allowed: Vec<String>,
     pub total_before: usize,
     pub total_after: usize,
     pub after: BTreeMap<String, usize>,
@@ -84,6 +86,12 @@ impl Gate {
     }
 
     pub fn finish(&self, candidate: &str, out_path: &str, has_zones: bool) -> Result<GateResult> {
+        self.finish_allowing(candidate, out_path, has_zones, &[])
+    }
+
+    /// As `finish`, with DRC kinds the owner accepts (`pcb.toml [[drc_allow]]`): a kind and nets that grow by no
+    /// more than its `max` is reported in `allowed`, not as a regression.
+    pub fn finish_allowing(&self, candidate: &str, out_path: &str, has_zones: bool, allow: &[crate::project::DrcAllow]) -> Result<GateResult> {
         let cand = self.work.join("candidate.kicad_pcb");
         // zones inside footprints count too (review 9, 2)
         let text = if has_zones || candidate.contains("(zone") {
@@ -100,7 +108,20 @@ impl Gate {
         // the design rules travel with the board: without them KiCad falls back to its defaults
         kicad::copy_rules(&self.input, &cand)?;
         let after = kicad::drc_counts(&self.work, cand.to_str().unwrap(), "drc_after")?;
-        let (fixed, regressions) = compare(&self.before, &after);
+        let (fixed, worse) = compare(&self.before, &after);
+        let (mut regressions, mut allowed) = (vec![], vec![]);
+        for w in worse {
+            let key = w.rsplit_once(": ").map(|(k, _)| k).unwrap_or(&w);
+            let (kind, mut nets) = kicad::key_parts(key);
+            nets.sort();
+            let grew = after.get(key).copied().unwrap_or(0) - self.before.get(key).copied().unwrap_or(0);
+            let ok = allow.iter().any(|a| {
+                let mut an: Vec<String> = a.nets.iter().map(|n| if n == kicad::NO_NET { String::new() } else { n.clone() }).collect();
+                an.sort();
+                a.kind == kind && (a.nets.is_empty() || an == nets) && grew <= a.max
+            });
+            if ok { allowed.push(w) } else { regressions.push(w) }
+        }
         let dest = if regressions.is_empty() {
             out_path.to_string()
         } else {
@@ -117,7 +138,7 @@ impl Gate {
         }
         std::fs::copy(&cand, &dest)?;
         kicad::copy_rules(&self.input, Path::new(&dest))?;
-        Ok(GateResult { fixed, regressions, total_before: self.before.values().sum(), total_after: after.values().sum(), after, written: dest })
+        Ok(GateResult { fixed, regressions, allowed, total_before: self.before.values().sum(), total_after: after.values().sum(), after, written: dest })
     }
 }
 
@@ -167,6 +188,13 @@ pub fn splice_fills(candidate: &str, filled: &str) -> Result<String> {
             crate::route::remove(&mut e, candidate, old.span);
         }
         let new: String = m.find_all("filled_polygon").map(|f| format!("\t\t{}\n", &filled[f.span.0..f.span.1])).collect();
+        // the zone's filled flag, `(fill yes ...)`, follows pcbnew's: without it KiCad treats the fills as stale
+        let yes = |n: &crate::sexpr::Node| n.find("fill").and_then(|f| f.items().get(1)).filter(|x| x.atom() == Some("yes")).map(|x| x.span);
+        match (z.find("fill"), yes(z), yes(m).is_some()) {
+            (Some(f), None, true) => e.insert(f.items()[0].span.1, " yes"),
+            (Some(_), Some(sp), false) => e.replace((sp.0 - 1, sp.1), ""),
+            _ => {}
+        }
         // before the zone's closing paren, on lines of their own
         let close = z.span.1 - 1;
         let line_start = candidate[..close].rfind('\n').map(|k| k + 1).unwrap_or(close);
@@ -210,6 +238,15 @@ mod tests {
         assert!(first < out.find("(zone (net").unwrap() && second > out.find("(zone (net").unwrap(), "{out}");
         // a marker pcbnew dropped is an error, not a guess
         assert!(splice_fills(cand, &filled.replace(&mark(1), "other")).is_err());
+    }
+
+    #[test]
+    fn fill_flag_follows_pcbnew() {
+        let cand = "(kicad_pcb\n\t(zone (net \"GND\") (uuid \"a\") (fill (thermal_gap 0.5)))\n\t(zone (net \"GND\") (uuid \"b\") (fill yes (thermal_gap 0.5))\n\t\t(filled_polygon (layer \"F.Cu\") (pts (xy 9 9)))\n\t)\n)\n";
+        let filled = format!("(kicad_pcb\n\t(zone (net \"GND\") (uuid \"{}\") (fill yes (thermal_gap 0.5)) (filled_polygon (layer \"F.Cu\") (pts (xy 1 1))))\n\t(zone (net \"GND\") (uuid \"{}\") (fill (thermal_gap 0.5)))\n)\n", mark(0), mark(1));
+        let out = splice_fills(cand, &filled).unwrap();
+        assert!(out.contains("(uuid \"a\") (fill yes (thermal_gap 0.5))"), "{out}");
+        assert!(out.contains("(uuid \"b\") (fill (thermal_gap 0.5))") && !out.contains("xy 9 9"), "{out}");
     }
 
     #[test]

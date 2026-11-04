@@ -128,6 +128,7 @@ fn main() -> Result<()> {
         s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
         s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);
     }
+    s.py("zone cases", "tests/cases/zone_cases.py", &[&pcb, &s.w("zone_cases")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
             let j = j.clone();
@@ -289,16 +290,33 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         }
     }
 
-    // zones: spike 3 is a badge-specific prototype until `pcb zone` (M2), so it runs only for a fixture that names it
-    if let Some(z) = fx.get("zones").filter(|z| z.get("prototype").and_then(|p| p.as_str()) == Some("spike3")) {
-        let coil = dir.join(z["coil_json"].as_str().context("coil_json")?).to_string_lossy().to_string();
+    // zones: `pcb zone` runs with the fixture's pcb.toml beside a copy of the imported board, twice: the second run, on
+    // the zoned board, must write the same bytes
+    if fx.get("zones").is_some() {
+        let zdir = w("zone");
+        std::fs::create_dir_all(&zdir)?;
+        let zb = format!("{zdir}/board.kicad_pcb");
+        std::fs::copy(&board, &zb)?;
+        std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&zb).with_extension("kicad_pro"))?;
+        std::fs::copy(dir.join("pcb.toml"), format!("{zdir}/pcb.toml")).context("a fixture with [zones] needs pcb.toml")?;
         let base = w("base.kicad_pcb");
         let zoned = w("zoned.kicad_pcb");
         std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&base).with_extension("kicad_pro"))?;
-        std::fs::copy(Path::new(&board).with_extension("kicad_pro"), Path::new(&zoned).with_extension("kicad_pro"))?;
         let save = format!("import pcbnew; b = pcbnew.LoadBoard({board:?}); b.Save({base:?})");
-        if s.run(&format!("{name}: zones base (KiCad save)"), "python3", &["-c", &save]) && s.py(&format!("{name}: zones (spike 3)"), "phase0/spike3.py", &[&base, &coil, &zoned]) && s.py(&format!("{name}: zone fill"), "src/kicad_helper.py", &["fill", &zoned]) {
+        let zwork = w("zone_work");
+        if s.run(&format!("{name}: zones base (KiCad save)"), "python3", &["-c", &save]) && s.run(&format!("{name}: pcb zone"), pcb, &["zone", "--project", &zdir, "-o", &zoned, "--work", &zwork]) {
             s.py(&format!("{name}: verify_zones"), "tests/oracles/verify_zones.py", &[&base, &zoned, &ftoml]);
+            // second run on the zoned board
+            let again = w("zone_again");
+            std::fs::create_dir_all(&again)?;
+            std::fs::copy(&zoned, format!("{again}/board.kicad_pcb"))?;
+            std::fs::copy(Path::new(&board).with_extension("kicad_pro"), format!("{again}/board.kicad_pro"))?;
+            std::fs::copy(dir.join("pcb.toml"), format!("{again}/pcb.toml"))?;
+            let zoned2 = w("zoned_again.kicad_pcb");
+            let t0 = Instant::now();
+            let ran = Command::new(pcb).args(["zone", "--project", &again, "-o", &zoned2, "--work", &w("zone_work2")]).output()?;
+            let same = ran.status.success() && std::fs::read(&zoned2).ok() == std::fs::read(&zoned).ok();
+            s.steps.push(Step { name: format!("{name}: pcb zone again (same bytes)"), ok: same, seconds: t0.elapsed().as_secs_f64(), detail: if same { String::new() } else { String::from_utf8_lossy(&ran.stdout).chars().take(400).collect() } });
             if s.fast {
                 s.skip(&format!("{name}: zone mutations"), "--fast");
             } else {

@@ -153,7 +153,7 @@ Every command:
 
 ## Project file and explicit edits (milestone M1)
 
-The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1).
+The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1); `zone` (M2).
 
 ### Project file
 
@@ -166,11 +166,14 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 | `[gates.<name>]` | `version`, `passed` (YYYY-MM-DD), `inputs` (`sha256:...`) | written by `pcb gate pass` (M3), never by hand |
 | `[decisions.<key>]` | `text`, `date`: owner decisions an agent must not ask about again | `status` |
 | `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste` | M3 release |
-| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm` | M2 zones, M3 width and rating checks |
+| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm`, `fill_priority` | M2 zones, M3 width and rating checks |
 | `[[keepout]]` | `name`, `rect` (x0, y0, x1, y1 mm), `grow_mm`, `layers` (`"all"` or a list), `forbid` (`pour`, `track`, `via`, `footprint`) | M2 |
-| `[[zone]]` | `net`, `layers`, `clearance_mm`, `thermal = { gap_mm, spoke_mm }` | M2 |
+| `[[zone]]` | `net`, `layers`, `clearance_mm`, `thermal = { gap_mm, spoke_mm }`, `priority`, `min_width_mm`, `connect` (`thermal`, `solid`, `none`) | M2 |
+| `[fill]` | `layers`, `clearance_mm`, `min_width_mm`, `priority`: the power fills grown from each `fill_grow_mm` net | M2 |
 | `[[pad_override]]` | `pad` (`REF.PAD`), `zone_connection` (`solid`, `thermal`, `none`) | M2 |
-| `[[net_tie]]` | `footprint`, `pads` (two or more) | M2 |
+| `[[net_tie]]` | `footprint`, `pads` (two or more), `absorb_net`, `absorb_vias_net` | M2 |
+| `[[stitch]]` | `net`, `pitch_mm`, `size_mm`, `drill_mm`, `margin_mm` (default 0.3), `rect` | M2 |
+| `[[drc_allow]]` | `kind` (a KiCad DRC type), `nets`, `max`, `why` | M2 zone; the gate's allowance |
 | `[bringup]` | `ammeter_break` (nets), `test_points` (reference to what it measures) | M3 bring-up sheet |
 
 - **`pcb init BOARD`** writes a starter file, with `board` relative to the file's own folder (climbing with `..` when it must): the name (the board's stem unless `--name`), version 0.1.0, the layer count and `jlcpcb-<n>layer-1.6mm`, an empty `[decisions]`, and a `[nets.<NET>] width_mm` for every net whose most common track width is above the board's usual one. It never overwrites a file (`exists`), refuses to write one `status` would refuse (`config`), and checks that the board is found from the written file.
@@ -215,6 +218,26 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 - **`--width NET=MM`** routes one net at a width other than its usual one: the owner's choice for one link. A width must be above 0 and at most 25 mm; a net named twice, or one this run does not route, is refused (`usage`). The net goes to Freerouting in a class of its own at that width; the gate still judges the result against the board's rules.
 - **`--prewire FILE`** applies `pcb edit` operations before routing: parts moved, or copper laid where the router cannot find room. They are checked as an edit would be. Their copper (every track and via whose text the input does not hold, so a track they widened too) is never ripped, even on a net named in `--rip`, and never pruned, except a prewire stub laid with a free end and joined by the router partway along (inside a segment or at an inner corner): from the join out to the free end, and no further. The stub is walked from its free end and ends at the board's own copper, at a junction of three or more prewire tracks, or at a change of layer, so a stub the router never joined is kept even when it shares an anchor with one it did, and the whole change, prewire plus routing, is gated once against the input. The prewired board is written to the work folder as `prewired.kicad_pcb`.
 - **Second router run.** When named nets are left open, the router runs again with no region keep-outs and copper outside the region is still dropped (Engineering choices, Freerouting traps). The run leaving fewer named nets open goes to the gate first; if it makes the board worse and the other run does not, the other is kept. If the second run fails or times out, the first run's result stands (`second-run-failed`). The report lists both runs in `attempts` and the one kept in `attempt_used`. The count of open nets reads the input's zone fills, which routing makes stale; it only picks the order, and KiCad's DRC is the judge. Worst case, a route takes twice `--timeout`.
+
+## Zones (milestone M2)
+
+`pcb zone [--project DIR] [-o OUT] [--work DIR]` (`src/zone.rs`) builds every zone `pcb.toml` asks for and writes the result through the write gate. It replaces `phase0/spike3.py`; the badge fixture's `pcb.toml` gives the same zones, and `verify_zones.py` passes on the result.
+
+In order:
+1. **Earlier work goes.** Zones whose name starts `pcb:` and stitching vias whose uuid still matches their net and place are removed. A zone or via the owner made, or a stitching via moved by hand, has no such name or uuid and stays.
+2. **Pad overrides** set `zone_connect` on the named pads (`solid` 2, `thermal` 1, `none` 0).
+3. **Net ties.** The footprint gets `net_tie_pad_groups` for `pads`. With `absorb_net`, that net's vias become plated pads of the footprint on `absorb_vias_net`, numbered on from its highest pad, in x then y order. Each run of the net's tracks between pads and vias becomes footprint copper (`fp_line`) when its ends meet different nets, and is retyped to that net when both ends meet one. The net then leaves the board. A net with track arcs is refused (`arc-unsupported`). On a second run the absorbed net is gone; when the footprint already has the tie group, absorption is skipped; when it has not, the tie is refused (`config`).
+4. **Keep-outs** become rule areas, `pcb:keepout:<name>`, over `rect` grown by `grow_mm`, on the named layers, forbidding what `forbid` lists.
+5. **Zones** (`[[zone]]`): one zone per layer over the board's bounding box, `pcb:zone:<net>:<layer>`, with its clearance, thermal relief, priority, minimum width and pad connection.
+6. **Fills** (`[fill]` and `fill_grow_mm`): each net's copper on each layer (tracks and pads, pads as their bounding rectangles), grown by `fill_grow_mm`, clipped to the board and less the pour keep-outs, simplified at 0.01 mm. Each piece is a zone `pcb:fill:<net>:<layer>:<i>` connecting solid. Its priority is the net's `fill_priority`, else `[fill] priority`, else 2. KiCad fills zones of one priority in uuid order, so overlapping fills need distinct priorities to come out the same way every time.
+7. **Stitching vias** (`[[stitch]]`): a copy is filled, and a via goes on each grid point (pitch from the corner of `rect` or the board) that sits inside the net's fill on every copper layer, at least `margin_mm` from the fill's edges, pads and other vias. Each via's uuid comes from its net and place.
+8. **The gate.** With `[[drc_allow]]`, a DRC kind (type and nets) may grow up to `max` over the input; such growth is listed in `allowed` and warned (`drc-allowed`) instead of rejecting the result. Every allowance needs a `why`.
+
+- Zone uuids come from zone names, so the same `pcb.toml` on the same board writes the same bytes, and running `zone` on its own output gives the same file again.
+- Names in `pcb.toml` the board lacks (nets, references, pads, layers) are refused here (`config`), unlike `status`, which only warns: a zone on a missing net would be built wrong. The one exception is a tie pad the absorbed vias will make.
+- The fill flag (`(fill yes ...)`) follows pcbnew's after the gate's fill, so KiCad does not treat the carried-back fills as stale.
+- **The badge (fixture `badge_r36a`).** `pcb zone` gives the zones spike 3 gave, plus 202 GND stitching vias on a 5 mm grid; KiCad DRC goes from 144 to 27 violations. J102 pad 4 and J701 pad 2 get one top-layer spoke each. Turning J102 pad 4's spokes 45° or narrowing its gap still gives one, and a solid pad override removes the reliefs its plated hole needs on the GND planes (verify_zones check D catches it). Both stay allowed in the fixture until the badge's design work after M4.
+- Cases: `tests/cases/zone_cases.py` on a synthetic board (each feature, 14 refusals, the allowance within and over `max`, determinism, a second run, a changed stitching pitch); the badge fixture, with verify_zones, its mutations and a second run.
 
 ## Planning drawings
 
@@ -301,7 +324,7 @@ After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB
 
 ## Spike 3: KiCad zones and the coil as a net tie (30 Oct 2026)
 
-Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/verify_zones.py`, whose sensitivity is shown by `tests/zone_mutations.py` (7 of 7 caught).
+Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/oracles/verify_zones.py`, whose sensitivity is shown by `tests/mutations/zone_mutations.py`.
 
 - **NFC coil:** the 49 spiral segments became copper inside L601, a net tie for pads 1 and 3. The two coil vias became L601 pads 3 and 4, and the bottom bridge and top link stay NFC_AC1 tracks. The coil copper is unchanged (same ends and widths). KiCad DRC's 4 coil clearance errors and 2 mask bridges are gone.
 - **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 34 power fills grown from each power net's copper (35 in the first run, before later import changes); GND pours on both outer layers. Copper areas differ from the old scripts' pours by up to −47 % (BAT_RAW top) and +71 % (VBAT bottom); the top GND pour is 21 % smaller (review 4, Z3). The bottom-layer exclusion under the power stage is missing (Z4).
@@ -309,4 +332,4 @@ Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh p
 - **Fill time:** about 2 s.
 - **KiCad traps found:** zones created and filled in one process kept islands that DRC then calls isolated, so filling is a separate step; a zone given several outlines from Python saved only the first, so each polygon is its own zone; footprint pads and shapes need their local positions set; rule areas must name only the board's own copper layers.
 
-Review 4 found that verify_zones.py would pass a short across the net tie (Z1), and missing fills or thin spokes (Z2); the coil's inner via is 0.075 mm from the next turn (Z6). These go into M2 of the proposal. Not yet done: stitching vias between the outer pours, a pad override for J102 pad 4, and the Rust `pcb zone` command that replaces the prototype.
+Review 4 found that verify_zones.py would pass a short across the net tie (Z1), and missing fills or thin spokes (Z2); the coil's inner via is 0.075 mm from the next turn (Z6). These went into M2; `pcb zone` (Zones, milestone M2) replaced the prototype.

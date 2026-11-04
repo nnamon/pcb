@@ -80,11 +80,9 @@ name = "duplicate_removed"
 ops = '[{"op": "delete", "what": "track", "net": "PMUX_SS", "layer": "F.Cu", "start": [50.85, 29.75], "end": [49.92, 29.75], "all": true}, {"op": "add_track", "net": "PMUX_SS", "layer": "F.Cu", "width": 0.15, "points": [[50.85, 29.75], [49.92, 29.75]]}]'
 expect = "done"
 
-# Zones (spike 3 prototype), in KiCad coordinates (mm, y down).
+# Zones, in KiCad coordinates (mm, y down).
 [zones]
-# phase0/spike3.py is written for this board only; `pcb zone` (milestone M2) replaces it
-prototype = "spike3"
-coil_json = "nfc_coil.json"
+# what `pcb zone` must make from this folder's pcb.toml; verify_zones checks it
 keepouts = [
   { name = "coil", rect = [27, 98, 57.3, 123], grow = 3.5 },
   { name = "antenna", rect = [166, 45, 180, 73], grow = 0 },
@@ -94,8 +92,8 @@ planes = { net = "GND", layers = ["In1.Cu", "In2.Cu"], clearance = 0.35 }
 net_tie = { footprint = "L601", group = "1, 3", pads = { "1" = "NFC_AC0", "2" = "NFC_AC1", "3" = "NFC_AC1", "4" = "NFC_AC1" }, former_net = "NFC_COIL" }
 # DRC kinds the zoned board may add over its base: the most it may have of each, and why
 drc_allowed = [
-  { kind = "starved_thermal GND", max = 2, why = "J102 pad 4: one spoke, pad override planned (review 4, Z9 area); J701 pad 2: its top-layer relief reaches only an island of the GND pour, on every run with either zone ids (review 7, C5), and was hidden by the old allowance without a count; the plated hole still joins the GND planes; open: M2" },
-  { kind = "clearance <no net> NFC_AC1", max = 2, why = "coil turn 0.075 mm from the inner via, now L601 pad 3 (review 4, Z6, open: M2); KiCad 10 reports it, KiCad 7 hid it inside the net tie" },
+  { kind = "starved_thermal GND", max = 2, why = "J102 pad 4: one top-layer spoke, and a solid pad override would remove its plane reliefs (check D; review 4, Z9); J701 pad 2: its top-layer relief reaches only an island of the GND pour, on every run with either zone ids (review 7, C5), and was hidden by the old allowance without a count; the plated hole still joins the GND planes; open: badge design after M4" },
+  { kind = "clearance <no net> NFC_AC1", max = 2, why = "coil turn 0.075 mm from the inner via, now L601 pad 3 (review 4, Z6; open: badge design after M4); KiCad 10 reports it, KiCad 7 hid it inside the net tie" },
 ]
 # minimum spoke width (mm) for thermal reliefs on every GND zone
 spoke_min = 0.5

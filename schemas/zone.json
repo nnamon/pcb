@@ -1,0 +1,155 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:zone",
+ "title": "pcb zone output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/zone/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "removed_zones",
+     "removed_stitch_vias",
+     "zones",
+     "pad_overrides",
+     "net_ties",
+     "stitch_vias",
+     "fixed",
+     "regressions",
+     "allowed",
+     "drc_total_before",
+     "drc_total_after",
+     "written"
+    ],
+    "properties": {
+     "removed_zones": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "removed_stitch_vias": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "zones": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name",
+        "kind",
+        "net",
+        "layers",
+        "priority"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "name": {
+         "type": "string",
+         "pattern": "^pcb:"
+        },
+        "kind": {
+         "enum": [
+          "keepout",
+          "zone",
+          "fill"
+         ]
+        },
+        "net": {
+         "type": "string"
+        },
+        "layers": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "minItems": 1
+        },
+        "priority": {
+         "type": "integer",
+         "minimum": 0
+        }
+       }
+      }
+     },
+     "pad_overrides": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "net_ties": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "footprint",
+        "group",
+        "copper_segments",
+        "retyped_tracks",
+        "via_pads"
+       ]
+      }
+     },
+     "stitch_vias": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "integer",
+       "minimum": 0
+      }
+     },
+     "fixed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "regressions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "allowed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "drc_total_before": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "drc_total_after": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "written": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "required": [
+   "written"
+  ]
+ }
+}

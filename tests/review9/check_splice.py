@@ -42,7 +42,8 @@ def strip_fills(t):
             e += 1
         out.append(pre)
         i = e
-    return "".join(out)
+    # the zone's filled flag is part of its fill state, which the gate takes from pcbnew (M2)
+    return "".join(out).replace("(fill yes", "(fill")
 
 
 a, b = open(inp).read(), open(outp).read()

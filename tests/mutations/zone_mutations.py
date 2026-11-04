@@ -59,7 +59,7 @@ f.AddNetTiePadGroup({fx(wrong_group)})
 """, True),
     "keepout_removed": (f"""
 for z in list(b.Zones()):
-    if z.GetIsRuleArea() and z.GetZoneName() == 'keepout_' + {fx(Z['keepouts'][0]['name'])}:
+    if z.GetIsRuleArea() and z.GetZoneName() in ('keepout_' + {fx(Z['keepouts'][0]['name'])}, 'pcb:keepout:' + {fx(Z['keepouts'][0]['name'])}):
         b.Remove(z)
 """, True),
     "plane_wrong_net": (f"""

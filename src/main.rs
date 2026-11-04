@@ -13,6 +13,7 @@ mod import_tscircuit;
 mod render;
 mod route;
 mod sexpr;
+mod zone;
 
 use anyhow::{Context, Result, bail};
 use board::Board;
@@ -141,6 +142,20 @@ enum Cmd {
         #[arg(long, short)]
         out: Option<String>,
     },
+    /// Build the zones pcb.toml describes (keep-outs, planes and pours, power fills, net ties, pad overrides,
+    /// stitching vias) and write the board through the gate, with the owner's DRC allowances. Zones an earlier run
+    /// made are replaced; others are kept
+    Zone {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Work directory for the fills and DRC reports
+        #[arg(long, default_value = "pcb_work/zone")]
+        work: String,
+        /// Output board (default: overwrite the project's board)
+        #[arg(short, long)]
+        out: Option<String>,
+    },
     /// The project at a glance: version against VERSION and TAGS.tsv, gates, decisions, the board, its DRC, and
     /// anything in pcb.toml that is wrong or does not match the board. The first command to run in a session.
     Status {
@@ -208,6 +223,7 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Edit { .. } => "edit",
         Cmd::Diff { .. } => "diff",
         Cmd::Status { .. } => "status",
+        Cmd::Zone { .. } => "zone",
     }
 }
 
@@ -435,6 +451,25 @@ fn run(cli: Cli) -> Result<Reply> {
             })
         }
         Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
+        Cmd::Zone { project: proj, work, out } => {
+            let l = project::load(&project::locate(&proj))?;
+            let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
+            let r = zone::run(&l, &out, std::path::Path::new(&work))?;
+            let rejected = !r.regressions.is_empty();
+            let mut h = format!("{} zones ({} zones and {} stitching vias removed from an earlier run), {} pad overrides, {} net ties", r.zones.len(), r.removed_zones, r.removed_stitch_vias, r.pad_overrides.len(), r.net_ties.len());
+            for (net, k) in &r.stitch_vias {
+                h += &format!(", {k} {net} stitching vias");
+            }
+            h += &format!("\nDRC {} -> {}; wrote {}", r.drc_total_before, r.drc_total_after, r.written);
+            for a in &r.allowed {
+                h += &format!("\n  allowed: {a}");
+            }
+            for g in &r.regressions {
+                h += &format!("\n  worse: {g}");
+            }
+            let warnings: Vec<contract::Warning> = r.allowed.iter().map(|a| contract::warn("drc-allowed", format!("{a} (within pcb.toml drc_allow)"))).collect();
+            Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(r.written.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
+        }
         Cmd::Diff { a, b, png } => {
             let (ba, bb) = (diff::load(&a)?, diff::load(&b)?);
             let d = diff::diff(&ba, &bb, &a, &b);
