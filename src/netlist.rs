@@ -18,6 +18,19 @@ pub struct Comp {
 }
 
 impl Comp {
+    /// The footprint attributes the schematic's flags ask for: `dnp` (not fitted: out of the BOM and CPL too) and
+    /// `exclude_from_bom` (review 19, 49).
+    pub fn flags(&self) -> Vec<&'static str> {
+        let has = |k: &str| self.fields.keys().any(|f| f.eq_ignore_ascii_case(k));
+        let mut v = vec![];
+        if has("dnp") {
+            v.extend(["exclude_from_pos_files", "exclude_from_bom", "dnp"]);
+        } else if has("exclude_from_bom") {
+            v.push("exclude_from_bom");
+        }
+        v
+    }
+
     /// The LCSC code, from a field named LCSC (any case) or "LCSC Part #".
     pub fn lcsc(&self) -> Option<String> {
         self.fields.iter().find(|(k, _)| {
@@ -108,7 +121,9 @@ pub fn parse(text: &str) -> Result<Netlist> {
                 }
             }
             for p in c.find_all("property") {
-                if let (Some(k), Some(v)) = (p.find("name").and_then(|x| x.arg(1)), p.find("value").and_then(|x| x.arg(1))) {
+                // a flag (dnp, exclude_from_bom) is a property with no value
+                if let Some(k) = p.find("name").and_then(|x| x.arg(1)) {
+                    let v = p.find("value").and_then(|x| x.arg(1)).unwrap_or("");
                     fields.entry(k.to_string()).or_insert_with(|| v.to_string());
                 }
             }

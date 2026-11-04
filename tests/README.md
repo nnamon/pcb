@@ -21,6 +21,7 @@
 | `review16/` | Review 16's probes confirming review 15's closures (the paddle keyer through check, gate and release with stale inputs, read-back limits, compare-gerbers, import, the badge), with their verdicts in `check.py` |
 | `review17/` | Review 17's probes confirming review 16's closures (stale records, the two DRC runs, release fills, compare-gerbers, the gate hash, import silkscreen), with their verdicts in `check.py` |
 | `review18/` | Review 18's probes of milestone M4 (pin numbers and names, EasyEDA conversion, sync, parts, place, the release against v1.0.0), with their verdicts in `check.py`; they run the M4 flow themselves (Freerouting) |
+| `review19/` | Review 19's probes confirming reviews 17 and 18 (stale output, fab fills, pin numbers and names, slots, two-pad turns, re-sync, DNP flags, the v1.0.0 oracle), with their verdicts in `check.py`; some run the M4 flow (Freerouting) |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

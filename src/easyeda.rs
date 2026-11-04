@@ -192,6 +192,7 @@ pub fn footprint(raw: &Value, name: &str) -> Result<(String, Vec<EPad>)> {
                 let quarter = ((rot / 90.0).round() * 90.0 - rot).abs() < 1e-6;
                 let ang = (-rot).rem_euclid(360.0);
                 let ang = if ang.abs() < 1e-9 || (ang - 360.0).abs() < 1e-9 { 0.0 } else { ang };
+                let mut hole_shift: Option<(f64, f64)> = None;
                 let drill = if through {
                     if hole_r <= 0.0 {
                         bail!("{name}: plated pad {number} has no hole");
@@ -211,7 +212,22 @@ pub fn footprint(raw: &Value, name: &str) -> Result<(String, Vec<EPad>)> {
                             _ => w > h,
                         };
                         let (dw, dh) = if along_x { (slot, 2.0 * hole_r) } else { (2.0 * hole_r, slot) };
-                        format!(" (drill oval {} {})", n(r6(dw)), n(r6(dh)))
+                        // a slot whose middle is off the pad's centre keeps its place (review 19, 47): KiCad puts a pad
+                        // at its hole and moves the copper by the drill's offset, in the pad's frame
+                        let off = match hp.as_slice() {
+                            [a, b, ..] => {
+                                let (mx, my) = (((a.0 + b.0) / 2.0 - num(f[2])?) * U, ((a.1 + b.1) / 2.0 - num(f[3])?) * U);
+                                if mx.hypot(my) > 1e-3 {
+                                    hole_shift = Some((mx, my));
+                                    let (ox, oy) = crate::board::rotate(-mx, -my, -ang);
+                                    format!(" (offset {} {})", n(r6(ox)), n(r6(oy)))
+                                } else {
+                                    String::new()
+                                }
+                            }
+                            _ => String::new(),
+                        };
+                        format!(" (drill oval {} {}{off})", n(r6(dw)), n(r6(dh)))
                     } else {
                         format!(" (drill {})", n(r6(2.0 * hole_r)))
                     }
@@ -225,9 +241,14 @@ pub fn footprint(raw: &Value, name: &str) -> Result<(String, Vec<EPad>)> {
                             "OVAL" => if (w - h).abs() < 1e-9 { "circle" } else { "oval" },
                             _ => if (w - h).abs() < 1e-9 { "circle" } else { "oval" },
                         };
-                        format!("    (pad {} {kind} {kw} (at {} {} {}) (size {} {}){drill} (layers {lay}))\n", q(&number), n(x), n(y), n(ang), n(w), n(h))
+                        let (ax, ay) = hole_shift.map(|(dx, dy)| (r6(x + dx), r6(y + dy))).unwrap_or((x, y));
+                        format!("    (pad {} {kind} {kw} (at {} {} {}) (size {} {}){drill} (layers {lay}))\n", q(&number), n(ax), n(ay), n(ang), n(w), n(h))
                     }
                     "RECT" | "POLYGON" => {
+                        if slot > 0.0 {
+                            // KiCad turns a custom pad's drill with the footprint, not the pad (review 19, 51)
+                            bail!("{name}: pad {number} has a slot in a pad drawn as a polygon or off a quarter turn");
+                        }
                         if pts.len() < 3 {
                             bail!("{name}: pad {number} has no outline");
                         }
@@ -241,7 +262,9 @@ pub fn footprint(raw: &Value, name: &str) -> Result<(String, Vec<EPad>)> {
                     other => bail!("{name}: pad {number} shape {other} at {rot} degrees is not handled"),
                 };
                 pads_out.push_str(&pad);
-                epads.push(EPad { number, x, y });
+                // where KiCad will put the pad: at its hole
+                let (ex, ey) = hole_shift.map(|(dx, dy)| (r6(x + dx), r6(y + dy))).unwrap_or((x, y));
+                epads.push(EPad { number, x: ex, y: ey });
             }
             "HOLE" => {
                 let (x, y) = loc(num(f[1])?, num(f[2])?);
@@ -348,6 +371,10 @@ mod tests {
         let c = comp(&["PAD~ELLIPSE~4000~3000~8~8~11~~1~1.2~~0~gge1~5~3997.5 3000 4002.5 3000~Y~0"], &[]);
         let (t, _) = footprint(&c, "T").unwrap();
         assert!(t.contains("(drill oval 1.27 0.6096)"), "{t}");
+        // a slot off the pad's centre keeps its place (review 19, 47)
+        let c = comp(&["PAD~OVAL~4000~3000~8~12~11~~1~1.2~~0~gge1~5~4000 3002 4000 3007~Y~0"], &[]);
+        let (t, _) = footprint(&c, "T").unwrap();
+        assert!(t.contains("(at 0 1.143 0)") && t.contains("(drill oval 0.6096 1.27 (offset 0 -1.143))"), "{t}");
     }
 
     #[test]

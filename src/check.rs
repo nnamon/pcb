@@ -83,7 +83,10 @@ fn content(text: &str) -> Result<Vec<String>> {
         for q in &f.pads {
             let mut ls = q.layers.clone();
             ls.sort();
-            v.push(format!("pad {} {} {} {} {} {} {} {}", f.reference, q.number, q.kind, ls.join(","), r(q.x), r(q.y), r(q.w), r(q.h)));
+            // shape and angle too (review 19, 50); an angle by its direction, so 0 and 360 agree
+            let a = q.rot.rem_euclid(if q.shape == "rect" || q.shape == "oval" || q.shape == "roundrect" { 180.0 } else { 360.0 });
+            let a = if (a - 180.0).abs() < 1e-3 || a.abs() < 1e-3 || (a - 360.0).abs() < 1e-3 { 0.0 } else { a };
+            v.push(format!("pad {} {} {} {} {} {} {} {} {} {}", f.reference, q.number, q.kind, q.shape, ls.join(","), r(q.x), r(q.y), r(q.w), r(q.h), if q.shape == "circle" { "-".to_string() } else { r(a) }));
         }
     }
     fn nums(n: &sexpr::Node, out: &mut Vec<String>) {

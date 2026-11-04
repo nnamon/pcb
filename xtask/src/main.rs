@@ -141,6 +141,7 @@ fn main() -> Result<()> {
             let j = j.clone();
             // review 18's probes run the M4 fixture flow themselves (Freerouting)
             s.py("review 18: M4 probes", "tests/review18/check.py", &[&pcb, &s.w("review18")]);
+            s.py("review 19: confirmation probes", "tests/review19/check.py", &[&pcb, &s.w("review19")]);
             s.py("route edge cases", "tests/cases/route_cases.py", &[&pcb, &j, &s.w("route_cases")]);
             s.py("review 8: route probes", "tests/review8/route_probes.py", &[&pcb, &j, &s.w("review8_route_probes")]);
         }

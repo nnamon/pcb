@@ -312,19 +312,24 @@ pub fn run(l: &Loaded, rip: bool, work: &Path, out_path: &str) -> Result<Report>
         // the part itself changed (another LCSC code or value in the same package): replaced too, so the board, and
         // so the BOM, carries the new part (review 18, 4)
         let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
-        let part_changed = prop("LCSC") != r.lcsc.clone().unwrap_or_default() || prop("Value") != c.value;
+        let part_changed = prop("LCSC") != r.lcsc.clone().unwrap_or_default() || prop("Value") != c.value || flags_differ(&node, &c.flags());
         if f.lib_id != r.lib_id || part_changed {
             if f.locked || node.find("locked").is_some() {
                 return Err(refused("locked", format!("{} is locked; its footprint would change from {} to {}", f.reference, f.lib_id, r.lib_id)));
             }
             let at = footprint::current(&node);
-            let text = footprint::instantiate(&r.text, &r.lib_id, &c.reference, &c.value, r.lcsc.as_deref(), &nets, at)?;
-            for q in &f.pads {
-                if !q.net.is_empty() {
-                    changed_nets.insert(q.net.clone());
+            let text = with_flags(&footprint::instantiate(&r.text, &r.lib_id, &c.reference, &c.value, r.lcsc.as_deref(), &nets, at)?, &c.flags())?;
+            // the same footprint with the same nets (only the part, value or flags changed) leaves its copper right
+            // (review 19, 55)
+            let same_copper = f.lib_id == r.lib_id && f.pads.iter().filter(|q| !q.number.is_empty()).all(|q| nets.get(&q.number).cloned().unwrap_or_default() == q.net);
+            if !same_copper {
+                for q in &f.pads {
+                    if !q.net.is_empty() {
+                        changed_nets.insert(q.net.clone());
+                    }
                 }
+                changed_nets.extend(nets.values().cloned());
             }
-            changed_nets.extend(nets.values().cloned());
             e.replace(f.span, text.trim_end().to_string());
             rep.replaced.push(c.reference.clone());
             continue;
@@ -377,7 +382,7 @@ pub fn run(l: &Loaded, rip: bool, work: &Path, out_path: &str) -> Result<Report>
         let at = Place { x: sx - x0, y: sy - y0, phi: 0.0, bottom: false };
         sy += (y1 - y0) + 1.0;
         col_w = col_w.max(x1 - x0);
-        let text = footprint::instantiate(&r.text, &r.lib_id, &c.reference, &c.value, r.lcsc.as_deref(), &nets, at)?;
+        let text = with_flags(&footprint::instantiate(&r.text, &r.lib_id, &c.reference, &c.value, r.lcsc.as_deref(), &nets, at)?, &c.flags())?;
         changed_nets.extend(nets.values().cloned());
         add_text.push_str("  ");
         add_text.push_str(text.trim_end());
@@ -474,6 +479,9 @@ pub fn differences(l: &Loaded, b: &Board, work: &Path) -> Result<Vec<String>> {
         };
         let node = sexpr::parse(&b.src[f.span.0..f.span.1])?;
         let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
+        if flags_differ(&node, &c.flags()) {
+            d.push(format!("{}'s fitted or BOM flags differ from the circuit's ({:?})", c.reference, c.flags()));
+        }
         if prop("LCSC") != c.lcsc().unwrap_or_default() || prop("Value") != c.value {
             d.push(format!("{} is {} {} on the board, {} {} in the circuit", c.reference, prop("Value"), prop("LCSC"), c.value, c.lcsc().unwrap_or_default()));
         }
@@ -489,6 +497,37 @@ pub fn differences(l: &Loaded, b: &Board, work: &Path) -> Result<Vec<String>> {
         d.push(format!("{} is on the board but not in the circuit", f.reference));
     }
     Ok(d)
+}
+
+const FLAGS: [&str; 3] = ["exclude_from_pos_files", "exclude_from_bom", "dnp"];
+
+/// Whether a footprint lacks a flag the schematic asks for, or is marked not fitted when the schematic does not
+/// say so (a library footprint may carry exclude_from_bom of its own, as a test pad does).
+fn flags_differ(node: &sexpr::Node, want: &[&str]) -> bool {
+    let attrs: Vec<String> = node.find("attr").map(|a| a.args().iter().map(|x| x.to_string()).collect()).unwrap_or_default();
+    let has = |k: &str| attrs.iter().any(|a| a == k);
+    want.iter().any(|f| !has(f)) || (has("dnp") && !want.contains(&"dnp"))
+}
+
+/// A footprint text with its library attributes plus the schematic's flags.
+fn with_flags(text: &str, flags: &[&str]) -> Result<String> {
+    if flags.is_empty() {
+        return Ok(text.to_string());
+    }
+    let root = sexpr::parse(text)?;
+    let mut e = sexpr::Edits::default();
+    match root.find("attr") {
+        Some(a) => {
+            let mut v: Vec<String> = a.args().iter().map(|x| x.to_string()).filter(|x| !FLAGS.contains(&x.as_str())).collect();
+            v.extend(flags.iter().map(|f| f.to_string()));
+            e.replace(a.span, format!("(attr {})", v.join(" ")));
+        }
+        None => {
+            let l = root.find("layer").map(|l| l.span.1).unwrap_or(root.span.1 - 1);
+            e.insert(l, format!(" (attr {})", flags.join(" ")));
+        }
+    }
+    e.apply(text)
 }
 
 /// The numbered pads of a footprint text.

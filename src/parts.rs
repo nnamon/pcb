@@ -312,6 +312,10 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                         // matched by shape only, a two-pad part's turn is known modulo 180; matched by number it is exact,
                         // so a diode or LED cannot pass reversed (review 18, 5)
                         let turn_ok = turn_ok || (!by_number && bp.len() <= 2 && ((rot - want_rot).rem_euclid(180.0)).abs() < 1e-6);
+                        if !by_number && bp.len() <= 2 {
+                            // which pad is which is unknown, so a polarised part could be placed reversed (review 19, 48)
+                            r.findings.push(Finding { item: format!("{reference} polarity"), message: format!("{reference} ({code}): its two pads are numbered unlike JLCPCB's footprint, so its turn is known only to 180 degrees; number them as JLCPCB's footprint does") });
+                        }
                         if !turn_ok {
                             r.findings.push(Finding { item: format!("{reference} rotation"), message: format!("{reference} ({code}): JLCPCB's footprint is turned {rot} degrees from the board's; parts.{code}.rotation_offset_deg says {want_rot}") });
                         }
