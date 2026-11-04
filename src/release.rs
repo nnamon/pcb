@@ -144,7 +144,18 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     let (bx0, by0, bx1, by1) = b.bbox();
     let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
     let plot = work.join("plot.kicad_pcb");
-    std::fs::write(&plot, with_aux_origin(&b, cx, cy)?)?;
+    let mut plot_text = with_aux_origin(&b, cx, cy)?;
+    // the fills as KiCad makes them now, not as the board stored them: pcb check judges fresh fills, so release plots
+    // them too (review 16, 30). KiCad fills a marked copy; only the fills come back, so the plotted file keeps the
+    // board's own order and a second release gives the same files
+    if !b.zones.is_empty() {
+        let filled = work.join("plot_filled.kicad_pcb");
+        std::fs::write(&filled, crate::gate::mark_zones(&plot_text)?)?;
+        crate::kicad::copy_rules(Path::new(&board_path), &filled)?;
+        crate::kicad::helper(work, &["fill", filled.to_str().unwrap()])?;
+        plot_text = crate::gate::splice_fills(&plot_text, &std::fs::read_to_string(&filled)?)?;
+    }
+    std::fs::write(&plot, plot_text)?;
     crate::kicad::copy_rules(Path::new(&board_path), &plot)?;
     let pb = plot.to_string_lossy().to_string();
     kicad_cli(&["pcb", "export", "gerbers", "--layers", &lj, "--no-protel-ext", "--use-drill-file-origin", "-o", &format!("{g}/"), &pb])?;
@@ -257,9 +268,13 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     std::fs::write(out.join("CHECKSUMS.txt"), sums)?;
     // a release with problems is not an order folder: it moves aside, named so (review 15, 17)
     if !rep.problems.is_empty() {
-        let aside = format!("{}.rejected", out_dir.trim_end_matches('/'));
-        if Path::new(&aside).exists() {
-            std::fs::remove_dir_all(&aside)?;
+        // an earlier rejected folder is kept, with whatever the owner put in it (review 16, 35)
+        let base = format!("{}.rejected", out_dir.trim_end_matches('/'));
+        let mut aside = base.clone();
+        let mut k = 2;
+        while Path::new(&aside).exists() {
+            aside = format!("{base}.{k}");
+            k += 1;
         }
         std::fs::rename(out, &aside)?;
         rep.written = aside;

@@ -134,6 +134,7 @@ fn main() -> Result<()> {
     s.py("review 14: zone confirmation probes", "tests/review14/check.py", &[&pcb, &s.w("review14")]);
     s.py("M4 cases: parts, sync, place, drawing", "tests/cases/m4_cases.py", &[&pcb, &s.w("m4_cases")]);
     s.py("review 15: check, gate, release and compare probes", "tests/review15/check.py", &[&pcb, &s.w("review15")]);
+    s.py("review 16: M3 confirmation probes", "tests/review16/check.py", &[&pcb, &s.w("review16")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
             let j = j.clone();

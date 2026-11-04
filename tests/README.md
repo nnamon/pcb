@@ -18,6 +18,7 @@
 | `cases/m4_cases.py` | Milestone M4's cases on copies of `fixtures/paddle_keyer_m4`: parts (stock, Economic, missing, stale, the known offsets), sync (pin names, the XC6206 trap, missing pins and footprints, renets, removals, locks), place (locks, sides, off-board, plated pads, keep-outs, ripping) and drawing |
 | `oracles/verify_sync.py`, `oracles/verify_drawing.py` | M4's oracles: a synced and placed board against its netlist and JLCPCB's footprints; the placement drawing against the board and the CPL |
 | `review15/` | Review 15's probes of milestone M3 (check, gates, release and its read-back, compare-gerbers, paste, art, the import's additions, the badge), with their verdicts in `check.py` |
+| `review16/` | Review 16's probes confirming review 15's closures (the paddle keyer through check, gate and release with stale inputs, read-back limits, compare-gerbers, import, the badge), with their verdicts in `check.py` |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

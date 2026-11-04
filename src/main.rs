@@ -25,6 +25,7 @@ mod import_tscircuit;
 mod render;
 mod route;
 mod sexpr;
+mod stamp;
 mod sync;
 mod zone;
 

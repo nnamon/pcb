@@ -174,6 +174,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
         crate::route::insert_lines(&mut e, src, f.span, &lines);
     }
     let candidate = e.apply(src)?;
+    let candidate = crate::stamp::write(&candidate, "paste", crate::stamp::inputs(l, "paste")?.as_deref())?;
     let gate = Gate::begin(work, &board_path)?;
     let g = gate.finish_allowing(&candidate, out_path, !b.zones.is_empty(), &p.drc_allow)?;
     rep.fixed = g.fixed;
