@@ -120,6 +120,8 @@ fn main() -> Result<()> {
     for (n, f) in [("review 9: join probes", "join_probes"), ("review 9: diff misses", "diff_misses"), ("review 9: route branches", "route_branches"), ("review 9: prewire probes", "prewire_probes")] {
         s.py(n, "tests/review9/expect_pass.py", &[&format!("tests/review9/{f}.py"), &pcb, &s.w(&format!("review9_{f}"))]);
     }
+    // review 10's cases: zone pairing without uuids, joins through fills, diff on re-saves, prewire stubs
+    s.py("review 10: gate, join, diff and prewire cases", "tests/review10/check.py", &[&pcb, &s.w("review10")]);
     if s.py("edit edge cases", "tests/cases/edit_cases.py", &[&pcb, &s.w("edit_cases")]) {
         s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
         s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);

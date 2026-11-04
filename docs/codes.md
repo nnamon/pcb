@@ -6,7 +6,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 
 | Code | Outcome | Meaning | What to do |
 | --- | --- | --- | --- |
-| `usage` | refused | The command line is wrong | Read the message and `pcb <command> --help` |
+| `usage` | refused | The command line is wrong, or names a board, file or git revision that is not there | Read the message and `pcb <command> --help` |
 | `refused` | refused | The input has something the command does not handle; the message names it | Change the input, or extend the command with a test |
 | `kicad-format` | refused | The board file is not in KiCad 10's format (version 20260206): older, or from a newer KiCad | Older: convert a copy with `kicad-cli pcb upgrade <file>` and check it in KiCad. Newer: test pcb on that KiCad first |
 | `drc-truncated` | refused | KiCad listed only its first 199 (clearance: 499) violations of a type, so the DRC is incomplete and changes from run to run | Fix the design rules or the board until every type is under the limit; turn off checks that cannot apply in the project file |
@@ -30,7 +30,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `freerouting` | failed | Freerouting did not start, or wrote no session | Run `pcb doctor`; read the log in the message |
 | `freerouting-settings` | failed | Freerouting logged that it did not apply a setting pcb gave it (and would have routed with its default) | Read the lines in the message; the jar may not be the pinned 2.5.0, or the flag changed |
 | `freerouting-timeout` | failed | Freerouting ran past `--timeout`, often stuck on an import dialog | Read the warnings in the message |
-| `io` | failed | A file could not be read or written | Check the path and permissions |
+| `io` | failed | A file that exists could not be read, or one could not be written | Check the path and permissions |
 
 ## Warnings
 

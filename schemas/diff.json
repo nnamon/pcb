@@ -37,7 +37,9 @@
      "zones_removed",
      "outline_changed",
      "repeated_refs",
-     "same_text"
+     "same_text",
+     "copper_graphics_added",
+     "copper_graphics_removed"
     ],
     "properties": {
      "footprints": {
@@ -90,6 +92,18 @@
      },
      "same_text": {
       "type": "boolean"
+     },
+     "copper_graphics_added": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "copper_graphics_removed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
      }
     }
    }

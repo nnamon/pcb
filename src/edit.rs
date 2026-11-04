@@ -221,7 +221,7 @@ fn on_copper_except(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, sk
     // A zone never filled counts by its outline on each of its layers.
     let fills = b.zones.iter().filter(|z| z.net == net).any(|z| {
         if z.filled.is_empty() {
-            z.layers.iter().any(|l| layer.is_none_or(|x| x == l)) && crate::route::point_in_poly(p, &z.outline)
+            z.layers.iter().any(|l| layer.is_none_or(|x| x == l)) && z.outlines.iter().any(|o| crate::route::point_in_poly(p, o))
         } else {
             z.filled.iter().any(|(l, poly)| layer.is_none_or(|x| x == l) && crate::route::point_in_poly(p, poly))
         }

@@ -82,66 +82,99 @@ impl Gate {
     }
 }
 
-/// Every zone in a board, top level and inside footprints, with a key that names it: its uuid when it has one;
-/// otherwise its owner (top level, or the footprint by reference and repeat), net, layers and outline, and its place
-/// among zones with that same key. pcbnew's save reorders zones, so order alone cannot pair them (review 9, 1).
-fn zone_list(root: &crate::sexpr::Node) -> Vec<(String, Option<String>, crate::sexpr::Node)> {
+/// One zone of a board, with what identifies it.
+struct ZoneId {
+    /// Top level (""), or the footprint holding it, by reference and position.
+    owner: String,
+    uuid: Option<String>,
+    /// Canonical text (`board::zone_canon`), relative to the owner's position.
+    canon: String,
+    /// Net, layers and outline only.
+    coarse: String,
+    net: String,
+    node: crate::sexpr::Node,
+}
+
+fn zone_ids(root: &crate::sexpr::Node) -> Vec<ZoneId> {
     use crate::sexpr::Node;
-    let sig = |z: &Node| {
-        let net = z.find("net").and_then(|u| u.arg(1)).unwrap_or("").to_string();
-        let layers = z.find("layers").map(|l| l.args().join(",")).or_else(|| z.find("layer").and_then(|l| l.arg(1)).map(String::from)).unwrap_or_default();
-        let outline: Vec<String> = z.find_all("polygon").map(|p| {
-            let mut v = vec![];
-            fn xy(n: &Node, v: &mut Vec<String>) {
-                if n.is("xy") {
-                    v.push(format!("{:.4} {:.4}", n.num(1).unwrap_or(0.0), n.num(2).unwrap_or(0.0)));
-                }
-                for c in n.items() {
-                    xy(c, v);
-                }
-            }
-            xy(p, &mut v);
-            v.join(";")
-        }).collect();
-        format!("{net}|{layers}|{}", outline.join("/"))
-    };
-    let mut owners: Vec<(String, &Node)> = vec![(String::new(), root)];
-    let mut seen: std::collections::BTreeMap<String, usize> = Default::default();
+    let xy = |n: &Node| -> (f64, f64) { n.find("at").map(|a| (a.num(1).unwrap_or(0.0), a.num(2).unwrap_or(0.0))).unwrap_or((0.0, 0.0)) };
+    let mut owners: Vec<(String, &Node, (f64, f64))> = vec![(String::new(), root, (0.0, 0.0))];
     for f in root.items().iter().filter(|n| n.is("footprint")) {
+        // by reference and position: a footprint saved without a uuid gets a new one, and pcbnew's save reorders
+        // footprints, so neither tells two copies apart; their positions do
         let r = f.find_all("property").find(|p| p.arg(1) == Some("Reference")).and_then(|p| p.arg(2)).unwrap_or("").to_string();
-        let k = seen.entry(r.clone()).or_default();
-        *k += 1;
-        owners.push((format!("{r}#{k}"), f));
+        let (x, y) = xy(f);
+        owners.push((format!("{r}@{:.4},{:.4}", x, y), f, (x, y)));
     }
     let mut out = vec![];
-    for (owner, n) in owners {
-        let mut count: std::collections::BTreeMap<String, usize> = Default::default();
+    for (owner, n, origin) in owners {
         for z in n.items().iter().filter(|z| z.is("zone")) {
-            let s = format!("{owner}|{}", sig(z));
-            let k = count.entry(s.clone()).or_default();
-            *k += 1;
-            let uuid = z.find("uuid").and_then(|u| u.arg(1)).map(String::from);
-            out.push((format!("{s}|{k}"), uuid, z.clone()));
+            let net = z.find("net").and_then(|u| u.arg(1)).unwrap_or("").to_string();
+            let mut pts = vec![];
+            for p in z.find_all("polygon") {
+                let mut last = (f64::NAN, f64::NAN);
+                for q in p.find("pts").map(|q| q.items().to_vec()).unwrap_or_default().iter().filter(|q| q.is("xy")) {
+                    let v = (((q.num(1).unwrap_or(0.0) - origin.0) * 1e4).round() / 1e4, ((q.num(2).unwrap_or(0.0) - origin.1) * 1e4).round() / 1e4);
+                    if v != last {
+                        pts.push(format!("{} {}", v.0, v.1));
+                        last = v;
+                    }
+                }
+                pts.push("/".into());
+            }
+            let coarse = format!("{net}|{}|{}", crate::board::zone_layers(z).join(","), pts.join(";"));
+            out.push(ZoneId { owner: owner.clone(), uuid: z.find("uuid").and_then(|u| u.arg(1)).map(String::from), canon: crate::board::zone_canon(z, origin), coarse, net, node: z.clone() });
         }
     }
     out
 }
 
+/// For each zone of `a`, the index of the same zone in `b`. A uuid pairs zones only where it is unique on both sides
+/// (copied text can repeat one, review 10, 2); then the canonical text, then net, layers and outline, then the net
+/// alone in file order, each within the same owner. pcbnew's save reorders zones and footprints, so file order is
+/// the last resort (reviews 9 and 10).
+fn pair_zones(a: &[ZoneId], b: &[ZoneId]) -> Result<Vec<usize>> {
+    let mut pair: Vec<Option<usize>> = vec![None; a.len()];
+    let mut used = vec![false; b.len()];
+    let count = |v: &[ZoneId], u: &str| v.iter().filter(|z| z.uuid.as_deref() == Some(u)).count();
+    for (i, z) in a.iter().enumerate() {
+        if let Some(u) = &z.uuid {
+            if count(a, u) == 1 && count(b, u) == 1 {
+                let j = b.iter().position(|y| y.uuid.as_deref() == Some(u.as_str())).unwrap();
+                pair[i] = Some(j);
+                used[j] = true;
+            }
+        }
+    }
+    let tiers: [&dyn Fn(&ZoneId) -> String; 3] = [&|z| format!("{}|{}", z.owner, z.canon), &|z| format!("{}|{}", z.owner, z.coarse), &|z| format!("{}|{}", z.owner, z.net)];
+    for key in tiers {
+        for i in 0..a.len() {
+            if pair[i].is_some() {
+                continue;
+            }
+            let k = key(&a[i]);
+            if let Some(j) = (0..b.len()).find(|j| !used[*j] && key(&b[*j]) == k) {
+                pair[i] = Some(j);
+                used[j] = true;
+            }
+        }
+    }
+    pair.iter()
+        .enumerate()
+        .map(|(i, p)| p.ok_or_else(|| anyhow::anyhow!("a zone of {:?}{} was not found after filling", a[i].net, if a[i].owner.is_empty() { String::new() } else { " in a footprint".to_string() })))
+        .collect()
+}
+
 /// The candidate with each zone's `filled_polygon` blocks (top level and inside footprints) replaced by those of the
-/// same zone in `filled` (pcbnew's save after filling). A zone is found by its uuid, or when it has none by its
-/// owner, net, layers and outline (`zone_list`).
+/// same zone in `filled` (pcbnew's save after filling); see `pair_zones`.
 pub fn splice_fills(candidate: &str, filled: &str) -> Result<String> {
     let (a, b) = (crate::sexpr::parse(candidate)?, crate::sexpr::parse(filled)?);
-    let (za, zb) = (zone_list(&a), zone_list(&b));
+    let (za, zb) = (zone_ids(&a), zone_ids(&b));
     anyhow::ensure!(za.len() == zb.len(), "the filled board has {} zones, the candidate {}", zb.len(), za.len());
+    let pairs = pair_zones(&za, &zb)?;
     let mut e = crate::sexpr::Edits::default();
-    for (key, uuid, z) in &za {
-        let m = match uuid {
-            Some(u) => zb.iter().find(|(_, v, _)| v.as_deref() == Some(u.as_str())),
-            None => zb.iter().find(|(k, _, _)| k == key),
-        }
-        .map(|(_, _, n)| n)
-        .ok_or_else(|| anyhow::anyhow!("zone {} is missing from the filled board", uuid.clone().unwrap_or_else(|| key.clone())))?;
+    for (zi, j) in za.iter().zip(pairs) {
+        let (z, m) = (&zi.node, &zb[j].node);
         for old in z.find_all("filled_polygon") {
             crate::route::remove(&mut e, candidate, old.span);
         }

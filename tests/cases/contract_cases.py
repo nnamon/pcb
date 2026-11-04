@@ -24,7 +24,7 @@ runs = {
     "info_ref": ["info", board, "--ref", "W1"],
     "usage_error_refused": ["info", board, "--no-such-flag"],
     "render": ["render", board, "-o", os.path.join(work, "c.png")],
-    "missing_file_fails": ["info", os.path.join(work, "no-such.kicad_pcb")],
+    "missing_file_refused": ["info", os.path.join(work, "no-such.kicad_pcb")],
     "doctor": ["doctor", "--work", os.path.join(work, "doctor")],
     "doctor_wrong_jar_refused": ["doctor", "--work", os.path.join(work, "doctor"), "--freerouting", board],
     "render_too_large_refused": ["render", board, "--scale", "100000", "-o", os.path.join(work, "big.png")],
@@ -73,7 +73,7 @@ runs.update({
 })
 words = {"init_again_refused": "does not overwrite", "status_unknown_key_refused": "fabb", "status_bad_values_refused": "2 problem",
          "old_format_refused": "kicad-cli pcb upgrade", "new_format_refused": "newer KiCad format", "drc_truncated_refused": "clearance 499"}
-want = {"missing_file_fails": "failed", "usage_error_refused": "refused", "doctor_wrong_jar_refused": "refused",
+want = {"missing_file_refused": "refused", "usage_error_refused": "refused", "doctor_wrong_jar_refused": "refused",
         "render_too_large_refused": "refused", "render_unwritable_fails": "failed", "old_format_refused": "refused",
         "new_format_refused": "refused", "drc_truncated_refused": "refused", "init_again_refused": "refused",
         "status_unknown_key_refused": "refused", "status_bad_values_refused": "refused"}

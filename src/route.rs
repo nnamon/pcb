@@ -811,6 +811,31 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             .chain(b.vias.iter().filter(|v| rip_via(v)).map(|v| (v.net.clone(), (v.x, v.y))))
             .collect();
         let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < 1e-3;
+        // A prewire stub laid with a free end and joined by the router partway along: the stub from that join out to
+        // its free end may be pruned, through every segment of the stub (review 10, 7). The stub is the chain of
+        // prewire tracks walked from the free end; it qualifies only when the router split one of them. Its pieces
+        // that still reach copper are kept by the pruning itself.
+        let split = |t: &crate::board::Track| ends.iter().any(|(net, layer, p)| *net == t.net && layer.as_ref().is_none_or(|l| *l == t.layer) && interior_param(t, *p).is_some());
+        let mut free_chain: std::collections::HashSet<usize> = Default::default();
+        for (net, q0) in &prewire_free {
+            let mut chain = vec![];
+            let mut q = *q0;
+            loop {
+                let next = b.tracks.iter().enumerate().find(|(k, t)| {
+                    !chain.contains(k) && t.net == *net && prewire_spans.contains(&t.span) && (near((t.x0, t.y0), q) || near((t.x1, t.y1), q))
+                });
+                match next {
+                    Some((k, t)) => {
+                        chain.push(k);
+                        q = if near((t.x0, t.y0), q) { (t.x1, t.y1) } else { (t.x0, t.y0) };
+                    }
+                    None => break,
+                }
+            }
+            if chain.iter().any(|k| split(&b.tracks[*k])) {
+                free_chain.extend(chain);
+            }
+        }
         for (i, t) in b.tracks.iter().enumerate() {
             if rip_track(t) {
                 continue;
@@ -826,7 +851,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             if cuts.is_empty() {
                 // a locked track is never removed; nor is one outside the rip margin, so --rip alone says what may go
                 let in_ri = inside(ri, t.x0, t.y0) && inside(ri, t.x1, t.y1);
-                segs.push(whole(both_in && in_ri && met_ripped && !t.locked && !prewire_spans.contains(&t.span)));
+                segs.push(whole((both_in && in_ri && met_ripped && !t.locked && !prewire_spans.contains(&t.span)) || free_chain.contains(&i)));
                 continue;
             }
             if !(inside(r, t.x0, t.y0) || inside(r, t.x1, t.y1)) {
@@ -847,11 +872,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                     (near(p, (t.x0, t.y0)) || near(p, (t.x1, t.y1))) && ripped_ends.iter().any(|(net, q)| *net == t.net && near(*q, p))
                 };
                 let tail = (met(w[0]) || met(w[1])) && inside(ri, w[0].0, w[0].1) && inside(ri, w[1].0, w[1].1) && !t.locked && !prewire_spans.contains(&t.span);
-                // a prewire stub's free end, past the point where the router joined it, is the one prewire piece that
-                // may go: the owner left that end for the router to use (review 9, 8)
-                let free_tail = prewire_spans.contains(&t.span)
-                    && prewire_free.iter().any(|(net, q)| *net == t.net && (near(*q, w[0]) || near(*q, w[1])) && (near(*q, (t.x0, t.y0)) || near(*q, (t.x1, t.y1))));
-                let tail = tail || free_tail;
+                let tail = tail || free_chain.contains(&i);
                 segs.push(Seg { a: w[0], c: w[1], layer: t.layer.clone(), net: t.net.clone(), width: t.width, origin: Origin::Piece(i), prunable: tail });
             }
             rep.split_tracks += 1;
@@ -1171,7 +1192,7 @@ mod prune_tests {
         let tee_b = vec![seg((0.0, 0.0), (10.0, 0.0), "F.Cu"), seg((5.0, 0.0), (5.0, 5.0), "B.Cu")];
         assert_eq!(open_nets(&nets, &tee_b, &[true; 2], &[], &far, &[]), nets);
         // two pads in one fill on their layer are joined by it
-        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], outlines: vec![], settings: String::new(), filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
+        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], outlines: vec![], settings: String::new(), owner: None, filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
         assert!(open_nets(&nets, &[], &[], &[], &pads, std::slice::from_ref(&z)).is_empty());
         let zb = crate::board::Zone { filled: vec![("B.Cu".into(), z.filled[0].1.clone())], ..z.clone() };
         assert_eq!(open_nets(&nets, &[], &[], &[], &pads, &[zb]), nets);

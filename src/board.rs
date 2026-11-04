@@ -99,9 +99,11 @@ pub struct Zone {
     pub outline: Vec<(f64, f64)>,
     /// Every outline polygon, the first included (review 9, 5).
     pub outlines: Vec<Vec<(f64, f64)>>,
-    /// Its settings that change copper: clearance (`connect_pads`), priority, minimum thickness, and whether it is a
-    /// rule area; as written, for comparing.
+    /// The zone in a canonical text (`zone_canon`): every setting and outline, no uuid, no fill; a footprint's zone
+    /// relative to the footprint's position. For comparing zones across saves.
     pub settings: String,
+    /// The footprint holding it (reference), or None for a board zone.
+    pub owner: Option<String>,
     /// Filled polygons per layer (empty until KiCad fills the zone).
     pub filled: Vec<(String, Vec<(f64, f64)>)>,
 }
@@ -160,6 +162,111 @@ fn pts(n: &Node) -> Vec<(f64, f64)> {
     n.find("pts").map(|p| p.find_all("xy").map(|q| (q.num(1).unwrap_or(0.0), q.num(2).unwrap_or(0.0))).collect()).unwrap_or_default()
 }
 
+/// A zone's copper layers, with KiCad's shorthand `F&B.Cu` expanded and sorted.
+pub fn zone_layers(n: &Node) -> Vec<String> {
+    let mut v: Vec<String> = match n.find("layers") {
+        Some(l) => l.args().into_iter().map(String::from).collect(),
+        None => n.find("layer").and_then(|l| l.arg(1)).map(|s| vec![s.to_string()]).unwrap_or_default(),
+    };
+    if let Some(i) = v.iter().position(|l| l == "F&B.Cu") {
+        v.remove(i);
+        v.extend(["F.Cu".to_string(), "B.Cu".to_string()]);
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// A zone as canonical text, for telling zones apart across saves (reviews 9 and 10): no uuid, no fill and nothing
+/// that does not change copper (hatch display, placement rule); layers expanded and sorted; numbers to 0.1 um;
+/// points relative to `origin` (a footprint's position, for its zones), with repeated points dropped; children in a
+/// fixed order; and KiCad's defaults written out where a hand-written file leaves them out, as KiCad 10.0.8's save
+/// writes them (minimum thickness 0.25 mm; thermal gap and bridge 0.5 mm; island removal 0; in a rule area, tracks
+/// and vias not allowed, pads, pours and footprints allowed, pad clearance 0).
+pub fn zone_canon(n: &Node, origin: (f64, f64)) -> String {
+    fn num(a: &str) -> String {
+        match a.parse::<f64>() {
+            Ok(v) => format!("{}", (v * 10000.0).round() / 10000.0),
+            Err(_) => a.to_string(),
+        }
+    }
+    fn walk(n: &Node, origin: (f64, f64)) -> String {
+        if let Some(a) = n.atom() {
+            return format!(" {}", num(a));
+        }
+        match n.head() {
+            Some("pts") => {
+                let mut out = String::from("(pts");
+                let mut last = String::new();
+                for q in n.items().iter().filter(|q| q.is("xy")) {
+                    let t = format!(" {} {}", num(&(q.num(1).unwrap_or(0.0) - origin.0).to_string()), num(&(q.num(2).unwrap_or(0.0) - origin.1).to_string()));
+                    if t != last {
+                        out.push_str(&t);
+                        last = t;
+                    }
+                }
+                out + ")"
+            }
+            _ => {
+                let mut kids: Vec<String> = n.items().iter().map(|c| walk(c, origin)).collect();
+                if kids.len() > 1 {
+                    kids[1..].sort();
+                }
+                format!("({})", kids.join(""))
+            }
+        }
+    }
+    // a child list as head -> canonical text, with defaults for the missing ones
+    let with_defaults = |node: Option<&Node>, head: &str, defaults: &[(&str, &str)]| -> String {
+        let mut m: std::collections::BTreeMap<String, String> = defaults.iter().map(|(k, v)| (k.to_string(), format!("({k} {v})"))).collect();
+        if let Some(c) = node {
+            for k in c.items().iter().skip(1) {
+                if let Some(h) = k.head() {
+                    m.insert(h.to_string(), walk(k, origin));
+                }
+            }
+        }
+        format!("({head} {})", m.values().cloned().collect::<Vec<_>>().join(""))
+    };
+    let keepout = n.find("keepout");
+    let mut parts: Vec<String> = vec![format!("[{}]", zone_layers(n).join(","))];
+    for c in n.items().iter().skip(1) {
+        match c.head() {
+            Some("uuid") | Some("filled_polygon") | Some("fill_segments") | Some("layer") | Some("layers") | Some("hatch") | Some("placement") | Some("fill") | Some("keepout")
+            | Some("connect_pads") | Some("min_thickness") => {}
+            _ => parts.push(walk(c, origin)),
+        }
+    }
+    parts.push(n.find("min_thickness").map(|m| walk(m, origin)).unwrap_or_else(|| "(min_thickness 0.25)".into()));
+    let fill = n.find("fill");
+    let fill_mode: Vec<String> = fill.map(|f| f.items().iter().skip(1).filter_map(|a| a.atom()).map(String::from).collect()).unwrap_or_default();
+    parts.push(format!("{}{}", fill_mode.join(" "), with_defaults(fill, "fill", &[("thermal_gap", "0.5"), ("thermal_bridge_width", "0.5"), ("island_removal_mode", "0")])));
+    match keepout {
+        Some(k) => {
+            parts.push(with_defaults(Some(k), "keepout", &[("tracks", "not_allowed"), ("vias", "not_allowed"), ("pads", "allowed"), ("copperpour", "allowed"), ("footprints", "allowed")]));
+            parts.push(with_defaults(n.find("connect_pads"), "connect_pads", &[("clearance", "0")]));
+        }
+        None => {
+            let cp = n.find("connect_pads");
+            let mode: Vec<String> = cp.map(|f| f.items().iter().skip(1).filter_map(|a| a.atom()).map(String::from).collect()).unwrap_or_default();
+            parts.push(format!("{}{}", mode.join(" "), with_defaults(cp, "connect_pads", &[])));
+        }
+    }
+    // one spelling for every list: no space after an opening paren
+    let mut parts: Vec<String> = parts.into_iter().map(|p| p.replace("( ", "(")).collect();
+    parts.sort();
+    parts.join("")
+}
+
+fn parse_zone(n: &Node, owner: Option<String>, origin: (f64, f64)) -> Zone {
+    let layers = zone_layers(n);
+    let outlines: Vec<Vec<(f64, f64)>> = n.find_all("polygon").map(pts).collect();
+    let outline = outlines.first().cloned().unwrap_or_default();
+    let filled = n.find_all("filled_polygon").map(|f| (f.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(), pts(f))).collect();
+    let net = n.find("net").and_then(|x| x.arg(1)).unwrap_or("").to_string();
+    Zone { net, layers, outline, outlines, settings: zone_canon(n, origin), owner, filled }
+}
+
 /// Points along a three-point arc (start, mid, end), 16 segments; a straight line if the points are collinear.
 pub fn arc_points(a: (f64, f64), m: (f64, f64), c: (f64, f64)) -> Vec<(f64, f64)> {
     let d = 2.0 * (a.0 * (m.1 - c.1) + m.0 * (c.1 - a.1) + c.0 * (a.1 - m.1));
@@ -185,6 +292,10 @@ pub fn arc_points(a: (f64, f64), m: (f64, f64), c: (f64, f64)) -> Vec<(f64, f64)
 
 impl Board {
     pub fn load(path: &str) -> Result<Board> {
+        // a board that is not there is the caller's mistake, not a tool failure (review 10, 9)
+        if !std::path::Path::new(path).exists() {
+            return Err(crate::contract::refused("usage", format!("{path}: no such board")));
+        }
         let src = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
         Board::from_str(src)
     }
@@ -214,7 +325,14 @@ impl Board {
         let mut b = Board { src: String::new(), root: root.clone(), nets: BTreeSet::new(), footprints: vec![], tracks: vec![], arcs: vec![], vias: vec![], zones: vec![], outline: vec![], copper_layers };
         for n in root.items() {
             match n.head() {
-                Some("footprint") => b.footprints.push(b.footprint(n)),
+                Some("footprint") => {
+                    let f = b.footprint(n);
+                    // a footprint's zones are copper too, stored in board coordinates (review 10, 8)
+                    for z in n.items().iter().filter(|z| z.is("zone")) {
+                        b.zones.push(parse_zone(z, Some(f.reference.clone()), (f.x, f.y)));
+                    }
+                    b.footprints.push(f)
+                }
                 Some("segment") => {
                     let (x0, y0) = xy(n, "start");
                     let (x1, y1) = xy(n, "end");
@@ -253,31 +371,7 @@ impl Board {
                         span: n.span,
                     })
                 }
-                Some("zone") => {
-                    let layers = match n.find("layers") {
-                        Some(l) => l.args().into_iter().map(String::from).collect(),
-                        None => n.find("layer").and_then(|l| l.arg(1)).map(|s| vec![s.to_string()]).unwrap_or_default(),
-                    };
-                    let outline = n.find("polygon").map(pts).unwrap_or_default();
-                    let filled = n
-                        .find_all("filled_polygon")
-                        .map(|f| (f.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(), pts(f)))
-                        .collect();
-                    let outlines: Vec<Vec<(f64, f64)>> = n.find_all("polygon").map(pts).collect();
-                    let num = |path: &[&str]| -> String {
-                        let mut c = Some(n);
-                        for h in path {
-                            c = c.and_then(|x| x.find(h));
-                        }
-                        c.map(|x| x.args().join(" ")).unwrap_or_default()
-                    };
-                    let settings = format!(
-                        "clearance {} | priority {} | min {} | keepout {}",
-                        num(&["connect_pads", "clearance"]), num(&["priority"]), num(&["min_thickness"]),
-                        n.find("keepout").map(|k| k.items().iter().skip(1).map(|c| c.args().join(" ")).collect::<Vec<_>>().join(", ")).unwrap_or_default()
-                    );
-                    b.zones.push(Zone { net: net_of(n), layers, outline, outlines, settings, filled })
-                }
+                Some("zone") => b.zones.push(parse_zone(n, None, (0.0, 0.0))),
                 Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle") => {
                     if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") {
                         let (x0, y0) = xy(n, "start");

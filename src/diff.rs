@@ -53,6 +53,9 @@ pub struct Diff {
     pub zones_added: Vec<String>,
     pub zones_removed: Vec<String>,
     pub outline_changed: bool,
+    /// Board graphics on copper layers (gr_poly, gr_text ...) in one board and not the other, by kind and layer.
+    pub copper_graphics_added: Vec<String>,
+    pub copper_graphics_removed: Vec<String>,
     /// References that appear more than once on a board.
     pub repeated_refs: Vec<String>,
     pub identical: bool,
@@ -130,7 +133,9 @@ fn via_keys(b: &Board) -> BTreeMap<(String, i64, i64, i64, i64, String), usize> 
     let mut m = BTreeMap::new();
     for v in &b.vias {
         // the layers a via spans are part of it (review 9, 5)
-        *m.entry((v.net.clone(), um(v.x), um(v.y), um(v.size), um(v.drill), v.layers.join(" "))).or_default() += 1;
+        let mut l = v.layers.clone();
+        l.sort();
+        *m.entry((v.net.clone(), um(v.x), um(v.y), um(v.size), um(v.drill), l.join(" "))).or_default() += 1;
     }
     m
 }
@@ -155,13 +160,15 @@ fn pad_key(f: &crate::board::Footprint, p: &crate::board::Pad) -> String {
     )
 }
 
-/// A footprint's own Edge.Cuts graphics (a slot or cut-out it carries), as numbers in its frame (review 9, 6).
-fn fp_edge_cuts(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
+/// A footprint's own graphics on Edge.Cuts (a slot or cut-out it carries, review 9, 6) or, with `copper`, on a
+/// copper layer (review 10, 4), as numbers in its frame.
+fn fp_graphics(b: &Board, f: &crate::board::Footprint, copper: bool) -> Vec<String> {
     let Ok(n) = crate::sexpr::parse(&b.src[f.span.0..f.span.1]) else { return vec![] };
+    let on = |l: Option<&str>| if copper { l.is_some_and(|l| l.ends_with(".Cu")) } else { l == Some("Edge.Cuts") };
     let mut v: Vec<String> = n
         .items()
         .iter()
-        .filter(|c| c.head().is_some_and(|h| h.starts_with("fp_")) && c.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts"))
+        .filter(|c| c.head().is_some_and(|h| h.starts_with("fp_")) && on(c.find("layer").and_then(|l| l.arg(1))))
         .map(|c| {
             let nums: Vec<String> = c.items().iter().filter(|k| ["start", "end", "mid", "center", "pts"].iter().any(|h| k.is(h))).map(|k| {
                 let mut out = vec![];
@@ -176,11 +183,49 @@ fn fp_edge_cuts(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
                 walk(k, &mut out);
                 format!("{} {:?}", k.head().unwrap_or(""), out)
             }).collect();
-            format!("{} {}", c.head().unwrap_or(""), nums.join(" "))
+            format!("{} {} {}", c.head().unwrap_or(""), c.find("layer").and_then(|l| l.arg(1)).unwrap_or(""), nums.join(" "))
         })
         .collect();
     v.sort();
     v
+}
+
+/// Per pad, the settings that change how copper meets it: zone connection, clearance, thermal relief (review 10, 5).
+fn pad_rules(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
+    let Ok(n) = crate::sexpr::parse(&b.src[f.span.0..f.span.1]) else { return vec![] };
+    let mut v: Vec<String> = n
+        .items()
+        .iter()
+        .filter(|c| c.is("pad"))
+        .map(|p| {
+            let get = |h: &str| p.find(h).map(|x| x.args().join(" ")).unwrap_or_default();
+            format!("{} zc {} cl {} tw {} tg {} ta {}", p.arg(1).unwrap_or(""), get("zone_connect"), get("clearance"), get("thermal_bridge_width"), get("thermal_gap"), get("thermal_bridge_angle"))
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// Board graphics on copper layers (a `gr_poly` on F.Cu is copper, and may carry a net), as canonical text.
+fn copper_graphics(b: &Board) -> BTreeMap<String, usize> {
+    let mut m = BTreeMap::new();
+    for c in b.root.items().iter().filter(|c| c.head().is_some_and(|h| h.starts_with("gr_")) && c.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".Cu"))) {
+        let mut nums = vec![];
+        fn walk(x: &crate::sexpr::Node, out: &mut Vec<String>) {
+            if x.is("uuid") {
+                return;
+            }
+            for a in x.items() {
+                match a.atom() {
+                    Some(t) => out.push(t.parse::<f64>().map(|v| format!("{}", (v * 1000.0).round() / 1000.0)).unwrap_or(t.to_string())),
+                    None => walk(a, out),
+                }
+            }
+        }
+        walk(c, &mut nums);
+        *m.entry(nums.join(" ")).or_default() += 1;
+    }
+    m
 }
 
 /// Footprints by reference; the k-th repeat of a reference keyed `REF#k`.
@@ -202,11 +247,9 @@ fn by_ref(b: &Board) -> (BTreeMap<String, &crate::board::Footprint>, Vec<String>
 
 fn zone_keys(b: &Board) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
+    // board zones and footprint zones (by owner, in its frame), each as canonical text (review 10, 5 and 6)
     for z in &b.zones {
-        let polys: Vec<Vec<(i64, i64)>> = z.outlines.iter().map(|p| p.iter().map(|(x, y)| (um(*x), um(*y))).collect()).collect();
-        let mut layers = z.layers.clone();
-        layers.sort();
-        *m.entry(format!("{}\t{:?}\t{:?}\t{}", z.net, layers, polys, z.settings)).or_default() += 1;
+        *m.entry(format!("{}\t{}\t{}", z.net, z.owner.clone().unwrap_or_default(), z.settings)).or_default() += 1;
     }
     m
 }
@@ -243,9 +286,11 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
                 let pads = !flipped && pa != pb;
                 let lock = f.locked != g.locked;
                 let value = f.value != g.value;
-                let cuts = fp_edge_cuts(a, f) != fp_edge_cuts(b, g);
-                if moved || turned || flipped || pads || lock || value || cuts {
-                    let what: Vec<&str> = [(moved, "moved"), (turned, "turned"), (flipped, "flipped"), (pads, "pads changed"), (lock && g.locked, "locked"), (lock && !g.locked, "unlocked"), (value, "value changed"), (cuts, "edge cuts changed")].iter().filter(|(c, _)| *c).map(|(_, w)| *w).collect();
+                let cuts = fp_graphics(a, f, false) != fp_graphics(b, g, false);
+                let cu = fp_graphics(a, f, true) != fp_graphics(b, g, true);
+                let pads = pads || (!flipped && pad_rules(a, f) != pad_rules(b, g));
+                if moved || turned || flipped || pads || lock || value || cuts || cu {
+                    let what: Vec<&str> = [(moved, "moved"), (turned, "turned"), (flipped, "flipped"), (pads, "pads changed"), (lock && g.locked, "locked"), (lock && !g.locked, "unlocked"), (value, "value changed"), (cuts, "edge cuts changed"), (cu, "copper graphics changed")].iter().filter(|(c, _)| *c).map(|(_, w)| *w).collect();
                     footprints.push(FootprintChange { reference: r.to_string(), change: what.join(", "), from: Some([f.x, f.y, f.rot]), to: Some([g.x, g.y, g.rot]), side_from: Some(f.layer.clone()), side_to: Some(g.layer.clone()) });
                 }
             }
@@ -313,7 +358,10 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
     let (mut zones_added, mut zones_removed) = (vec![], vec![]);
     for k in za.keys().chain(zb.keys()).collect::<BTreeSet<_>>() {
         let (na, nb) = (za.get(k).copied().unwrap_or(0), zb.get(k).copied().unwrap_or(0));
-        let net = k.split('\t').next().unwrap_or("").to_string();
+        let mut parts = k.split('\t');
+        let net = parts.next().unwrap_or("").to_string();
+        let owner = parts.next().unwrap_or("");
+        let net = if owner.is_empty() { net } else { format!("{net} (in {owner})") };
         for _ in nb..na {
             zones_removed.push(net.clone());
         }
@@ -322,9 +370,21 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
         }
     }
     let outline_changed = outline_key(a) != outline_key(b);
-    let identical = footprints.is_empty() && copper.is_empty() && nets_added.is_empty() && nets_removed.is_empty() && zones_added.is_empty() && zones_removed.is_empty() && !outline_changed;
+    let (ga, gb) = (copper_graphics(a), copper_graphics(b));
+    let (mut copper_graphics_added, mut copper_graphics_removed) = (vec![], vec![]);
+    for k in ga.keys().chain(gb.keys()).collect::<BTreeSet<_>>() {
+        let (na, nb) = (ga.get(k).copied().unwrap_or(0), gb.get(k).copied().unwrap_or(0));
+        let what = k.split(' ').take(1).collect::<Vec<_>>().join(" ");
+        for _ in nb..na {
+            copper_graphics_removed.push(what.clone());
+        }
+        for _ in na..nb {
+            copper_graphics_added.push(what.clone());
+        }
+    }
+    let identical = footprints.is_empty() && copper.is_empty() && nets_added.is_empty() && nets_removed.is_empty() && zones_added.is_empty() && zones_removed.is_empty() && !outline_changed && copper_graphics_added.is_empty() && copper_graphics_removed.is_empty();
     let same_text = a.src == b.src;
-    Diff { a: a_name.into(), b: b_name.into(), footprints, nets_added, nets_removed, copper, zones_a: a.zones.len(), zones_b: b.zones.len(), zones_added, zones_removed, outline_changed, repeated_refs, identical, same_text }
+    Diff { a: a_name.into(), b: b_name.into(), footprints, nets_added, nets_removed, copper, zones_a: a.zones.len(), zones_b: b.zones.len(), zones_added, zones_removed, outline_changed, copper_graphics_added, copper_graphics_removed, repeated_refs, identical, same_text }
 }
 
 #[cfg(test)]
