@@ -325,6 +325,46 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             }
         }
     }
+    // the release flow (M3): pcb.toml and its folders beside a copy of the imported board, each step written back in
+    // place, then release, compared with the files that were ordered
+    if let Some(r) = fx.get("release") {
+        let rdir = w("release_project");
+        if Path::new(&rdir).exists() {
+            std::fs::remove_dir_all(&rdir)?;
+        }
+        std::fs::create_dir_all(&rdir)?;
+        std::fs::copy(&board, format!("{rdir}/board.kicad_pcb"))?;
+        std::fs::copy(Path::new(&board).with_extension("kicad_pro"), format!("{rdir}/board.kicad_pro"))?;
+        std::fs::copy(dir.join("pcb.toml"), format!("{rdir}/pcb.toml"))?;
+        for a in r.get("assets").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()) {
+            let to = Path::new(&rdir).join(a);
+            std::fs::create_dir_all(&to)?;
+            for e in std::fs::read_dir(dir.join(a))? {
+                let e = e?;
+                std::fs::copy(e.path(), to.join(e.file_name()))?;
+            }
+        }
+        let mut ok = true;
+        for step in r.get("steps").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()) {
+            let wdir = w(&format!("release_{}_w", step.replace(' ', "_")));
+            let mut args: Vec<&str> = vec!["--json"];
+            args.extend(step.split_whitespace());
+            args.extend(["--project", &rdir, "--work", &wdir]);
+            ok = ok && s.run(&format!("{name}: release flow: pcb {step}"), pcb, &args);
+        }
+        let out = w("release");
+        if Path::new(&out).exists() {
+            std::fs::remove_dir_all(&out)?;
+        }
+        if ok && s.run(&format!("{name}: pcb release"), pcb, &["--json", "release", "--project", &rdir, "-o", &out, "--work", &w("release_w")]) {
+            let p: toml::Value = toml::from_str(&std::fs::read_to_string(dir.join("pcb.toml"))?)?;
+            let (pn, pv) = (p["project"]["name"].as_str().unwrap_or(""), p["project"]["version"].as_str().unwrap_or(""));
+            let f = |k: &str| r.get(k).and_then(|v| v.as_str()).map(|v| dir.join(v).to_string_lossy().to_string()).unwrap_or_default();
+            let zip = format!("{out}/{pn}_v{pv}_gerbers.zip");
+            s.run(&format!("{name}: compare-gerbers with the ordered files"), pcb, &["--json", "compare-gerbers", &zip, &f("golden_gerbers"), "--explain", &f("explain"), "--board", &format!("{rdir}/board.kicad_pcb"), "--work", &w("compare_w")]);
+            s.py(&format!("{name}: verify_release"), "tests/oracles/verify_release.py", &[&out, &f("golden_bom"), &f("golden_cpl"), pn, pv]);
+        }
+    }
     Ok(())
 }
 

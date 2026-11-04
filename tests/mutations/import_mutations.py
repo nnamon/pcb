@@ -263,9 +263,20 @@ MUT = {
 results = {}
 base = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, board, fixture], capture_output=True)
 results["unmutated passes"] = base.returncode == 0
+# a mutation the board has nothing for (no back-side part, no polygon pad) is skipped and listed; the fixture says
+# which it expects to skip, so a mutation cannot quietly stop applying (M3, paddle-keyer)
+import tomllib
+expect_skip = set(tomllib.load(open(fixture, "rb")).get("import", {}).get("mutations_skipped", []))
+skipped = set()
 for mfn, words in MUT.items():
-    out = mfn(src)
-    assert out != src, f"{mfn.__name__} changed nothing"
+    try:
+        out = mfn(src)
+    except SystemExit:
+        out = src
+    if out == src:
+        skipped.add(mfn.__name__)
+        print(f"skip {mfn.__name__}: the board has nothing it needs")
+        continue
     p = os.path.join(work, mfn.__name__ + ".kicad_pcb")
     open(p, "w").write(out)
     pro = os.path.splitext(board)[0] + ".kicad_pro"
@@ -280,6 +291,9 @@ for mfn, words in MUT.items():
     results[mfn.__name__ + f" caught by its check ({words.strip()})"] = r.returncode != 0 and hit
     if not hit:
         print(f"     {mfn.__name__}: {errs[:3]}")
+results["skipped exactly the mutations the fixture names"] = skipped == expect_skip
+if skipped != expect_skip:
+    print(f"     skipped {sorted(skipped)}, fixture names {sorted(expect_skip)}")
 for k, v in results.items():
     print(f"{'ok  ' if v else 'FAIL'} {k}")
 sys.exit(0 if all(results.values()) else 1)

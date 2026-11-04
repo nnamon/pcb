@@ -1,14 +1,16 @@
 """Gerber and Excellon operations `pcb` delegates to gerbonara and shapely. Embedded in the pcb binary and written to
 its work directory at run time; prints one JSON object.
 
-  compare A B [EXPLAIN]   compare two fabrication sets (folders or zips), layer by layer as shapes and hole by hole
+  zip FOLDER DEST         zip a folder's files, sorted, with a fixed date
+  compare A B [EXPLAIN [BOARD]]   compare two fabrication sets (folders or zips), layer by layer as shapes and hole by hole
 
 Layers are found by their X2 file function when the file has one, else by file name. The two sets are aligned on
 the centres of their board outlines. A difference is a connected piece of copper, mask, paste or silk present in
 one set and not the other; pieces under NOISE_MM2, or thinner than NOISE_WIDTH everywhere, are rounding and are
 dropped. Each remaining piece must lie inside a region of the explain file (TOML, `[[explain]]` with `layer`,
-`side` = "a", "b" or "both", `rect` = [x0, y0, x1, y1] in B's frame or `whole = true`, and `why`), or it is listed
-as unexplained. Holes match within HOLE_TOL in place and size, and on plating.
+`side` = "a", "b" or "both", `rect` = [x0, y0, x1, y1] in B's frame or `whole = true`, optionally
+`thinner_than_mm` (only pieces no wider than that; on its own it covers the whole layer), or `zone_net` (A's copper
+that is wholly a zone fill of that net on the board A was made from), and `why`), or it is listed as unexplained. Holes match within HOLE_TOL in place and size, and on plating.
 """
 import json
 import os
@@ -210,7 +212,8 @@ def compare(a_src, b_src, explain_path=None, board=None):
     ex = tomllib.load(open(explain_path, "rb")).get("explain", []) if explain_path else []
     fa, fb = files_of(a_src), files_of(b_src)
     la, lb = find_layers(fa), find_layers(fb)
-    res = {"layers": {}, "missing": sorted((set(la) ^ set(lb))), "ok": True}
+    # a layer in one set only counts when it has something on it
+    res = {"layers": {}, "missing": sorted(k for k in set(la) ^ set(lb) if layer_shape((la.get(k) or lb.get(k))).area > 0), "ok": True}
     if "Edge.Cuts" not in la or "Edge.Cuts" not in lb:
         return {"ok": False, "error": "both sets need a board outline (Edge.Cuts)", "found_a": la, "found_b": lb}
     ea, eb = layer_shape(la["Edge.Cuts"]).bounds, layer_shape(lb["Edge.Cuts"]).bounds
@@ -230,7 +233,10 @@ def compare(a_src, b_src, explain_path=None, board=None):
             # A's own copper that is wholly a zone fill of that net (B, the older set, lacks it)
             f = fills.get((key, e["zone_net"]))
             return side == "a" and f is not None and f.buffer(0.01).contains(q)
-        return bool(e.get("whole")) or box(*e["rect"]).buffer(0.05).contains(q)
+        where = bool(e.get("whole")) or ("rect" in e and box(*e["rect"]).buffer(0.05).contains(q)) or ("rect" not in e and "thinner_than_mm" in e)
+        # thinner_than_mm: only a piece no wider than that anywhere (an outline drawn a little differently)
+        thin = "thinner_than_mm" not in e or q.buffer(-e["thinner_than_mm"] / 2).is_empty
+        return where and thin
     for key in sorted(set(la) & set(lb)):
         if key == "Edge.Cuts":
             continue
@@ -270,9 +276,23 @@ def compare(a_src, b_src, explain_path=None, board=None):
     return res
 
 
+def make_zip(folder, dest):
+    """Every file of a folder in a zip, sorted, with one fixed date, so the same files give the same bytes."""
+    names = sorted(n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n)))
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+        for n in names:
+            zi = zipfile.ZipInfo(n, date_time=(2020, 1, 1, 0, 0, 0))
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = 0o644 << 16
+            z.writestr(zi, open(os.path.join(folder, n), "rb").read())
+    return {"zip": dest, "files": names}
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
-    if cmd == "compare":
+    if cmd == "zip":
+        print(json.dumps(make_zip(sys.argv[2], sys.argv[3])))
+    elif cmd == "compare":
         arg = lambda i: sys.argv[i] if len(sys.argv) > i and sys.argv[i] else None
         print(json.dumps(compare(sys.argv[2], sys.argv[3], arg(4), arg(5))))
     else:

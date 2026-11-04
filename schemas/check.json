@@ -1,0 +1,93 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:check",
+ "title": "pcb check output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/check/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "fab",
+     "findings",
+     "unwaived",
+     "unused_waivers"
+    ],
+    "properties": {
+     "fab": {
+      "type": "string"
+     },
+     "findings": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "check",
+        "item",
+        "count",
+        "message",
+        "waived"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "check": {
+         "enum": [
+          "drc",
+          "width-current",
+          "side",
+          "paste",
+          "testpoint"
+         ]
+        },
+        "item": {
+         "type": "string"
+        },
+        "count": {
+         "type": "integer",
+         "minimum": 1
+        },
+        "message": {
+         "type": "string"
+        },
+        "waived": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       }
+      }
+     },
+     "unwaived": {
+      "type": "integer"
+     },
+     "unused_waivers": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

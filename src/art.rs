@@ -13,7 +13,7 @@ use crate::gate::Gate;
 use crate::project::Loaded;
 use crate::sexpr::{self, fmt_num as n, Edits};
 use anyhow::Result;
-use geo::{BooleanOps, BoundingRect, Coord, LineString, MultiPolygon, Polygon};
+use geo::{BooleanOps, BoundingRect, Coord, LineString, MapCoords, MultiPolygon, Polygon};
 use serde::Serialize;
 use std::path::Path;
 
@@ -112,6 +112,102 @@ fn hole_free(p: &Polygon<f64>) -> Vec<Polygon<f64>> {
     out
 }
 
+/// Contours of a glyph outline, curves flattened.
+struct Pen {
+    rings: Vec<Vec<(f64, f64)>>,
+    cur: Vec<(f64, f64)>,
+    x0: f64,
+}
+
+impl Pen {
+    fn last(&self) -> (f64, f64) {
+        *self.cur.last().unwrap_or(&(0.0, 0.0))
+    }
+}
+
+impl ttf_parser::OutlineBuilder for Pen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        if self.cur.len() > 2 {
+            self.rings.push(std::mem::take(&mut self.cur));
+        }
+        self.cur = vec![(self.x0 + x as f64, y as f64)];
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.cur.push((self.x0 + x as f64, y as f64));
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        let (p0, p1, p2) = (self.last(), (self.x0 + x1 as f64, y1 as f64), (self.x0 + x as f64, y as f64));
+        for i in 1..=12 {
+            let t = i as f64 / 12.0;
+            let u = 1.0 - t;
+            self.cur.push((u * u * p0.0 + 2.0 * u * t * p1.0 + t * t * p2.0, u * u * p0.1 + 2.0 * u * t * p1.1 + t * t * p2.1));
+        }
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        let (p0, p1, p2, p3) = (self.last(), (self.x0 + x1 as f64, y1 as f64), (self.x0 + x2 as f64, y2 as f64), (self.x0 + x as f64, y as f64));
+        for i in 1..=16 {
+            let t = i as f64 / 16.0;
+            let u = 1.0 - t;
+            let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            self.cur.push((a * p0.0 + b * p1.0 + c * p2.0 + d * p3.0, a * p0.1 + b * p1.1 + c * p2.1 + d * p3.1));
+        }
+    }
+    fn close(&mut self) {
+        if self.cur.len() > 2 {
+            self.rings.push(std::mem::take(&mut self.cur));
+        }
+    }
+}
+
+/// A text entry as polygons in board coordinates: glyphs by their advance widths (no kerning), scaled to the cap
+/// height, the bounding box's middle at the origin, grown, turned, mirrored for the bottom side, then placed.
+fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64)) -> Result<Vec<Polygon<f64>>> {
+    use geo::{Buffer, Rotate, Translate};
+    let what = format!("text {:?}", t.name);
+    let data = std::fs::read(base.join(&t.font)).map_err(|err| refused("config", format!("{what}: font {}: {err}", t.font)))?;
+    let face = ttf_parser::Face::parse(&data, 0).map_err(|err| refused("config", format!("{what}: font {}: {err}", t.font)))?;
+    let cap = face.capital_height().filter(|c| *c > 0).ok_or_else(|| refused("config", format!("{what}: font {} gives no capital height", t.font)))? as f64;
+    let mut pen = Pen { rings: vec![], cur: vec![], x0: 0.0 };
+    for ch in t.text.chars() {
+        let gid = face.glyph_index(ch).ok_or_else(|| refused("config", format!("{what}: the font has no glyph for {ch:?}")))?;
+        face.outline_glyph(gid, &mut pen);
+        ttf_parser::OutlineBuilder::close(&mut pen);
+        pen.x0 += face.glyph_hor_advance(gid).unwrap_or(0) as f64;
+    }
+    // even-odd: the largest contours first; one inside the shape so far is a counter
+    let mut rings: Vec<Polygon<f64>> = pen.rings.iter().map(|r| Polygon::new(LineString::from(r.clone()), vec![])).collect();
+    {
+        use geo::Area;
+        rings.sort_by(|a, b| b.unsigned_area().partial_cmp(&a.unsigned_area()).unwrap());
+    }
+    let mut shape = MultiPolygon::new(vec![]);
+    for r in rings {
+        use geo::Contains;
+        let m = MultiPolygon::new(vec![r.clone()]);
+        shape = if shape.contains(&r) { shape.difference(&m) } else { shape.union(&m) };
+    }
+    let k = t.cap_mm / cap;
+    let mut shape: MultiPolygon<f64> = shape.map_coords(|c| Coord { x: c.x * k, y: c.y * k });
+    let Some(bb) = shape.bounding_rect() else { return Ok(vec![]) };
+    shape = shape.translate(-(bb.min().x + bb.max().x) / 2.0, -(bb.min().y + bb.max().y) / 2.0);
+    if t.grow_mm > 0.0 {
+        shape = shape.buffer(t.grow_mm);
+    }
+    shape = shape.rotate_around_point(t.rot_deg, geo::Point::new(0.0, 0.0));
+    if t.layer.starts_with("B.") {
+        shape = shape.map_coords(|c| Coord { x: -c.x, y: c.y });
+    }
+    // y up so far: place in the frame
+    Ok(shape
+        .0
+        .into_iter()
+        .map(|q| match t.frame.as_str() {
+            "centre" => q.map_coords(|c| Coord { x: centre.0 + t.at[0] + c.x, y: centre.1 - t.at[1] - c.y }),
+            _ => q.map_coords(|c| Coord { x: t.at[0] + c.x, y: t.at[1] - c.y }),
+        })
+        .collect())
+}
+
 fn uuid(name: &str) -> String {
     crate::zone::name_uuid(name)
 }
@@ -163,36 +259,51 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     // 2. the artwork
     let (bx0, by0, bx1, by1) = b.bbox();
     let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
-    let mut text = String::new();
+    let base = l.path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    // every entry as polygons in board coordinates
+    let mut entries: Vec<(String, Vec<String>, Option<String>, Vec<Polygon<f64>>)> = vec![];
     for a in &p.art {
-        let path = l.path.parent().unwrap_or(Path::new(".")).join(&a.file);
+        let path = base.join(&a.file);
         let what = format!("art {:?} ({})", a.name, a.file);
         let raw = std::fs::read_to_string(&path).map_err(|err| refused("config", format!("{what}: {err}")))?;
         let v: serde_json::Value = serde_json::from_str(&raw).map_err(|err| refused("config", format!("{what}: not JSON: {err}")))?;
         let polys = geometries(&v, a.key.as_deref(), &what)?;
-        let to_board = |c: &Coord<f64>| -> (f64, f64) {
-            match a.frame.as_str() {
-                "centre" => (cx + c.x, cy - c.y),
-                _ => (c.x, c.y),
+        let polys = polys
+            .into_iter()
+            .map(|q| match a.frame.as_str() {
+                "centre" => q.map_coords(|c| Coord { x: cx + c.x, y: cy - c.y }),
+                _ => q,
+            })
+            .collect();
+        entries.push((a.name.clone(), a.layers.clone(), a.net.clone(), polys));
+    }
+    for t in &p.text {
+        if let Some(net) = &t.net {
+            if !b.nets.contains(net) {
+                return Err(refused("config", format!("text {:?}: no net {net} on the board", t.name)));
             }
-        };
+        }
+        entries.push((t.name.clone(), vec![t.layer.clone()], t.net.clone(), text_polygons(t, &base, (cx, cy))?));
+    }
+    let mut text = String::new();
+    for (name, layers, net_of, polys) in &entries {
         let pieces: Vec<Polygon<f64>> = polys.iter().flat_map(hole_free).collect();
         let area: f64 = {
             use geo::Area;
             polys.iter().map(|q| q.unsigned_area()).sum()
         };
         let mut ids = vec![];
-        for lay in &a.layers {
+        for lay in layers {
             for (i, q) in pieces.iter().enumerate() {
-                let mut pts: Vec<(f64, f64)> = q.exterior().coords().map(to_board).collect();
+                let mut pts: Vec<(f64, f64)> = q.exterior().coords().map(|c| (c.x, c.y)).collect();
                 if pts.len() > 1 && pts[0] == pts[pts.len() - 1] {
                     pts.pop();
                 }
                 if pts.len() < 3 {
                     continue;
                 }
-                let id = uuid(&format!("{PREFIX}{}:{lay}:{i}", a.name));
-                let net = match (&a.net, lay.ends_with(".Cu")) {
+                let id = uuid(&format!("{PREFIX}{name}:{lay}:{i}"));
+                let net = match (net_of, lay.ends_with(".Cu")) {
                     (Some(nn), true) => format!(" (net {})", sexpr::quote(nn)),
                     _ => String::new(),
                 };
@@ -206,11 +317,11 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
         }
         text.push_str(&format!(
             "\t(group {}\n\t\t(uuid \"{}\")\n\t\t(members {})\n\t)\n",
-            sexpr::quote(&format!("{PREFIX}{}", a.name)),
-            uuid(&format!("{PREFIX}{}:group", a.name)),
+            sexpr::quote(&format!("{PREFIX}{name}")),
+            uuid(&format!("{PREFIX}{name}:group")),
             ids.iter().map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(" ")
         ));
-        rep.art.push(ArtMade { name: a.name.clone(), layers: a.layers.clone(), polygons: polys.len(), pieces: pieces.len(), area_mm2: (area * 1000.0).round() / 1000.0 });
+        rep.art.push(ArtMade { name: name.clone(), layers: layers.clone(), polygons: polys.len(), pieces: pieces.len(), area_mm2: (area * 1000.0).round() / 1000.0 });
     }
     e.insert(b.root.span.1 - 1, text);
     let candidate = e.apply(src)?;

@@ -1,0 +1,19 @@
+# paddle-keyer v1.0.0: ordered from JLCPCB on 25 Oct 2026; the second board through pcb, and its golden release
+[fixture]
+name = "paddle_keyer_v1"
+circuit_json = "circuit.json"
+layers = 2
+
+[import]
+# paddle-keyer has no back-side part with a courtyard, no polygon pad and no board-level mounting hole
+mutations_skipped = ["m_crtyd_side", "m_hole_renamed", "m_polygon", "m_polygon_mirror"]
+
+# the release flow: pcb.toml beside the imported board, with these folders; zone, paste and art in turn, the layout
+# gate, then release, compared with the ordered files
+[release]
+assets = ["art", "fonts"]
+steps = ["zone", "paste", "art", "gate pass layout"]
+golden_gerbers = "golden/paddle-keyer_v1.0.0_gerbers.zip"
+golden_bom = "golden/paddle-keyer_v1.0.0_BOM.csv"
+golden_cpl = "golden/paddle-keyer_v1.0.0_CPL.csv"
+explain = "explain.toml"

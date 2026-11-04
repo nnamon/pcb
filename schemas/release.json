@@ -1,0 +1,80 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:release",
+ "title": "pcb release output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/release/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "files",
+     "gerber_layers",
+     "bom_lines",
+     "cpl_rows",
+     "left_out",
+     "written"
+    ],
+    "properties": {
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name",
+        "sha256"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "sha256": {
+         "type": "string",
+         "pattern": "^[0-9a-f]{64}$"
+        }
+       }
+      }
+     },
+     "gerber_layers": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "bom_lines": {
+      "type": "integer"
+     },
+     "cpl_rows": {
+      "type": "integer"
+     },
+     "left_out": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "written": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

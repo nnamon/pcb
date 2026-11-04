@@ -49,10 +49,45 @@ pub struct Project {
     /// Artwork: polygons from a GeoJSON file on silkscreen, mask or copper (milestone M3, `pcb art`).
     #[serde(default)]
     pub art: Vec<Art>,
+    /// Text drawn from a TrueType font as filled polygons (milestone M3, `pcb art`), so it prints at any size the
+    /// font allows and needs no font installed where KiCad runs.
+    #[serde(default)]
+    pub text: Vec<TextArt>,
+    /// Findings of `pcb check` the owner accepts, each with why (milestone M3).
+    #[serde(default)]
+    pub waiver: Vec<Waiver>,
+    /// Per LCSC part: CPL rotation and centre offsets.
+    #[serde(default)]
+    pub parts: BTreeMap<String, PartRule>,
     /// Paste rules for named pads (milestone M3, `pcb paste`): windows on an exposed pad, paste on a plated pad.
     #[serde(default)]
     pub paste: Vec<PasteRule>,
     pub bringup: Option<Bringup>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextArt {
+    /// A name of its own (shared with `[[art]]` names); the group `pcb:art:<name>` holds it.
+    pub name: String,
+    pub text: String,
+    /// A TrueType or OpenType font file, relative to pcb.toml.
+    pub font: String,
+    /// Capital height (mm), from the font's own cap height.
+    pub cap_mm: f64,
+    /// Where the middle of the text's bounding box goes, in `frame`.
+    pub at: [f64; 2],
+    /// "centre" or "board", as for `[[art]]`.
+    pub frame: String,
+    /// Turn (degrees, anticlockwise as read on its own side).
+    #[serde(default)]
+    pub rot_deg: f64,
+    /// F.SilkS or B.SilkS (mirrored, so it reads from below), or a mask or copper layer as for `[[art]]`.
+    pub layer: String,
+    /// Grow every stroke by this much (mm), so thin strokes reach the fab's minimum.
+    #[serde(default)]
+    pub grow_mm: f64,
+    pub net: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -169,6 +204,35 @@ pub struct Assembly {
     #[serde(default)]
     pub hand_fit: Vec<String>,
     pub pin_in_paste: Option<String>,
+    /// Designators the BOM and CPL use in place of the board's (a part named descriptively in the design).
+    #[serde(default)]
+    pub designators: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Waiver {
+    /// The check: drc, width-current, side, paste, testpoint.
+    pub check: String,
+    /// What it found it on, as `pcb check` names it (a DRC key such as "courtyards_overlap", a net, REF or REF.PAD).
+    pub item: String,
+    /// The most it may count (a DRC kind found several times); default 1.
+    pub max: Option<usize>,
+    pub why: String,
+}
+
+/// What the assembler's footprint of a part needs that the board's does not say (milestone M3 reads it; M4's
+/// `pcb parts` solves it from JLCPCB's own footprint).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartRule {
+    /// Added to the board rotation in the CPL (degrees).
+    #[serde(default)]
+    pub rotation_offset_deg: f64,
+    /// The assembler's centre, from the board footprint's origin, in the part's own frame (mm, y up).
+    pub cpl_offset_mm: Option<[f64; 2]>,
+    /// Where the offsets came from.
+    pub source: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -532,6 +596,34 @@ pub fn check(p: &Project) -> Vec<String> {
             if l.ends_with(".Cu") && a.net.is_none() {
                 e.push(format!("art {:?}: copper on {l} needs a net", a.name));
             }
+        }
+    }
+    for t in &p.text {
+        if t.name.trim().is_empty() || !art_names.insert(t.name.clone()) {
+            e.push(format!("text {:?}: needs a name of its own (art and text names are shared)", t.name));
+        }
+        if t.text.trim().is_empty() {
+            e.push(format!("text {:?}: text is empty", t.name));
+        }
+        if !(t.cap_mm > 0.0 && t.cap_mm.is_finite()) || !(t.grow_mm >= 0.0 && t.grow_mm.is_finite()) || !t.rot_deg.is_finite() || t.at.iter().any(|v| !v.is_finite()) {
+            e.push(format!("text {:?}: cap_mm must be above 0, grow_mm 0 or more, and every number finite", t.name));
+        }
+        if !matches!(t.frame.as_str(), "centre" | "board") {
+            e.push(format!("text {:?}: frame is centre or board", t.name));
+        }
+        if !matches!(t.layer.as_str(), "F.SilkS" | "B.SilkS" | "F.Mask" | "B.Mask" | "F.Cu" | "B.Cu") {
+            e.push(format!("text {:?}: layer {} is not F.SilkS, B.SilkS, F.Mask, B.Mask, F.Cu or B.Cu", t.name, t.layer));
+        }
+        if t.layer.ends_with(".Cu") && t.net.is_none() {
+            e.push(format!("text {:?}: copper needs a net", t.name));
+        }
+    }
+    for w in &p.waiver {
+        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint") {
+            e.push(format!("waiver {:?}: check is drc, width-current, side, paste or testpoint", w.item));
+        }
+        if w.item.trim().is_empty() || w.why.trim().is_empty() {
+            e.push(format!("waiver {:?}: needs an item and a why", w.item));
         }
     }
     for a in &p.drc_allow {

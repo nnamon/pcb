@@ -2,16 +2,19 @@
 
 mod art;
 mod board;
+mod check;
 mod contract;
 mod diff;
 mod doctor;
 mod edit;
 mod freerouting;
+mod gates;
 mod gerber;
 mod gate;
 mod kicad;
 mod paste;
 mod project;
+mod release;
 mod import_tscircuit;
 mod render;
 mod route;
@@ -183,6 +186,40 @@ enum Cmd {
         #[arg(short, long)]
         out: Option<String>,
     },
+    /// The checks before a gate: KiCad DRC with the fab's rule set, track width against current, assembled
+    /// parts' side and paste, test points. Findings a pcb.toml [[waiver]] names do not fail
+    Check {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        #[arg(long, default_value = "pcb_work/check")]
+        work: String,
+    },
+    /// Process gates: `status` lists each recorded gate and whether its inputs have changed since; `pass NAME`
+    /// records one, only when pcb check finds nothing unwaived
+    Gate {
+        /// status or pass
+        action: String,
+        /// The gate to pass
+        name: Option<String>,
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        #[arg(long, default_value = "pcb_work/check")]
+        work: String,
+    },
+    /// The order files from the board: Gerbers and drill files by kicad-cli (zipped), JLCPCB BOM and CPL, and
+    /// checksums, into a new or empty folder
+    Release {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Where the files go (a new or empty folder)
+        #[arg(short, long)]
+        out: String,
+        #[arg(long, default_value = "pcb_work/release")]
+        work: String,
+    },
     /// Compare two fabrication sets (folders or zips) as shapes, layer by layer and hole by hole, aligned on their
     /// outlines. Every difference must fall in a region the explain file gives a reason for, or the outcome is
     /// rejected. The golden test for a release
@@ -271,6 +308,9 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::CompareGerbers { .. } => "compare-gerbers",
         Cmd::Art { .. } => "art",
         Cmd::Paste { .. } => "paste",
+        Cmd::Release { .. } => "release",
+        Cmd::Check { .. } => "check",
+        Cmd::Gate { .. } => "gate",
     }
 }
 
@@ -498,6 +538,43 @@ fn run(cli: Cli) -> Result<Reply> {
             })
         }
         Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
+        Cmd::Check { project: proj, work } => {
+            let l = project::load(&project::locate(&proj))?;
+            let r = check::run(&l, std::path::Path::new(&work))?;
+            let mut h = format!("{} findings against {}, {} unwaived", r.findings.len(), r.fab, r.unwaived);
+            for f in &r.findings {
+                h += &format!("\n  {} {}: {}", if f.waived.is_some() { "waived" } else { "FAIL  " }, f.check, f.message);
+            }
+            let warnings: Vec<contract::Warning> = r.unused_waivers.iter().map(|w| contract::warn("waiver-unused", format!("waiver {w} matched nothing"))).collect();
+            Ok(Reply { outcome: if r.unwaived == 0 { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings, human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Gate { action, name, project: proj, work } => {
+            let l = project::load(&project::locate(&proj))?;
+            let r = match (action.as_str(), name.as_deref()) {
+                ("status", None) => gates::status(&l)?,
+                ("pass", Some(n)) => gates::pass(&l, n, std::path::Path::new(&work))?,
+                _ => return Err(contract::refused("usage", "pcb gate status, or pcb gate pass NAME".to_string())),
+            };
+            let mut h = match &r.passed {
+                Some(n) => format!("gate {n} passed; inputs {}", r.inputs),
+                None => format!("inputs {}", r.inputs),
+            };
+            for g in &r.gates {
+                h += &format!("\n  {}: version {}, passed {}, {}", g.name, g.version, g.passed, if g.fresh { "fresh".to_string() } else { format!("stale ({})", g.why.clone().unwrap_or_default()) });
+            }
+            let written = r.passed.as_ref().map(|_| l.path.display().to_string());
+            Ok(Reply { outcome: Outcome::Done, error: None, written, warnings: vec![], human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Release { project: proj, out, work } => {
+            let l = project::load(&project::locate(&proj))?;
+            gates::require_fresh(&l)?;
+            let r = release::run(&l, &out, std::path::Path::new(&work))?;
+            let mut h = format!("{} files in {}: {} BOM lines, {} CPL rows, {} footprints left out", r.files.len(), r.written, r.bom_lines, r.cpl_rows, r.left_out.len());
+            for f in &r.files {
+                h += &format!("\n  {}  {}", f.sha256, f.name);
+            }
+            Ok(Reply { outcome: Outcome::Done, error: None, written: Some(r.written.clone()), warnings: vec![], human: h, data: serde_json::to_value(&r)? })
+        }
         Cmd::Paste { project: proj, work, out } => {
             let l = project::load(&project::locate(&proj))?;
             let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
