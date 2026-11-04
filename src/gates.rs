@@ -112,7 +112,7 @@ pub fn status(l: &Loaded) -> Result<Report> {
 }
 
 /// Today's date (UTC), YYYY-MM-DD.
-fn today() -> String {
+pub fn today() -> String {
     let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86400).unwrap_or(0) as i64;
     // civil from days (Howard Hinnant)
     let z = days + 719468;

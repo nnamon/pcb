@@ -63,6 +63,61 @@ pub struct Project {
     #[serde(default)]
     pub paste: Vec<PasteRule>,
     pub bringup: Option<Bringup>,
+    /// The board outline a new board gets from `pcb sync` (milestone M4).
+    pub outline: Option<Outline>,
+    /// Where parts go (milestone M4, `pcb place`).
+    #[serde(default)]
+    pub place: Vec<PlaceRule>,
+    /// The planning drawing's title block (milestone M4, `pcb drawing`).
+    pub drawing: Option<DrawingInfo>,
+}
+
+/// The outline of a new board: a GeoJSON polygon (mm, y up, about the outline's own centre) or a rectangle.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Outline {
+    pub file: Option<String>,
+    /// The GeoJSON feature's `name` property, when the file holds more than one.
+    pub key: Option<String>,
+    /// Width and height of a rectangular board.
+    pub rect_mm: Option<[f64; 2]>,
+}
+
+/// One part's place: where its footprint origin goes, in the board's centred frame (mm, y up), the rotation
+/// (degrees, anticlockwise seen from the top) and the side. `locked` stops later runs moving it.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct PlaceRule {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub at: [f64; 2],
+    #[serde(default)]
+    pub rot_deg: f64,
+    #[serde(default = "top")]
+    pub side: String,
+    #[serde(default)]
+    pub locked: bool,
+}
+
+fn top() -> String {
+    "top".into()
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DrawingInfo {
+    pub title: Option<String>,
+    /// Drawing number, such as NNDC27-CAR-PLC-001.
+    pub number: Option<String>,
+    pub author: Option<String>,
+    pub checked: Option<String>,
+    pub date: Option<String>,
+    /// Notes printed in the notes block, in order.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// Board thickness and finish for the stack-up section.
+    pub thickness_mm: Option<f64>,
+    pub finish: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -177,6 +232,8 @@ pub struct Info {
     pub layers: u32,
     /// Fab rule set name. The rule sets themselves ship with pcb in milestone M3; until then the name is recorded.
     pub fab: String,
+    /// The circuit, as a KiCad schematic (`.kicad_sch`) or netlist (`.net`), relative to this file (milestone M4).
+    pub netlist: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -207,6 +264,8 @@ pub struct Assembly {
     /// Designators the BOM and CPL use in place of the board's (a part named descriptively in the design).
     #[serde(default)]
     pub designators: BTreeMap<String, String>,
+    /// Boards ordered assembled, for the stock check (`pcb parts`); default 5, JLCPCB's smallest order.
+    pub boards: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -233,6 +292,10 @@ pub struct PartRule {
     pub cpl_offset_mm: Option<[f64; 2]>,
     /// Where the offsets came from.
     pub source: String,
+    /// The part's pin names by pad number, from its datasheet, where JLCPCB's symbol names them wrongly or not at
+    /// all (`pcb sync` checks the netlist's pin names against these in place of the symbol's).
+    #[serde(default)]
+    pub pins: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -403,6 +466,48 @@ pub fn check(p: &Project) -> Vec<String> {
     }
     if !matches!(i.layers, 2 | 4 | 6 | 8) {
         e.push(format!("project.layers {} is not 2, 4, 6 or 8", i.layers));
+    }
+    if let Some(nl) = &i.netlist {
+        if !(nl.ends_with(".kicad_sch") || nl.ends_with(".net")) {
+            e.push(format!("project.netlist {nl:?} is not a .kicad_sch or .net file"));
+        }
+    }
+    if let Some(o) = &p.outline {
+        match (&o.file, &o.rect_mm) {
+            (Some(_), Some(_)) => e.push("outline gives both file and rect_mm; give one".into()),
+            (None, None) => e.push("outline gives neither file nor rect_mm".into()),
+            (None, Some(r)) if !(r[0].is_finite() && r[1].is_finite() && r[0] > 0.0 && r[1] > 0.0 && r[0] <= 1000.0 && r[1] <= 1000.0) => {
+                e.push(format!("outline.rect_mm {r:?} must be two sizes above 0 and at most 1000"))
+            }
+            _ => {}
+        }
+        if o.key.is_some() && o.file.is_none() {
+            e.push("outline.key needs outline.file".into());
+        }
+    }
+    let mut placed = std::collections::BTreeSet::new();
+    for (k, pl) in p.place.iter().enumerate() {
+        if !placed.insert(pl.reference.clone()) {
+            e.push(format!("place[{k}] places {} a second time", pl.reference));
+        }
+        if !(pl.at.iter().all(|v| v.is_finite() && v.abs() <= 1000.0) && pl.rot_deg.is_finite()) {
+            e.push(format!("place[{k}] ({}) has a place or rotation that is not a finite number in range", pl.reference));
+        }
+        if pl.side != "top" && pl.side != "bottom" {
+            e.push(format!("place[{k}] ({}) side {:?} is not top or bottom", pl.reference, pl.side));
+        }
+    }
+    if let Some(a) = &p.assembly {
+        if a.boards == Some(0) {
+            e.push("assembly.boards is 0".into());
+        }
+    }
+    for (code, r) in &p.parts {
+        for (pad, nm) in &r.pins {
+            if pad.trim().is_empty() || nm.trim().is_empty() {
+                e.push(format!("parts.{code}.pins has an empty pad number or name"));
+            }
+        }
     }
     if !i.board.ends_with(".kicad_pcb") {
         e.push(format!("project.board {:?} is not a .kicad_pcb file", i.board));

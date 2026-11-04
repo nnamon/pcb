@@ -6,19 +6,25 @@ mod check;
 mod contract;
 mod diff;
 mod doctor;
+mod easyeda;
 mod edit;
+mod footprint;
 mod freerouting;
 mod gates;
 mod gerber;
 mod gate;
 mod kicad;
+mod netlist;
+mod parts;
 mod paste;
+mod place;
 mod project;
 mod release;
 mod import_tscircuit;
 mod render;
 mod route;
 mod sexpr;
+mod sync;
 mod zone;
 
 use anyhow::{Context, Result, bail};
@@ -253,6 +259,51 @@ enum Cmd {
         #[arg(long, default_value = "pcb_work/status")]
         work: String,
     },
+    /// JLCPCB's data for every assembled part (stock, Basic or Extended, Economic), and each part's footprint
+    /// matched to JLCPCB's for the CPL's rotation and centre offsets. Reads the parts/ cache beside pcb.toml;
+    /// --live fetches it first
+    Parts {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Fetch every part from EasyEDA and JLCPCB into the cache first
+        #[arg(long)]
+        live: bool,
+        #[arg(long, default_value = "pcb_work/parts")]
+        work: String,
+    },
+    /// Bring the board in line with the circuit (project.netlist): add, replace, remove and renet footprints, with
+    /// JLCPCB's footprints from the parts cache. Every connected pin must be a pad, named as the part's pin map
+    /// names it. Makes the board from [outline] when there is none yet
+    Sync {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Remove the tracks and vias of nets whose pads change, rather than refusing
+        #[arg(long)]
+        rip: bool,
+        #[arg(long, default_value = "pcb_work/sync")]
+        work: String,
+        /// Output board (default: the project's board)
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// Put parts where pcb.toml [[place]] says (centred frame, mm, y up; KiCad's angle; side), honouring locks,
+    /// the assembler's sides, keep-outs and plated pads on the other side. Tracks on a moved part's pads are ripped
+    /// and listed; the board goes through the gate
+    Place {
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Only these parts (comma-separated references)
+        #[arg(long = "ref", default_value = "")]
+        refs: String,
+        #[arg(long, default_value = "pcb_work/place")]
+        work: String,
+        /// Output board (default: the project's board)
+        #[arg(short, long)]
+        out: Option<String>,
+    },
     /// PNG of the board or a region, nets labelled.
     Render {
         board: String,
@@ -314,6 +365,9 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Release { .. } => "release",
         Cmd::Check { .. } => "check",
         Cmd::Gate { .. } => "gate",
+        Cmd::Parts { .. } => "parts",
+        Cmd::Sync { .. } => "sync",
+        Cmd::Place { .. } => "place",
     }
 }
 
@@ -550,6 +604,39 @@ fn run(cli: Cli) -> Result<Reply> {
             }
             let warnings: Vec<contract::Warning> = r.unused_waivers.iter().map(|w| contract::warn("waiver-unused", format!("waiver {w}"))).collect();
             Ok(Reply { outcome: if r.unwaived == 0 { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings, human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Sync { project: proj, rip, work, out } => {
+            let l = project::load(&project::locate(&proj))?;
+            let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
+            let r = sync::run(&l, rip, std::path::Path::new(&work), &out)?;
+            let h = format!(
+                "wrote {}{}: {} nets, {} pin names checked; added {}, replaced {}, removed {}, renetted {}; ripped {} segments and {} vias on {:?}",
+                r.written, if r.created_board { " (new board)" } else { "" }, r.nets, r.pins_checked, r.added.len(), r.replaced.len(), r.removed.len(), r.renetted.len(), r.ripped_segments, r.ripped_vias, r.ripped_nets
+            );
+            Ok(Reply { outcome: Outcome::Done, error: None, written: Some(r.written.clone()), warnings: r.warnings.clone(), human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Place { project: proj, refs, work, out } => {
+            let l = project::load(&project::locate(&proj))?;
+            let out = out.unwrap_or_else(|| l.board_path().to_string_lossy().to_string());
+            let only: Vec<String> = refs.split(',').filter(|s| !s.is_empty()).map(String::from).collect();
+            let r = place::run(&l, &only, std::path::Path::new(&work), &out)?;
+            let h = format!(
+                "wrote {}: moved {}, {} already in place, locked {:?}; ripped {} segments and {} vias; DRC {} -> {}\nregressions:\n  {}\nallowed:\n  {}",
+                r.written, r.moved.len(), r.unchanged, r.locked, r.ripped_segments, r.ripped_vias, r.drc_total_before, r.drc_total_after, r.regressions.join("\n  "), r.allowed.join("\n  ")
+            );
+            Ok(Reply { outcome: if r.regressions.is_empty() { Outcome::Done } else { Outcome::Rejected }, error: None, written: Some(r.written.clone()), warnings: r.warnings.clone(), human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Parts { project: proj, live, work } => {
+            let l = project::load(&project::locate(&proj))?;
+            let r = parts::run(&l, live, std::path::Path::new(&work))?;
+            let mut h = format!("{} parts{}, {} footprints matched, {} findings", r.parts.len(), if live { format!(" ({} fetched)", r.fetched) } else { String::new() }, r.solved.len(), r.findings.len());
+            for q in &r.parts {
+                h += &format!("\n  {:<10} {:<8} stock {:>8} need {:>4} {}", q.lcsc, q.library.as_deref().unwrap_or("?"), q.stock.map(|x| x.to_string()).unwrap_or("?".into()), q.need, q.refs.join(","));
+            }
+            for f in &r.findings {
+                h += &format!("\n  FAIL {}: {}", f.item, f.message);
+            }
+            Ok(Reply { outcome: if r.findings.is_empty() { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings: r.warnings.clone(), human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Gate { action, name, project: proj, work } => {
             let l = project::load(&project::locate(&proj))?;

@@ -1,0 +1,14 @@
+{
+  "fetched": "2026-11-04",
+  "part": {
+    "componentBrandEn": "Raspberry Pi",
+    "componentCode": "C2040",
+    "componentLibraryType": "expand",
+    "componentModelEn": "RP2040",
+    "componentProductType": 0,
+    "componentSpecificationEn": "LQFN-56(7x7)",
+    "describe": "12bit 133MHz 30 LQFN-56(7x7) Microcontrollers (MCU/MPU/SOC) ROHS",
+    "preferredComponentFlag": false,
+    "stockCount": 58768
+  }
+}

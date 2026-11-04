@@ -386,6 +386,43 @@ fn width_classes(dsn: &str, widths: &BTreeMap<String, f64>) -> Result<(String, B
     Ok((e.apply(dsn)?, moved))
 }
 
+/// The board's hole-to-hole minimum as a via-to-via copper clearance in the DSN's structure rule (M4: Freerouting
+/// knows no hole rule, and on paddle-keyer laid vias of different nets 0.4 mm apart, under JLCPCB's 0.5 mm). The
+/// clearance is the hole gap less the via's annular copper on both sides, for the DSN's largest via.
+fn via_spacing(dsn: &str, board: &Path) -> Result<String> {
+    let pro = board.with_extension("kicad_pro");
+    let h2h = std::fs::read_to_string(&pro).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.pointer("/board/design_settings/rules/min_hole_to_hole").and_then(|x| x.as_f64()));
+    let Some(h2h) = h2h.filter(|h| *h > 0.0) else { return Ok(dsn.to_string()) };
+    let root = sexpr::parse(dsn)?;
+    let Some(structure) = root.find("structure") else { return Ok(dsn.to_string()) };
+    let Some(rule) = structure.find("rule") else { return Ok(dsn.to_string()) };
+    // padstacks named "Via[0-1]_600:300_um": size and drill in um
+    let mut ring_um: f64 = 0.0;
+    if let Some(lib) = root.find("library") {
+        for ps in lib.find_all("padstack") {
+            let name = ps.arg(1).unwrap_or("");
+            if let Some(rest) = name.strip_prefix("Via[") {
+                if let Some((_, dims)) = rest.split_once("]_") {
+                    let dims = dims.trim_end_matches("_um");
+                    if let Some((sz, dr)) = dims.split_once(':') {
+                        if let (Ok(sz), Ok(dr)) = (sz.parse::<f64>(), dr.parse::<f64>()) {
+                            ring_um = ring_um.max(sz - dr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let base = rule.find("clearance").and_then(|c| c.num(1)).unwrap_or(0.0);
+    let need = (h2h * 1000.0 - ring_um).max(base);
+    if need <= base + 1e-6 {
+        return Ok(dsn.to_string());
+    }
+    let mut e = Edits::default();
+    e.insert(rule.span.1 - 1, format!(" (clearance {} (type via_via))", sexpr::fmt_num((need * 10.0).round() / 10.0)));
+    e.apply(dsn)
+}
+
 /// Move every net not in `nets` into a sibling of its class, with the same rule, and return the new classes'
 /// names for `--router.autorouter.ignore_net_classes`. Freerouting otherwise tries every open connection on the
 /// board, all of them behind the region's keep-outs; 2.5 spent over 9 minutes on the badge doing that. A class
@@ -724,6 +761,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let (dsn_text, widths) = width_classes(&dsn_text, &want_widths)?;
     rep.net_widths = widths;
     let (dsn_text, ignored) = ignore_other_nets(&dsn_text, &o.nets)?;
+    let dsn_text = via_spacing(&dsn_text, Path::new(board_path))?;
     // Freerouting 1.9 hung on a dialog for any non-ASCII character; 2.5 runs headless, but the session must still
     // match the board's names, so the DSN stays ASCII
     let dsn_text: String = dsn_text.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect();
@@ -1087,12 +1125,12 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     rep.regressions = g.regressions;
     rep.drc_total_before = g.total_before;
     rep.drc_total_after = g.total_after;
-    // requested nets KiCad still reports as not connected
+    // requested nets (every net, when none were named) KiCad still reports as not connected
     for (k, v) in &g.after {
         let (kind, nets) = kicad::key_parts(k);
         if kind == "unconnected_items" {
             for net in &nets {
-                if o.nets.iter().any(|x| x == net) && !rep.still_open.contains(&net.to_string()) && *v > 0 {
+                if (o.nets.is_empty() || o.nets.iter().any(|x| x == net)) && !net.is_empty() && !rep.still_open.contains(&net.to_string()) && *v > 0 {
                     rep.still_open.push(net.to_string());
                 }
             }
