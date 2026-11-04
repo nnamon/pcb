@@ -19,6 +19,8 @@
 | `oracles/verify_sync.py`, `oracles/verify_drawing.py` | M4's oracles: a synced and placed board against its netlist and JLCPCB's footprints; the placement drawing against the board and the CPL |
 | `review15/` | Review 15's probes of milestone M3 (check, gates, release and its read-back, compare-gerbers, paste, art, the import's additions, the badge), with their verdicts in `check.py` |
 | `review16/` | Review 16's probes confirming review 15's closures (the paddle keyer through check, gate and release with stale inputs, read-back limits, compare-gerbers, import, the badge), with their verdicts in `check.py` |
+| `review17/` | Review 17's probes confirming review 16's closures (stale records, the two DRC runs, release fills, compare-gerbers, the gate hash, import silkscreen), with their verdicts in `check.py` |
+| `review18/` | Review 18's probes of milestone M4 (pin numbers and names, EasyEDA conversion, sync, parts, place, the release against v1.0.0), with their verdicts in `check.py`; they run the M4 flow themselves (Freerouting) |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
 Rules:

@@ -130,16 +130,33 @@ before = open(board).read()
 r = run("sync", "--project", d, "--work", os.path.join(d, "w"))
 want("sync: a second run changes nothing", r["outcome"] == "done" and open(board).read() == before and not r["data"].get("added") and not r["data"].get("renetted"), r)
 # the XC6206 trap (P7): JLCPCB's symbol swaps VIN and VOUT; without the datasheet's pins sync stops
+# the XC6206 trap (P7): a symbol numbered by EasyEDA's spice field puts VOUT on pad 3 and VIN on pad 2, so VBUS
+# would reach the output; JLCPCB's shown numbers (and the datasheet) say 2 VOUT, 3 VIN, and sync stops the swap
 d = copy("sync_xc6206")
-toml_sub(d, 'pins = { "1" = "VSS", "2" = "VOUT", "3" = "VIN" }\n', "")
+net = open(netlist_text(d)).read()
+net = net.replace('(ref "U3")\n\t\t\t\t(pin "2")', '@@U3@@').replace('(ref "U3")\n\t\t\t\t(pin "3")', '(ref "U3")\n\t\t\t\t(pin "2")').replace('@@U3@@', '(ref "U3")\n\t\t\t\t(pin "3")')
+use_net(d, net)
 r = run("sync", "--project", d, "--work", os.path.join(d, "w"))
-want("sync: XC6206 with JLCPCB's swapped pin names refused (pin-name)", r["outcome"] == "refused" and err(r) == "pin-name" and "U3.2" in r["error"]["message"] and "U3.3" in r["error"]["message"], r)
+want("sync: XC6206 with VIN and VOUT on each other's pads refused (pin-name)", r["outcome"] == "refused" and err(r) == "pin-name" and "U3.2" in r["error"]["message"] and "U3.3" in r["error"]["message"], r)
 want("sync: nothing written when refused", not os.path.exists(os.path.join(d, "board.kicad_pcb")))
-# a datasheet pin map that disagrees with the schematic is refused too
+# a datasheet pin map in pcb.toml that disagrees with the schematic is refused too, and names where it came from
 d = copy("sync_pins_wrong")
-toml_sub(d, '"2" = "VOUT", "3" = "VIN"', '"2" = "VIN", "3" = "VOUT"')
+open(os.path.join(d, "pcb.toml"), "a").write('\n[parts.C5446]\npins = { "2" = "VIN", "3" = "VOUT" }\nsource = "a wrong map, for the case"\n')
 r = run("sync", "--project", d, "--work", os.path.join(d, "w"))
 want("sync: pcb.toml pins that disagree with the schematic refused", err(r) == "pin-name" and "parts.C5446.pins" in r["error"]["message"], r)
+# re-sync with another part in the same package: the board carries the new one (review 18, 4)
+d = copy("sync_part_change")
+run("sync", "--project", d, "--work", os.path.join(d, "w"))
+net = open(netlist_text(d)).read()
+k = net.index('(ref "R1")')
+seg = net[k:net.index("\n\t\t)", k)]
+net = net.replace(seg, seg.replace('"C25905"', '"C25744"').replace('(value "5.1k")', '(value "10k")').replace('"pcb:C25905"', '"pcb:C25744"'))
+use_net(d, net)
+r = run("sync", "--project", d, "--work", os.path.join(d, "w"))
+t = open(os.path.join(d, "board.kicad_pcb")).read()
+i = t.find('"Reference" "R1"')
+fp = t[t.rfind("(footprint", 0, i):t.find("(pad", i)]
+want("sync: a part changed in the same package is replaced, new LCSC code and value", r["outcome"] == "done" and "R1" in r["data"].get("replaced", []) and '"C25744"' in fp and "10k" in fp, (r, fp[:300]))
 # a pin the netlist connects that the footprint does not have
 d = copy("sync_pin_missing")
 net = open(netlist_text(d)).read()

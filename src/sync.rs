@@ -7,7 +7,7 @@
 //! - **pins:** every pin the netlist connects must be a pad of the footprint, and its name must match the pin's
 //!   name in JLCPCB's symbol, or in `[parts.<LCSC>] pins` (from the datasheet) where JLCPCB's is wrong: the
 //!   XC6206 trap, a regulator whose symbol swaps VIN and VOUT, stops here. Names match ignoring case and
-//!   punctuation and any active-low mark (`#`, `N_`, `~`), a number that only tells repeated pins apart (DVDD1 and
+//!   punctuation, keeping a sign (+, -) and an active-low mark (`#`, `N_`, `~`), a number that only tells repeated pins apart (DVDD1 and
 //!   DVDD), a `_<pin number>` KiCad's netlist adds, and the usual synonyms (VSS and GND, anode and A, cathode and K, + and POS, - and NEG). A name that is
 //!   only the pin number, or `pin<N>`, is not compared.
 //! - **board:** a part not on the board is added beside the outline for `pcb place`; a part whose footprint
@@ -51,13 +51,16 @@ pub struct Report {
 /// A pin name in a canonical form for comparing (see the module documentation).
 fn canon(s: &str) -> String {
     let t = s.trim().to_ascii_uppercase();
+    // a sign tells two pins apart (D+ and D-, IN+ and IN-), so it stays, as a word (review 18, 2)
     let t = match t.as_str() {
         "+" => "POS".to_string(),
         "-" => "NEG".to_string(),
-        _ => t,
+        _ => t.replace('+', "POS").replace('-', "NEG"),
     };
+    // an active-low mark too (Q and ~Q, CS and CS#), written as a leading ~ however the tool wrote it: a leading
+    // N_, ~, / or !, a trailing or inner #, KiCad's ~{...}
     let mut low = false;
-    let mut t = t;
+    let mut t = t.replace("~{", "~").replace('}', "");
     for p in ["N_", "~", "/", "!"] {
         if let Some(r) = t.strip_prefix(p) {
             t = r.to_string();
@@ -77,9 +80,7 @@ fn canon(s: &str) -> String {
         "NEGATIVE" => "NEG".into(),
         _ => c,
     };
-    // an active-low mark does not tell two pins of one part apart in practice, and schematic tools write it many ways
-    let _ = low;
-    c
+    if low { format!("~{c}") } else { c }
 }
 
 /// Whether a pin's name in the circuit and in the part's pin map name the same pin.
@@ -134,9 +135,10 @@ fn resolve(l: &Loaded, c: &crate::netlist::Comp) -> Result<Resolved> {
     let eda = crate::parts::easyeda(&crate::parts::dir(l), &code)?;
     let pkg = crate::easyeda::package_name(&eda);
     let (text, _) = crate::easyeda::footprint(&eda, &format!("{code}_{pkg}")).map_err(|e| refused("parts-cache", format!("{} ({code}): {e:#}", c.reference)))?;
+    // the datasheet's names in pcb.toml over JLCPCB's, pin by pin; pins it does not list keep JLCPCB's
     let mut pins = crate::easyeda::pins(&eda);
-    if let Some(r) = rule.filter(|r| !r.pins.is_empty()) {
-        pins = r.pins.clone();
+    if let Some(r) = rule {
+        pins.extend(r.pins.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
     Ok(Resolved { text, lib_id: format!("jlc:{}", if pkg.is_empty() { code.clone() } else { pkg }), pins, lcsc })
 }
@@ -307,7 +309,11 @@ pub fn run(l: &Loaded, rip: bool, work: &Path, out_path: &str) -> Result<Report>
             continue;
         };
         let node = sexpr::parse(&b.src[f.span.0..f.span.1])?;
-        if f.lib_id != r.lib_id {
+        // the part itself changed (another LCSC code or value in the same package): replaced too, so the board, and
+        // so the BOM, carries the new part (review 18, 4)
+        let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
+        let part_changed = prop("LCSC") != r.lcsc.clone().unwrap_or_default() || prop("Value") != c.value;
+        if f.lib_id != r.lib_id || part_changed {
             if f.locked || node.find("locked").is_some() {
                 return Err(refused("locked", format!("{} is locked; its footprint would change from {} to {}", f.reference, f.lib_id, r.lib_id)));
             }
@@ -454,6 +460,37 @@ pub fn run(l: &Loaded, rip: bool, work: &Path, out_path: &str) -> Result<Report>
     Ok(rep)
 }
 
+/// How the board differs from the circuit, for `pcb check` (review 17, 41): parts missing or extra, pads on another
+/// net, a part whose LCSC code or value changed. Empty when `pcb sync` would change nothing.
+pub fn differences(l: &Loaded, b: &Board, work: &Path) -> Result<Vec<String>> {
+    let Some(nl_rel) = l.project.project.netlist.as_ref() else { return Ok(vec![]) };
+    let nl = crate::netlist::load(&l.path.parent().unwrap_or(Path::new(".")).join(nl_rel), work)?;
+    let pin_nets = nl.pin_nets();
+    let mut d = vec![];
+    for c in &nl.comps {
+        let Some(f) = b.footprint_by_ref(&c.reference) else {
+            d.push(format!("{} is not on the board", c.reference));
+            continue;
+        };
+        let node = sexpr::parse(&b.src[f.span.0..f.span.1])?;
+        let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
+        if prop("LCSC") != c.lcsc().unwrap_or_default() || prop("Value") != c.value {
+            d.push(format!("{} is {} {} on the board, {} {} in the circuit", c.reference, prop("Value"), prop("LCSC"), c.value, c.lcsc().unwrap_or_default()));
+        }
+        for q in f.pads.iter().filter(|q| !q.number.is_empty()) {
+            let want = pin_nets.get(&(c.reference.clone(), q.number.clone())).filter(|n| !nl.is_single(n)).cloned().unwrap_or_default();
+            if q.net != want {
+                d.push(format!("{}.{} is on {:?}, the circuit says {:?}", c.reference, q.number, q.net, want));
+            }
+        }
+    }
+    let refs: BTreeSet<&str> = nl.comps.iter().map(|c| c.reference.as_str()).collect();
+    for f in b.footprints.iter().filter(|f| !refs.contains(f.reference.as_str()) && f.pads.iter().any(|q| !q.number.is_empty())) {
+        d.push(format!("{} is on the board but not in the circuit", f.reference));
+    }
+    Ok(d)
+}
+
 /// The numbered pads of a footprint text.
 fn pads_of(text: &str) -> Result<BTreeSet<String>> {
     let r = sexpr::parse(text)?;
@@ -517,8 +554,12 @@ mod tests {
         assert!(same_pin("1", "POS", "+"));
         assert!(same_pin("2", "NEG", "-"));
         assert!(same_pin("2", "DO_IO1", "DO(IO1)"));
-        assert!(same_pin("3", "WP__IO2", "WP#(IO2)"));
-        assert!(same_pin("7", "HOLD__or_RESET__IO3", "HOLD# or RESET#(IO3)"));
+        assert!(same_pin("3", "WP#(IO2)", "WP#(IO2)"));
+        // a sign or an active-low mark tells pins apart (review 18, 2)
+        for (a, b) in [("D+", "D-"), ("IN+", "IN-"), ("Q", "~Q"), ("VREF+", "VREF-"), ("CS", "CS#"), ("CS", "N_CS")] {
+            assert!(!same_pin("1", a, b), "{a} {b}");
+        }
+        assert!(same_pin("1", "~{CS}", "CS#"));
         assert!(same_pin("1", "pin1", "OSC1"));
         assert!(same_pin("4", "X", "4"));
         assert!(!same_pin("1", "A", "K"));

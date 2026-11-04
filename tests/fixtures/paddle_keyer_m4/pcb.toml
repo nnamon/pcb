@@ -18,12 +18,6 @@ file = "outline.json"
 machine_sides = ["top"]
 boards = 5
 
-# Torex XC6206 datasheet, SOT-23 pin table: 1 VSS, 2 VOUT, 3 VIN. JLCPCB's symbol for C5446 has VIN and VOUT the
-# other way round (the trap paddle-keyer's README records)
-[parts.C5446]
-pins = { "1" = "VSS", "2" = "VOUT", "3" = "VIN" }
-source = "Torex XC6206 series datasheet, pin assignment for SOT-23"
-
 # v1.0.0's places were chosen with tscircuit's footprints, whose courtyards were the land patterns; JLCPCB's draw
 # the bodies. Gate 2 of v1.0.0 checked the real bodies for clearance (paddle-keyer/design/bodies.json)
 [[drc_allow]]
@@ -112,6 +106,15 @@ pitch_mm = 2.5
 join = true
 size_mm = 0.6
 drill_mm = 0.3
+
+# the USB-C shell legs take paste over their pads (pin in paste), as v1.0.0's did
+[[paste]]
+pad = "J1.13"
+pin_in_paste = true
+
+[[paste]]
+pad = "J1.14"
+pin_in_paste = true
 
 [[paste]]
 pad = "U1.57"

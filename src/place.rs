@@ -107,6 +107,25 @@ fn outline_ring(b: &Board) -> Vec<(f64, f64)> {
     ring
 }
 
+/// Parts not where `[[place]]` puts them, for `pcb check` (review 17, 41).
+pub fn differences(l: &Loaded, b: &Board) -> Result<Vec<String>> {
+    let (bx0, by0, bx1, by1) = b.bbox();
+    let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
+    let mut d = vec![];
+    for r in &l.project.place {
+        let Some(f) = b.footprint_by_ref(&r.reference) else {
+            d.push(format!("{} is not on the board", r.reference));
+            continue;
+        };
+        let now = footprint::current(&sexpr::parse(&b.src[f.span.0..f.span.1])?);
+        let turn = (now.phi - r.rot_deg).rem_euclid(360.0);
+        if (now.x - (cx + r.at[0])).abs() > 1e-4 || (now.y - (cy - r.at[1])).abs() > 1e-4 || (turn > 1e-6 && turn < 360.0 - 1e-6) || now.bottom != (r.side == "bottom") {
+            d.push(format!("{} is at ({:.3}, {:.3}) {} {}, [[place]] says ({}, {}) {} {}", r.reference, now.x - cx, cy - now.y, now.phi, if now.bottom { "bottom" } else { "top" }, r.at[0], r.at[1], r.rot_deg, r.side));
+        }
+    }
+    Ok(d)
+}
+
 pub fn run(l: &Loaded, only: &[String], work: &Path, out_path: &str) -> Result<Report> {
     let p = &l.project;
     let problems = crate::project::check(p);

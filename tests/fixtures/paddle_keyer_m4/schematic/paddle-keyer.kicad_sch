@@ -554,11 +554,11 @@
       (symbol "U2_1_1"
         (pin passive line (at -2.54 -2.54 0) (length 2.54) (name "N_CS" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -5.08 0) (length 2.54) (name "DO_IO1" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
-        (pin passive line (at -2.54 -7.62 0) (length 2.54) (name "WP__IO2" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -2.54 -7.62 0) (length 2.54) (name "WP#(IO2)" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -10.16 0) (length 2.54) (name "GND" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -12.70 0) (length 2.54) (name "DI_IO0" (effects (font (size 1.27 1.27)))) (number "5" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -15.24 0) (length 2.54) (name "CLK" (effects (font (size 1.27 1.27)))) (number "6" (effects (font (size 1.27 1.27)))))
-        (pin passive line (at -2.54 -17.78 0) (length 2.54) (name "HOLD__or_RESET__IO3" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -2.54 -17.78 0) (length 2.54) (name "HOLD# or RESET#(IO3)" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -20.32 0) (length 2.54) (name "VCC" (effects (font (size 1.27 1.27)))) (number "8" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -22.86 0) (length 2.54) (name "EP1" (effects (font (size 1.27 1.27)))) (number "9" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -25.40 0) (length 2.54) (name "EP2" (effects (font (size 1.27 1.27)))) (number "10" (effects (font (size 1.27 1.27)))))

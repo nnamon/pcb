@@ -719,6 +719,9 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                 }
                 // silkscreen on the footprint, as drawn (M3: the release carries it)
                 "pcb_silkscreen_path" | "pcb_silkscreen_line" | "pcb_silkscreen_rect" => {
+                    if e.get("is_filled").and_then(|v| v.as_bool()) == Some(true) {
+                        warnings.push(crate::contract::warn("silk-filled", format!("{reference}: a filled silkscreen rectangle is carried over as its outline")));
+                    }
                     let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
                     let w = f(e, "stroke_width").unwrap_or(0.15);
                     let pts = silk_pts(e)?;

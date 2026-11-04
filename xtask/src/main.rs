@@ -135,9 +135,12 @@ fn main() -> Result<()> {
     s.py("M4 cases: parts, sync, place, drawing", "tests/cases/m4_cases.py", &[&pcb, &s.w("m4_cases")]);
     s.py("review 15: check, gate, release and compare probes", "tests/review15/check.py", &[&pcb, &s.w("review15")]);
     s.py("review 16: M3 confirmation probes", "tests/review16/check.py", &[&pcb, &s.w("review16")]);
+    s.py("review 17: M3 confirmation probes", "tests/review17/check.py", &[&pcb, &s.w("review17")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
             let j = j.clone();
+            // review 18's probes run the M4 fixture flow themselves (Freerouting)
+            s.py("review 18: M4 probes", "tests/review18/check.py", &[&pcb, &s.w("review18")]);
             s.py("route edge cases", "tests/cases/route_cases.py", &[&pcb, &j, &s.w("route_cases")]);
             s.py("review 8: route probes", "tests/review8/route_probes.py", &[&pcb, &j, &s.w("review8_route_probes")]);
         }
@@ -431,6 +434,7 @@ fn flow(s: &mut Suite, dir: &Path, fx: &toml::Value, name: &str, pcb: &str, jar:
     let g = |k: &str| f.get(k).and_then(|v| v.as_str()).map(|v| dir.join(v).to_string_lossy().to_string()).unwrap_or_default();
     let rel = format!("{ps}/release");
     s.py(&format!("{name}: verify_release against v1.0.0's BOM and CPL"), "tests/oracles/verify_release.py", &[&rel, &g("golden_bom"), &g("golden_cpl"), pn, pv]);
+    s.py(&format!("{name}: holes, paste and mask against v1.0.0's Gerbers"), "tests/oracles/verify_against_v1.py", &[&format!("{rel}/{pn}_v{pv}_gerbers.zip"), &dir.join("../paddle_keyer_v1/golden/paddle-keyer_v1.0.0_gerbers.zip").to_string_lossy()]);
     s.py(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&wd.join(format!("w{}/gerbers", 9)).to_string_lossy(), &board, &wd.join("vmut").to_string_lossy()]);
     s.py(&format!("{name}: verify_drawing"), "tests/oracles/verify_drawing.py", &[&format!("{ps}/drawings"), &board, &format!("{rel}/{pn}_v{pv}_CPL.csv")]);
     Ok(())

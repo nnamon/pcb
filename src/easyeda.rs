@@ -68,7 +68,10 @@ pub fn pins(raw: &Value) -> BTreeMap<String, String> {
             let parts: Vec<&str> = s.split("^^").collect();
             let head: Vec<&str> = parts[0].split('~').collect();
             let name = parts.get(3).and_then(|p| p.split('~').nth(4)).unwrap_or("");
-            if let Some(nm) = head.get(3) {
+            // the number the symbol shows (its number text), which is the footprint pad's; the head's field is the
+            // spice pin number, which can differ (C5446: spice 2 is Vin, shown and pad 3; review 18, 1)
+            let shown = parts.get(4).and_then(|p| p.split('~').nth(4)).filter(|x| !x.trim().is_empty());
+            if let Some(nm) = shown.or_else(|| head.get(3).copied()) {
                 m.insert(nm.to_string(), name.to_string());
             }
         }
@@ -194,8 +197,20 @@ pub fn footprint(raw: &Value, name: &str) -> Result<(String, Vec<EPad>)> {
                         bail!("{name}: plated pad {number} has no hole");
                     }
                     if slot > 0.0 {
-                        // the slot runs along the pad's longer side
-                        let (dw, dh) = if h >= w { (2.0 * hole_r, slot) } else { (slot, 2.0 * hole_r) };
+                        // the slot runs between EasyEDA's hole points, turned into the pad's own frame; with no points,
+                        // along the pad's longer side (review 18, 3)
+                        let hp: Vec<(f64, f64)> = f.get(14).map(|v| path_points(v).unwrap_or_default()).unwrap_or_default();
+                        let along_x = match hp.as_slice() {
+                            [a, b, ..] if (b.0 - a.0).hypot(b.1 - a.1) > 1e-6 => {
+                                let (lx, ly) = crate::board::rotate(b.0 - a.0, b.1 - a.1, -ang);
+                                if lx.abs().min(ly.abs()) > 0.02 * lx.hypot(ly) {
+                                    bail!("{name}: pad {number}'s slot runs across the pad's axes, which a KiCad oval drill cannot");
+                                }
+                                lx.abs() > ly.abs()
+                            }
+                            _ => w > h,
+                        };
+                        let (dw, dh) = if along_x { (slot, 2.0 * hole_r) } else { (2.0 * hole_r, slot) };
                         format!(" (drill oval {} {})", n(r6(dw)), n(r6(dh)))
                     } else {
                         format!(" (drill {})", n(r6(2.0 * hole_r)))
@@ -329,12 +344,18 @@ mod tests {
         let c = comp(&["PAD~OVAL~4000~3000~4~8~11~~13~1.2~~0~gge1~5~~Y~0"], &[]);
         let (t, _) = footprint(&c, "T").unwrap();
         assert!(t.contains("thru_hole oval") && t.contains("(drill oval 0.6096 1.27)"), "{t}");
+        // the hole points say which way: across a round pad (review 18, 3)
+        let c = comp(&["PAD~ELLIPSE~4000~3000~8~8~11~~1~1.2~~0~gge1~5~3997.5 3000 4002.5 3000~Y~0"], &[]);
+        let (t, _) = footprint(&c, "T").unwrap();
+        assert!(t.contains("(drill oval 1.27 0.6096)"), "{t}");
     }
 
     #[test]
     fn symbol_pins() {
-        let c = comp(&["PAD~RECT~4000~3000~4~2~1~~1~0~~0~g~0~~Y~0"], &["P~show~0~1~0~0~180~gge9~0^^0~0^^M 0 0 h 10~#880000^^1~0~0~0~GND~start~~~#0000FF^^1~0~0~0~1~end~~~#0000FF^^0~0~0~0~M 0 0"]);
+        let c = comp(&["PAD~RECT~4000~3000~4~2~1~~1~0~~0~g~0~~Y~0"], &["P~show~0~2~0~0~180~gge9~0^^0~0^^M 0 0 h 10~#880000^^1~0~0~0~GND~start~~~#0000FF^^1~0~0~0~1~end~~~#0000FF^^0~0~0~0~M 0 0"]);
+        // keyed by the shown number (1), not the spice number (2)
         assert_eq!(pins(&c).get("1").map(String::as_str), Some("GND"));
+        assert!(!pins(&c).contains_key("2"));
     }
 
     #[test]

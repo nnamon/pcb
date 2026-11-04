@@ -264,6 +264,9 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                     } else if stock < (20 * need).max(1000) {
                         r.warnings.push(warn("buy-ahead", format!("{code} ({}): stock {stock} is under 20 times the need ({need}) or under 1000; buy it ahead into the JLCPCB parts library", refs.join(", "))));
                     }
+                    if info.product_type.is_none() {
+                        r.warnings.push(warn("economic-unknown", format!("JLCPCB's record for {code} gives no componentProductType; check Economic eligibility by hand")));
+                    }
                     if info.product_type == Some(2) {
                         r.findings.push(Finding { item: format!("{code} economic"), message: format!("{code} ({}) is Standard assembly only (componentProductType 2)", refs.join(", ")) });
                     }
@@ -306,7 +309,9 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                         let want_t = rule.and_then(|x| x.cpl_offset_mm).unwrap_or([0.0, 0.0]);
                         let turn_ok = ((rot - want_rot + 180.0).rem_euclid(360.0) - 180.0).abs() < 1e-6;
                         // for two-pad parts only the turn modulo 180 is known, and the pads' own spread sets the tolerance
-                        let turn_ok = turn_ok || (bp.len() <= 2 && ((rot - want_rot).rem_euclid(180.0)).abs() < 1e-6);
+                        // matched by shape only, a two-pad part's turn is known modulo 180; matched by number it is exact,
+                        // so a diode or LED cannot pass reversed (review 18, 5)
+                        let turn_ok = turn_ok || (!by_number && bp.len() <= 2 && ((rot - want_rot).rem_euclid(180.0)).abs() < 1e-6);
                         if !turn_ok {
                             r.findings.push(Finding { item: format!("{reference} rotation"), message: format!("{reference} ({code}): JLCPCB's footprint is turned {rot} degrees from the board's; parts.{code}.rotation_offset_deg says {want_rot}") });
                         }

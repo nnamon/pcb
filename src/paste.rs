@@ -50,6 +50,18 @@ fn aperture_id(reference: &str, num: &str, i: usize) -> String {
 
 /// `pcb paste`: see the module documentation.
 pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
+    run_inner(l, out_path, work, false).map(|(r, _)| r)
+}
+
+/// The board text this command would write, without the gate: `pcb check` compares it with the board, so output
+/// removed by hand or by a footprint update is found (review 17, 39).
+pub fn would_write(l: &Loaded, work: &Path) -> Result<String> {
+    std::fs::create_dir_all(work)?;
+    let out = work.join("dry.kicad_pcb");
+    run_inner(l, &out.to_string_lossy(), work, true).map(|(_, t)| t.unwrap_or_default())
+}
+
+fn run_inner(l: &Loaded, out_path: &str, work: &Path, dry: bool) -> Result<(Report, Option<String>)> {
     let p = &l.project;
     let problems = crate::project::check(p);
     if !problems.is_empty() {
@@ -175,6 +187,9 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     }
     let candidate = e.apply(src)?;
     let candidate = crate::stamp::write(&candidate, "paste", crate::stamp::inputs(l, "paste")?.as_deref())?;
+    if dry {
+        return Ok((rep, Some(candidate)));
+    }
     let gate = Gate::begin(work, &board_path)?;
     let g = gate.finish_allowing(&candidate, out_path, !b.zones.is_empty(), &p.drc_allow)?;
     rep.fixed = g.fixed;
@@ -183,7 +198,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     rep.drc_total_before = g.total_before;
     rep.drc_total_after = g.total_after;
     rep.written = g.written;
-    Ok(rep)
+    Ok((rep, None))
 }
 
 /// Aperture pads already written for this footprint in this run (so ids stay distinct across pads of one number).

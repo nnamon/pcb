@@ -72,6 +72,61 @@ pub fn ipc_width_mm(amps: f64, outer: bool) -> f64 {
     area_mil2 / thick_mil * 0.0254
 }
 
+/// What pcb paste and pcb art make, in a form KiCad's own save does not change: every pad (footprint, number, kind,
+/// layers, place and size to the micrometre) and every board graphic off the comments layer (head, layer and its
+/// numbers), sorted.
+fn content(text: &str) -> Result<Vec<String>> {
+    let b = Board::from_str(text.to_string())?;
+    let r = |v: f64| format!("{:.3}", v + 0.0);
+    let mut v: Vec<String> = vec![];
+    for f in &b.footprints {
+        for q in &f.pads {
+            let mut ls = q.layers.clone();
+            ls.sort();
+            v.push(format!("pad {} {} {} {} {} {} {} {}", f.reference, q.number, q.kind, ls.join(","), r(q.x), r(q.y), r(q.w), r(q.h)));
+        }
+    }
+    fn nums(n: &sexpr::Node, out: &mut Vec<String>) {
+        for c in n.items() {
+            if c.is("uuid") || c.is("tstamp") {
+                continue;
+            }
+            match c.atom() {
+                Some(a) => {
+                    if let Ok(x) = a.parse::<f64>() {
+                        out.push(format!("{:.3}", x + 0.0));
+                    }
+                }
+                None => nums(c, out),
+            }
+        }
+    }
+    for g in b.root.items().iter().filter(|g| matches!(g.head(), Some("gr_poly" | "gr_line" | "gr_circle" | "gr_arc" | "gr_rect" | "gr_text"))) {
+        let layer = g.find("layer").and_then(|l| l.arg(1)).unwrap_or("");
+        if layer == "Cmts.User" {
+            continue;
+        }
+        let mut n = vec![];
+        if let Some(pts) = g.find("pts") {
+            // a polygon by its points, a point repeated next to itself once (KiCad drops such points on a save)
+            let mut xy: Vec<(String, String)> = pts.find_all("xy").filter_map(|q| Some((format!("{:.3}", q.num(1)? + 0.0), format!("{:.3}", q.num(2)? + 0.0)))).collect();
+            xy.dedup();
+            if xy.len() > 1 && xy.first() == xy.last() {
+                xy.pop();
+            }
+            n.extend(xy.into_iter().flat_map(|(a, b)| [a, b]));
+            if let Some(l) = g.find("net") {
+                nums(l, &mut n);
+            }
+        } else {
+            nums(g, &mut n);
+        }
+        v.push(format!("{} {} {}", g.head().unwrap_or(""), layer, n.join(" ")));
+    }
+    v.sort();
+    Ok(v)
+}
+
 /// `pcb check`: see the module documentation.
 pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     let p = &l.project;
@@ -104,6 +159,11 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
         crate::kicad::copy_rules(&board_path, &copy)?;
         let dru = copy.with_extension("kicad_dru");
         if fab_only {
+            // the fills the release will plot are made with the board's own rules: fill with those, then judge them
+            // against the fab's without filling again (review 17, 40)
+            if !b.zones.is_empty() {
+                crate::kicad::helper(work, &["fill", copy.to_str().unwrap()])?;
+            }
             std::fs::write(&dru, format!("(version 1)\n{rules}"))?;
         }
         let pro = copy.with_extension("kicad_pro");
@@ -117,7 +177,7 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
                 std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
             }
         }
-        for (k, c) in crate::kicad::drc_counts(work, &copy.to_string_lossy(), &format!("check_drc_{tag}"))? {
+        for (k, c) in crate::kicad::drc_counts_with(work, &copy.to_string_lossy(), &format!("check_drc_{tag}"), fab_only && !b.zones.is_empty())? {
             let e = counts.entry(k).or_default();
             *e = (*e).max(c);
         }
@@ -127,8 +187,31 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     }
 
     // the board carries what pcb.toml says (review 16, 25 and 29)
-    for (cmd, why) in crate::stamp::stale(l, &b)? {
-        add("stale", cmd.clone(), 1, why);
+    let stale = crate::stamp::stale(l, &b)?;
+    for (cmd, why) in &stale {
+        add("stale", cmd.clone(), 1, why.clone());
+    }
+    // the circuit and the places pcb sync and pcb place apply (review 17, 41)
+    let diffs = crate::sync::differences(l, &b, &work.join("netlist"))?;
+    if !diffs.is_empty() {
+        add("stale", "sync".into(), diffs.len(), format!("the board differs from the circuit ({}{}); run pcb sync", diffs.iter().take(4).cloned().collect::<Vec<_>>().join("; "), if diffs.len() > 4 { "; ..." } else { "" }));
+    }
+    let misplaced = crate::place::differences(l, &b)?;
+    if !misplaced.is_empty() {
+        add("stale", "place".into(), misplaced.len(), format!("parts not where [[place]] says ({}{}); run pcb place", misplaced.iter().take(4).cloned().collect::<Vec<_>>().join("; "), if misplaced.len() > 4 { "; ..." } else { "" }));
+    }
+    // and its output is still there: pcb paste and pcb art would write the board as it is (review 17, 39)
+    for (cmd, text) in [("paste", if p.paste.is_empty() || stale.iter().any(|s| s.0 == "paste") { None } else { Some(crate::paste::would_write(l, &work.join("dry_paste"))?) }), ("art", if (p.art.is_empty() && p.text.is_empty()) || stale.iter().any(|s| s.0 == "art") { None } else { Some(crate::art::would_write(l, &work.join("dry_art"))?) })] {
+        if let Some(t) = text {
+            let (ct, cb) = (content(&t)?, content(&b.src)?);
+            if std::env::var("PCB_DEBUG_STALE").is_ok() {
+                std::fs::write(work.join(format!("stale_{cmd}_would.txt")), ct.join("\n"))?;
+                std::fs::write(work.join(format!("stale_{cmd}_board.txt")), cb.join("\n"))?;
+            }
+            if ct != cb {
+                add("stale", cmd.to_string(), 1, format!("the board no longer carries what pcb {cmd} makes from pcb.toml (removed or changed since it ran); run pcb {cmd} again"));
+            }
+        }
     }
 
     // width-current

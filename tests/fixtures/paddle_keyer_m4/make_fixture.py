@@ -36,13 +36,15 @@ for r in csv.DictReader(open(os.path.join(src, "order", "paddle-keyer_v1.0.0_BOM
         bom[d.strip()] = (r["LCSC Part #"], r["Comment"])
 J1 = {"13": "13", "14": "14", "15": "A1B12", "16": "A4B9", "17": "B8", "18": "A5", "19": "B7", "20": "A6", "21": "A7",
       "22": "B6", "23": "A8", "24": "B5", "25": "B4A9", "26": "B1A12"}
+# netlist.csv has tscircuit's names, with '#' turned to '_'; the flash's active-low pins are named as its datasheet does
+NAMES = {("U2", "3"): "WP#(IO2)", ("U2", "7"): "HOLD# or RESET#(IO3)"}
 parts = {}
 for r in csv.DictReader(open(os.path.join(src, "source", "netlist.csv"))):
     if not r["pad"]:
         continue  # tscircuit's internal joins of J1's shell pads, which JLCPCB's footprint numbers alike
     pad = J1[r["pad"]] if r["ref"] == "J1" else r["pad"]
     net = None if r["net"] == "(not connected)" else r["net"]
-    parts.setdefault(r["ref"], {"part": r["part"], "pins": {}})["pins"][pad] = (r["pin"], net)
+    parts.setdefault(r["ref"], {"part": r["part"], "pins": {}})["pins"][pad] = (NAMES.get((r["ref"], pad), r["pin"]), net)
 
 TP_FP = {"TP_FISH": "pk:TestPad_D1.0mm"}
 

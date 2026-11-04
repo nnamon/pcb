@@ -2,7 +2,7 @@
 work directory at run time; prints one JSON object.
 
   dsn  board.kicad_pcb out.dsn         Specctra DSN export (locked tracks go out as fixed wiring)
-  drc  board.kicad_pcb report.json     kicad-cli DRC, zones refilled in memory (the file is not saved); items by type and position
+  drc  board.kicad_pcb report.json [keep-fills]  kicad-cli DRC, zones refilled in memory (the file is not saved) unless keep-fills; items by type and position
   fill board.kicad_pcb                 fill every zone and save the board
   selftest workdir                     KiCad version and the behaviours pcb relies on (pcb doctor)
 """
@@ -161,7 +161,7 @@ def item_net(item, board, names):
     return max(hits, key=lambda n: len(unescape(n))) if hits else ""
 
 
-def drc(board, out, b):
+def drc(board, out, b, refill=True):
     """KiCad's DRC through kicad-cli: in KiCad 10, WriteDRCReport asserts outside the KiCad application. The JSON
     schema is checked, and kicad-cli's own totals must equal what was read, or the format has changed (review 5, 4).
     Each item carries its net, matched against the board's net names. Types at KiCad's report limit are returned as
@@ -169,8 +169,8 @@ def drc(board, out, b):
     import os
     import subprocess
     cli = os.environ.get("PCB_KICAD_CLI", "kicad-cli")
-    r = subprocess.run([cli, "pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "--all-track-errors",
-                        "--refill-zones", "-o", out, board], capture_output=True, text=True)
+    r = subprocess.run([cli, "pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "--all-track-errors"]
+                       + (["--refill-zones"] if refill else []) + ["-o", out, board], capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         raise SystemExit(f"kicad-cli DRC failed (exit {r.returncode}): {r.stderr[-500:]}{r.stdout[-500:]}")
     d = json.load(open(out))
@@ -202,7 +202,8 @@ def main():
         ok = pcbnew.ExportSpecctraDSN(b, sys.argv[3])
         print(json.dumps({"ok": bool(ok), "dsn": sys.argv[3]}))
     elif cmd == "drc":
-        print(json.dumps(drc(path, sys.argv[3], b)))
+        # keep-fills: judge the fills the file holds (pcb check's fab run, on fills made with the board's own rules)
+        print(json.dumps(drc(path, sys.argv[3], b, refill=not (len(sys.argv) > 4 and sys.argv[4] == "keep-fills"))))
     elif cmd == "fill":
         # connectivity first: the filler uses it to find and remove unconnected islands
         b.BuildConnectivity()

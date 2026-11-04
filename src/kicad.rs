@@ -86,8 +86,17 @@ pub fn key_parts(key: &str) -> (String, Vec<String>) {
 /// KiCad DRC violations counted by key (`drc_key`). A report with any type at KiCad's listing limit is refused
 /// (`drc-truncated`): the list is incomplete and changes from run to run, so no comparison can rest on it.
 pub fn drc_counts(work: &Path, board: &str, name: &str) -> Result<BTreeMap<String, usize>> {
+    drc_counts_with(work, board, name, false)
+}
+
+/// As `drc_counts`; with `keep_fills`, KiCad judges the fills the file holds instead of filling again.
+pub fn drc_counts_with(work: &Path, board: &str, name: &str, keep_fills: bool) -> Result<BTreeMap<String, usize>> {
     let rpt = work.join(format!("{name}.json"));
-    let h = helper(work, &["drc", board, rpt.to_str().unwrap()])?;
+    let mut args = vec!["drc", board, rpt.to_str().unwrap()];
+    if keep_fills {
+        args.push("keep-fills");
+    }
+    let h = helper(work, &args)?;
     if let Some(t) = h["truncated"].as_object().filter(|t| !t.is_empty()) {
         let list: Vec<String> = t.iter().map(|(k, v)| format!("{k} {v}")).collect();
         return Err(refused(
