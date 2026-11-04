@@ -291,6 +291,7 @@ A gate's inputs are the board file, pcb.toml without its `[gates.*]` tables, and
 Refuses with no gate recorded (`gate-missing`) or any stale (`gate-stale`), and into a folder that is not empty (`exists`). Then:
 - Gerbers (every copper layer, masks, paste, silkscreen, outline) and PTH and NPTH drill files by `kicad-cli`, zones plotted as filled, zipped with sorted names and a fixed date;
 - JLCPCB BOM (grouped by LCSC code, value and footprint) and CPL (centre of the outline as origin, y up, with `[parts.<LCSC>]` rotation and centre offsets), from parts with an LCSC code that are not excluded, not hand fitted and on a machine side; designators follow `[assembly] designators`;
+- the files read back as the fab will read them: copper connectivity rebuilt from the Gerbers and plated holes alone, each board pad found in its island (a net in two groups is open; a group with two nets is a short, unless they are one net-tie footprint's), and DFM against GUIDELINES.md's JLCPCB table: copper wider than 0.15 mm, 0.15 mm between nets, 0.3 mm to the edge, 0.5 mm between holes of different copper, silkscreen 0.15 mm wide and off exposed copper. A finding a `[[waiver]]` (check `dfm`, item "<rule> <layer>") does not cover makes the outcome rejected (P14, P30). `tests/mutations/verify_mutations.py` shows each rule fires;
 - `CHECKSUMS.txt`.
 
 KiCad stamps a creation date in each Gerber, so two releases of one board differ in those lines only.
@@ -312,9 +313,13 @@ Two fabrication sets (folders or zips) compared as shapes, layer by layer (found
 
 The connector CPL offsets in pcb.toml came from the order's own CPL (jlc_files.py solved them against JLCPCB's footprints); M4's `pcb parts` will solve them. The label places came from the order's silk_text.py run, recorded once as data.
 
+### The badge through `pcb check` (4 Nov 2026)
+
+On the zoned badge fixture with the 4-layer JLCPCB rules, `pcb check` finds what the badge's open design work says it should: PMUX_ILM and VBUS_F unconnected (the ILM and VBUS_F links), the LED_A4 via too close to BAT_RAW copper (4 clearance, 8 hole clearance), U501 pad 21 unconnected to GND and one dangling GND via, three starved GND thermals (J102 pad 4, J701 pad 2 and one more), the coil's 0.075 mm clearance at L601 pad 3, and 7 courtyard overlaps. None is waived: they are the badge's work after M4.
+
 ### Still to do for M3
 
-Badge 0.5.0 through `pcb check`; Gerber connectivity rebuilt and DFM run on the files `release` writes (P14, P30); fixtures for check, gate and release refusals; gerbonara in the CI image.
+Fixtures for check, gate and release refusals; gerbonara in the CI image.
 
 ## Planning drawings
 

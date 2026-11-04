@@ -13,6 +13,7 @@ dropped. Each remaining piece must lie inside a region of the explain file (TOML
 that is wholly a zone fill of that net on the board A was made from), and `why`), or it is listed as unexplained. Holes match within HOLE_TOL in place and size, and on plating.
 """
 import json
+import math
 import os
 import re
 import sys
@@ -62,6 +63,12 @@ def file_function(path):
 
 def find_layers(paths):
     found = {}
+    # inner copper by its X2 function (Copper,L<n>,Inr), named In<n-1>.Cu
+    for p in paths:
+        ff = file_function(p) or ""
+        m = re.match(r"Copper,L(\d+),Inr", ff)
+        if m:
+            found[f"In{int(m.group(1)) - 1}.Cu"] = p
     for key, (funcs, pats) in LAYERS.items():
         for p in paths:
             if not re.search(r"\.(gbr|g[a-z0-9]{2}|gm1)$", p, re.I):
@@ -276,6 +283,150 @@ def compare(a_src, b_src, explain_path=None, board=None):
     return res
 
 
+# DFM limits from GUIDELINES.md's JLCPCB table (mm)
+DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15)
+
+
+def verify(folder, board_path):
+    """Connectivity rebuilt from the Gerbers and drill files alone, named by the board's pads, and DFM on the files.
+
+    Each copper layer's islands are joined through plated holes and slots. Each pad of the board is found by its
+    place in an island of a layer it is on. A net in two or more groups of islands is open; a group holding two nets
+    is a short, unless every net in it belongs to one net-tie footprint's pads."""
+    import pcbnew
+    from shapely.geometry import LineString, Point, box
+    from shapely.ops import unary_union
+    from shapely.strtree import STRtree
+    paths = files_of(folder)
+    lay = find_layers(paths)
+    cu = sorted((k for k in lay if k.endswith(".Cu")), key=lambda k: (k != "F.Cu", k == "B.Cu", k))
+    shapes = {k: layer_shape(lay[k]) for k in cu}
+    islands = []   # (layer, polygon)
+    for k in cu:
+        for q in getattr(shapes[k], "geoms", [shapes[k]]):
+            if not q.is_empty:
+                islands.append((k, q))
+    parent = list(range(len(islands)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    tree = STRtree([q for _, q in islands])
+    hl = holes(paths)
+    for x, y, d, plated, ln in hl:
+        if not plated:
+            continue
+        pt = Point(x, y)
+        hit = [int(i) for i in tree.query(pt) if islands[int(i)][1].buffer(1e-3).contains(pt)]
+        for a, b in zip(hit, hit[1:]):
+            parent[find(a)] = find(b)
+    b = pcbnew.LoadBoard(board_path)
+    ties = []
+    for f in b.GetFootprints():
+        if f.IsNetTie():
+            ties.append({p.GetNetname() for p in f.Pads() if p.GetNetname()})
+    names = {pcbnew.F_Cu: "F.Cu", pcbnew.B_Cu: "B.Cu"}
+    for i in range(1, 31):
+        lid = getattr(pcbnew, f"In{i}_Cu", None)
+        if lid is not None:
+            names[lid] = f"In{i}.Cu"
+    groups, unplaced = {}, []
+    for f in b.GetFootprints():
+        for p in f.Pads():
+            net = p.GetNetname()
+            if not net:
+                continue
+            pt = Point(pcbnew.ToMM(p.GetPosition().x), -pcbnew.ToMM(p.GetPosition().y))
+            g = None
+            for lid in p.GetLayerSet().CuStack():
+                k = names.get(lid)
+                if k not in shapes:
+                    continue
+                for i in tree.query(pt):
+                    if islands[int(i)][0] == k and islands[int(i)][1].buffer(1e-3).contains(pt):
+                        g = find(int(i))
+                        break
+                if g is not None:
+                    break
+            if g is None:
+                unplaced.append(f"{f.GetReference()}.{p.GetNumber()} ({net})")
+            else:
+                groups.setdefault(g, set()).add(net)
+    by_net = {}
+    for g, nets in groups.items():
+        for n in nets:
+            by_net.setdefault(n, set()).add(g)
+    opens = sorted(n for n, gs in by_net.items() if len(gs) > 1)
+    shorts = sorted(" / ".join(sorted(ns)) for ns in groups.values() if len(ns) > 1 and not any(ns <= t for t in ties))
+    # DFM
+    findings = []
+    edge = layer_shape(lay["Edge.Cuts"]) if "Edge.Cuts" in lay else None
+    outline = None
+    if edge is not None and not edge.is_empty:
+        from shapely.ops import polygonize
+        rings = list(polygonize(edge.boundary)) if hasattr(edge, "boundary") else []
+        # the drawn outline is a band; its inside ring grown by half the band's width is the cut line
+        inner = max((r for r in rings if not r.buffer(-1e-3).intersects(edge.buffer(-1e-4))), key=lambda r: r.area, default=None)
+        if inner is not None:
+            half = edge.area / (2 * inner.exterior.length) if inner.exterior.length else 0
+            outline = inner.buffer(half, join_style=2)
+    net_of = {}
+    for g, ns in groups.items():
+        net_of[g] = ns
+    for idx, (k, q) in enumerate(islands):
+        if q.buffer(-DFM["trace"] / 2 + 1e-4).is_empty:
+            findings.append({"rule": "trace", "layer": k, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"copper narrower than {DFM['trace']} mm everywhere"})
+        if outline is not None:
+            dist = outline.exterior.distance(q)
+            if dist < DFM["cu_edge"] - 1e-3:
+                findings.append({"rule": "cu_edge", "layer": k, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"copper {dist:.3f} mm from the board edge"})
+    for k in cu:
+        idx = [i for i, (kk, _) in enumerate(islands) if kk == k]
+        t = STRtree([islands[i][1] for i in idx])
+        for a in idx:
+            for jj in t.query(islands[a][1].buffer(DFM["gap"])):
+                c = idx[int(jj)]
+                if c <= a or find(a) == find(c):
+                    continue
+                dist = islands[a][1].distance(islands[c][1])
+                if dist < DFM["gap"] - 1e-3:
+                    pa, pb = islands[a][1].centroid, islands[c][1].centroid
+                    findings.append({"rule": "gap", "layer": k, "at": [round(pa.x, 3), round(pa.y, 3)], "detail": f"{dist:.3f} mm between {sorted(net_of.get(find(a), {'?'}))} and {sorted(net_of.get(find(c), {'?'}))}"})
+    # each hole's copper group (None for a hole in no copper): holes of one group may sit closer
+    def hole_group(x, y):
+        pt = Point(x, y)
+        for i in tree.query(pt):
+            if islands[int(i)][1].buffer(1e-3).contains(pt):
+                return find(int(i))
+        return None
+    hg = [hole_group(x, y) for x, y, *_ in hl]
+    for i in range(len(hl)):
+        for j in range(i + 1, len(hl)):
+            (x1, y1, d1, p1, l1), (x2, y2, d2, p2, l2) = hl[i], hl[j]
+            gap = math.hypot(x1 - x2, y1 - y2) - (d1 + l1) / 2 - (d2 + l2) / 2
+            if gap < DFM["hole_hole"] - 1e-3 and not (hg[i] is not None and hg[i] == hg[j]):
+                findings.append({"rule": "hole_hole", "layer": "drill", "at": [round(x1, 3), round(y1, 3)], "detail": f"{gap:.3f} mm edge to edge from the hole at ({x2:.3f}, {y2:.3f})"})
+    for side in ("F", "B"):
+        sk, mk, ck = f"{side}.Silk", f"{side}.Mask", f"{side}.Cu"
+        if sk in lay:
+            silk = layer_shape(lay[sk])
+            # thin parts, alone or joined to wider ink: what an opening (shrink, then grow back) removes
+            r = DFM["silk_line"] / 2 - 0.03
+            thin = silk.difference(silk.buffer(-r, join_style=2).buffer(r + 0.005, join_style=2))
+            for q in getattr(thin, "geoms", [thin]):
+                if not q.is_empty and q.area > 0.01 and not q.buffer(-0.01).is_empty:
+                    findings.append({"rule": "silk_line", "layer": sk, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"{q.area:.3f} mm² of silkscreen under {2 * r:.2f} mm wide"})
+            if mk in lay and ck in shapes:
+                bare = layer_shape(lay[mk]).intersection(shapes[ck])
+                over = silk.intersection(bare)
+                for q in getattr(over, "geoms", [over]):
+                    if not q.is_empty and q.area > 0.005:
+                        findings.append({"rule": "silk_on_copper", "layer": sk, "at": [round(v, 3) for v in q.centroid.coords[0]], "detail": f"{q.area:.3f} mm² of silkscreen on exposed copper"})
+    return {"layers": cu, "islands": len(islands), "plated_holes": sum(1 for h in hl if h[3]), "nets": len(by_net), "opens": opens, "shorts": shorts, "unplaced_pads": unplaced, "dfm": findings}
+
+
 def make_zip(folder, dest):
     """Every file of a folder in a zip, sorted, with one fixed date, so the same files give the same bytes."""
     names = sorted(n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n)))
@@ -290,7 +441,9 @@ def make_zip(folder, dest):
 
 if __name__ == "__main__":
     cmd = sys.argv[1]
-    if cmd == "zip":
+    if cmd == "verify":
+        print(json.dumps(verify(sys.argv[2], sys.argv[3])))
+    elif cmd == "zip":
         print(json.dumps(make_zip(sys.argv[2], sys.argv[3])))
     elif cmd == "compare":
         arg = lambda i: sys.argv[i] if len(sys.argv) > i and sys.argv[i] else None

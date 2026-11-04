@@ -15,7 +15,10 @@
  "if": {
   "properties": {
    "outcome": {
-    "const": "done"
+    "enum": [
+     "done",
+     "rejected"
+    ]
    }
   }
  },
@@ -29,7 +32,9 @@
      "bom_lines",
      "cpl_rows",
      "left_out",
-     "written"
+     "written",
+     "verify",
+     "problems"
     ],
     "properties": {
      "files": {
@@ -72,6 +77,25 @@
      },
      "written": {
       "type": "string"
+     },
+     "problems": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "verify": {
+      "type": "object",
+      "required": [
+       "layers",
+       "islands",
+       "plated_holes",
+       "nets",
+       "opens",
+       "shorts",
+       "unplaced_pads",
+       "dfm"
+      ]
      }
     }
    }

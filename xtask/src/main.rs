@@ -363,6 +363,7 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             let zip = format!("{out}/{pn}_v{pv}_gerbers.zip");
             s.run(&format!("{name}: compare-gerbers with the ordered files"), pcb, &["--json", "compare-gerbers", &zip, &f("golden_gerbers"), "--explain", &f("explain"), "--board", &format!("{rdir}/board.kicad_pcb"), "--work", &w("compare_w")]);
             s.py(&format!("{name}: verify_release"), "tests/oracles/verify_release.py", &[&out, &f("golden_bom"), &f("golden_cpl"), pn, pv]);
+            s.py(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&w("release_w/gerbers"), &format!("{rdir}/board.kicad_pcb"), &w("vmut")]);
         }
     }
     Ok(())

@@ -573,7 +573,11 @@ fn run(cli: Cli) -> Result<Reply> {
             for f in &r.files {
                 h += &format!("\n  {}  {}", f.sha256, f.name);
             }
-            Ok(Reply { outcome: Outcome::Done, error: None, written: Some(r.written.clone()), warnings: vec![], human: h, data: serde_json::to_value(&r)? })
+            for x in &r.problems {
+                h += &format!("\n  FAIL {x}");
+            }
+            let outcome = if r.problems.is_empty() { Outcome::Done } else { Outcome::Rejected };
+            Ok(Reply { outcome, error: None, written: Some(r.written.clone()), warnings: vec![], human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Paste { project: proj, work, out } => {
             let l = project::load(&project::locate(&proj))?;

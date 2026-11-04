@@ -619,8 +619,8 @@ pub fn check(p: &Project) -> Vec<String> {
         }
     }
     for w in &p.waiver {
-        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint") {
-            e.push(format!("waiver {:?}: check is drc, width-current, side, paste or testpoint", w.item));
+        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "dfm") {
+            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint or dfm", w.item));
         }
         if w.item.trim().is_empty() || w.why.trim().is_empty() {
             e.push(format!("waiver {:?}: needs an item and a why", w.item));

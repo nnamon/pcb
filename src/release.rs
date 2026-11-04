@@ -5,6 +5,8 @@
 //! - BOM and CPL in JLCPCB's format, from the footprints: every part with an LCSC code that is not excluded from the
 //!   BOM or position files, not hand fitted, and on a side the assembler places. Designators follow
 //!   `[assembly] designators`; CPL places and turns follow `[parts.<LCSC>]` offsets.
+//! - The Gerbers and drill files written are read back: connectivity rebuilt from them alone against the board's
+//!   pads (opens, shorts), and DFM against JLCPCB's limits; anything a `[[waiver]]` does not cover makes it rejected.
 //! - `CHECKSUMS.txt`: SHA-256 of each file written.
 
 use crate::board::{rotate, Board};
@@ -25,6 +27,11 @@ pub struct Report {
     pub cpl_rows: usize,
     /// Footprints left out of the BOM and CPL, with why.
     pub left_out: Vec<String>,
+    /// Connectivity rebuilt from the Gerbers and drill files written, and DFM on them (`gerber_helper.py verify`).
+    pub verify: serde_json::Value,
+    /// What `verify` found that no `[[waiver]]` (check "dfm", item "<rule> <layer>") covers: opens, shorts, pads in no
+    /// copper, DFM findings. Any makes the outcome rejected.
+    pub problems: Vec<String>,
     pub written: String,
 }
 
@@ -100,6 +107,25 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     rep.gerber_layers = layers;
     let zip = out.join(format!("{stem}_gerbers.zip"));
     crate::gerber::helper(work, &["zip", &g, zip.to_str().unwrap()])?;
+    // the files as the fab will read them
+    let v = crate::gerber::helper(work, &["verify", &g, &board_path])?;
+    for (k, what) in [("opens", "open"), ("shorts", "short"), ("unplaced_pads", "pad in no copper")] {
+        for x in v[k].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+            rep.problems.push(format!("{what}: {x}"));
+        }
+    }
+    let mut counts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for f in v["dfm"].as_array().into_iter().flatten() {
+        let item = format!("{} {}", f["rule"].as_str().unwrap_or("?"), f["layer"].as_str().unwrap_or("?"));
+        counts.entry(item).or_default().push(format!("{} at {}", f["detail"].as_str().unwrap_or(""), f["at"]));
+    }
+    for (item, list) in counts {
+        let waived = p.waiver.iter().any(|w| w.check == "dfm" && w.item == item && list.len() <= w.max.unwrap_or(1));
+        if !waived {
+            rep.problems.extend(list.iter().map(|d| format!("dfm {item}: {d}")));
+        }
+    }
+    rep.verify = v;
 
     // 2. BOM and CPL
     let asm = p.assembly.as_ref();
