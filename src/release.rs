@@ -183,6 +183,9 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     }
     rep.verify = v;
 
+    // the board as the circuit and the places say (review 20, 61): what check calls stale sync or place is a problem
+    let drift: Vec<String> = crate::sync::differences(l, &b, &work.join("netlist"))?.into_iter().chain(crate::place::differences(l, &b)?).collect();
+    rep.problems.extend(drift.iter().map(|d| format!("circuit or places: {d}")));
     // JLCPCB's data again, from the cache `pcb parts --live` keeps (re-run at release, P9): stock, Economic, the
     // footprints' offsets; a project with no cache is warned
     if crate::parts::dir(l).is_dir() {

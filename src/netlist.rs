@@ -21,7 +21,12 @@ impl Comp {
     /// The footprint attributes the schematic's flags ask for: `dnp` (not fitted: out of the BOM and CPL too) and
     /// `exclude_from_bom` (review 19, 49).
     pub fn flags(&self) -> Vec<&'static str> {
-        let has = |k: &str| self.fields.keys().any(|f| f.eq_ignore_ascii_case(k));
+        // a flag KiCad writes has no value; a field the designer made says yes or no (review 20, 60)
+        let has = |k: &str| {
+            self.fields.iter().any(|(f, v)| {
+                f.eq_ignore_ascii_case(k) && matches!(v.trim().to_ascii_lowercase().as_str(), "" | "yes" | "y" | "true" | "1" | "x" | "dnp")
+            })
+        };
         let mut v = vec![];
         if has("dnp") {
             v.extend(["exclude_from_pos_files", "exclude_from_bom", "dnp"]);

@@ -312,7 +312,7 @@ pub fn run(l: &Loaded, rip: bool, work: &Path, out_path: &str) -> Result<Report>
         // the part itself changed (another LCSC code or value in the same package): replaced too, so the board, and
         // so the BOM, carries the new part (review 18, 4)
         let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
-        let part_changed = prop("LCSC") != r.lcsc.clone().unwrap_or_default() || prop("Value") != c.value || flags_differ(&node, &c.flags());
+        let part_changed = prop("LCSC") != r.lcsc.clone().unwrap_or_default() || prop("Value") != c.value || flags_differ(&node, &c.flags(), &r.text);
         if f.lib_id != r.lib_id || part_changed {
             if f.locked || node.find("locked").is_some() {
                 return Err(refused("locked", format!("{} is locked; its footprint would change from {} to {}", f.reference, f.lib_id, r.lib_id)));
@@ -479,7 +479,8 @@ pub fn differences(l: &Loaded, b: &Board, work: &Path) -> Result<Vec<String>> {
         };
         let node = sexpr::parse(&b.src[f.span.0..f.span.1])?;
         let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
-        if flags_differ(&node, &c.flags()) {
+        let lib = resolve(l, c).map(|r| r.text).unwrap_or_default();
+        if flags_differ(&node, &c.flags(), &lib) {
             d.push(format!("{}'s fitted or BOM flags differ from the circuit's ({:?})", c.reference, c.flags()));
         }
         if prop("LCSC") != c.lcsc().unwrap_or_default() || prop("Value") != c.value {
@@ -503,10 +504,14 @@ const FLAGS: [&str; 3] = ["exclude_from_pos_files", "exclude_from_bom", "dnp"];
 
 /// Whether a footprint lacks a flag the schematic asks for, or is marked not fitted when the schematic does not
 /// say so (a library footprint may carry exclude_from_bom of its own, as a test pad does).
-fn flags_differ(node: &sexpr::Node, want: &[&str]) -> bool {
-    let attrs: Vec<String> = node.find("attr").map(|a| a.args().iter().map(|x| x.to_string()).collect()).unwrap_or_default();
-    let has = |k: &str| attrs.iter().any(|a| a == k);
-    want.iter().any(|f| !has(f)) || (has("dnp") && !want.contains(&"dnp"))
+fn flags_differ(node: &sexpr::Node, want: &[&str], lib: &str) -> bool {
+    // both ways: the board's flags are exactly the library footprint's own plus the schematic's (review 20, 59)
+    let attrs = |n: &sexpr::Node| -> std::collections::BTreeSet<String> {
+        n.find("attr").map(|a| a.args().iter().map(|x| x.to_string()).filter(|x| FLAGS.contains(&x.as_str())).collect()).unwrap_or_default()
+    };
+    let mut expect = sexpr::parse(lib).map(|l| attrs(&l)).unwrap_or_default();
+    expect.extend(want.iter().map(|f| f.to_string()));
+    attrs(node) != expect
 }
 
 /// A footprint text with its library attributes plus the schematic's flags.
@@ -518,8 +523,12 @@ fn with_flags(text: &str, flags: &[&str]) -> Result<String> {
     let mut e = sexpr::Edits::default();
     match root.find("attr") {
         Some(a) => {
-            let mut v: Vec<String> = a.args().iter().map(|x| x.to_string()).filter(|x| !FLAGS.contains(&x.as_str())).collect();
-            v.extend(flags.iter().map(|f| f.to_string()));
+            let mut v: Vec<String> = a.args().iter().map(|x| x.to_string()).collect();
+            for f in flags {
+                if !v.iter().any(|x| x == f) {
+                    v.push(f.to_string());
+                }
+            }
             e.replace(a.span, format!("(attr {})", v.join(" ")));
         }
         None => {

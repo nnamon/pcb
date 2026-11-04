@@ -68,7 +68,8 @@ pub fn inputs(l: &Loaded) -> Result<(String, Vec<String>)> {
             files.push(f);
         }
     }
-    let mut extra: Vec<String> = l.project.art.iter().map(|a| a.file.clone()).chain(l.project.text.iter().map(|t| t.font.clone())).collect();
+    // the circuit too (review 20, 61): a schematic changed after the gate makes it stale
+    let mut extra: Vec<String> = l.project.art.iter().map(|a| a.file.clone()).chain(l.project.text.iter().map(|t| t.font.clone())).chain(l.project.project.netlist.iter().cloned()).collect();
     extra.sort();
     extra.dedup();
     files.extend(extra.iter().map(|f| base.join(f)));

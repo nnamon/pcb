@@ -156,7 +156,7 @@ pub fn assembled(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<BTreeMap<
         let n = crate::netlist::load(&path, work)?;
         for c in &n.comps {
             if let Some(code) = c.lcsc() {
-                if !hand.contains(&c.reference) && !c.fields.contains_key("DNP") {
+                if !hand.contains(&c.reference) && !c.flags().contains(&"exclude_from_bom") {
                     m.entry(code).or_default().push(c.reference.clone());
                 }
             }
@@ -185,7 +185,8 @@ fn board_pads(b: &Board, reference: &str) -> Vec<(String, f64, f64)> {
 
 /// Match JLCPCB's pads (y up) onto the board footprint's (y up): the turn (anticlockwise, degrees) and where
 /// JLCPCB's origin lands, with the largest pad-centre miss.
-pub fn solve(board: &[(String, f64, f64)], jlc: &[(String, f64, f64)]) -> Option<(f64, [f64; 2], f64, bool)> {
+/// Also whether, matched by shape, more than one turn fits (a pattern that repeats under a turn: the turn is unknown).
+pub fn solve(board: &[(String, f64, f64)], jlc: &[(String, f64, f64)]) -> Option<(f64, [f64; 2], f64, bool, bool)> {
     if board.is_empty() || jlc.is_empty() {
         return None;
     }
@@ -199,6 +200,7 @@ pub fn solve(board: &[(String, f64, f64)], jlc: &[(String, f64, f64)]) -> Option
         u.dedup();
         u.len() == board.len()
     };
+    let mut residuals: Vec<f64> = vec![];
     let mut best: Option<(f64, f64, [f64; 2])> = None;
     for rot in [0.0f64, 90.0, 180.0, 270.0] {
         let a = rot.to_radians();
@@ -224,13 +226,17 @@ pub fn solve(board: &[(String, f64, f64)], jlc: &[(String, f64, f64)]) -> Option
             }
             (r, [tx, ty])
         };
+        residuals.push(res);
         if best.map(|b| res < b.0 - 1e-9).unwrap_or(true) {
             best = Some((res, rot, t));
         }
     }
+    // review 20, 58: an SOIC with an exposed pad, or a QFN, numbered unlike JLCPCB's fits at 180 or 90 degrees too
+    let fitting = residuals.iter().filter(|r| **r <= best.map(|b| b.0).unwrap_or(0.0) + 0.05).count();
+    let ambiguous = !by_number && fitting > 1;
     // to the micrometre, no negative zero
     let um = |v: f64| (v * 1e3).round() / 1e3 + 0.0;
-    best.map(|(res, rot, t)| (rot, [um(t[0]), um(t[1])], res, by_number))
+    best.map(|(res, rot, t)| (rot, [um(t[0]), um(t[1])], res, by_number, ambiguous))
 }
 
 /// The checks (see the module documentation), from the cache.
@@ -300,7 +306,10 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                         continue;
                     }
                     let bp = board_pads(b, reference);
-                    let Some((rot, t, res, by_number)) = solve(&bp, &jp) else { continue };
+                    let Some((rot, t, res, by_number, ambiguous)) = solve(&bp, &jp) else { continue };
+                    if ambiguous && bp.len() > 2 {
+                        r.findings.push(Finding { item: format!("{reference} turn"), message: format!("{reference} ({code}): its pads are numbered unlike JLCPCB's footprint and fit it at more than one turn, so the turn is unknown; number them as JLCPCB's footprint does") });
+                    }
                     let tol = if bp.len() <= 2 { 0.15 } else { 0.05 };
                     if res > tol {
                         r.findings.push(Finding { item: format!("{reference} footprint"), message: format!("{reference} ({code}): JLCPCB's footprint misses the board's pads by {res:.3} mm at best (limit {tol} mm)") });
@@ -386,7 +395,7 @@ mod tests {
         // its origin 0.1 mm off
         let j = pads(&[("1", -0.95, -1.1), ("2", 0.95, -1.1), ("3", 0.0, 1.1)]);
         let b: Vec<(String, f64, f64)> = j.iter().map(|(n, x, y)| (n.clone(), -y + 0.1, *x)).collect();
-        let (rot, t, res, by) = solve(&b, &j).unwrap();
+        let (rot, t, res, by, _) = solve(&b, &j).unwrap();
         assert_eq!(rot, 90.0);
         assert!((t[0] - 0.1).abs() < 1e-9 && t[1].abs() < 1e-9 && res < 1e-9 && by);
     }
@@ -395,7 +404,7 @@ mod tests {
     fn solves_by_shape_when_numbers_differ() {
         let j = pads(&[("A1", -1.0, 0.0), ("A2", 1.0, 0.0), ("A3", 0.0, 2.0)]);
         let b = pads(&[("1", -1.0, 0.5), ("2", 1.0, 0.5), ("3", 0.0, 2.5)]);
-        let (rot, t, res, by) = solve(&b, &j).unwrap();
+        let (rot, t, res, by, _) = solve(&b, &j).unwrap();
         assert_eq!(rot, 0.0);
         assert!((t[1] - 0.5).abs() < 1e-9 && res < 1e-9 && !by);
     }
