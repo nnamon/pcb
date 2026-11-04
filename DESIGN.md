@@ -153,7 +153,7 @@ Every command:
 
 ## Project file and explicit edits (milestone M1)
 
-The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1); `zone` (M2).
+The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1); `zone` (M2); `paste`, `art`, `check`, `gate`, `release`, `compare-gerbers` (M3, in progress).
 
 ### Project file
 
@@ -165,7 +165,7 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 | `[project]` | `name`, `version` (MAJOR.MINOR.PATCH), `board` (relative to `pcb.toml`), `layers` (2, 4, 6 or 8), `fab` (rule-set name) | `status` |
 | `[gates.<name>]` | `version`, `passed` (YYYY-MM-DD), `inputs` (`sha256:...`) | written by `pcb gate pass` (M3), never by hand |
 | `[decisions.<key>]` | `text`, `date`: owner decisions an agent must not ask about again | `status` |
-| `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste` | M3 release |
+| `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste`, `designators` (board reference to BOM and CPL designator) | M3 check, release |
 | `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm`, `fill_priority` | M2 zones, M3 width and rating checks |
 | `[[keepout]]` | `name`, `rect` (x0, y0, x1, y1 mm), `grow_mm`, `layers` (`"all"` or a list), `forbid` (`pour`, `track`, `via`, `footprint`) | M2 |
 | `[[zone]]` | `net`, `layers`, `clearance_mm`, `thermal = { gap_mm, spoke_mm }`, `priority`, `min_width_mm`, `connect` (`thermal`, `solid`, `none`) | M2 |
@@ -174,6 +174,11 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 | `[[net_tie]]` | `footprint`, `pads` (two or more), `absorb_net`, `absorb_vias_net` | M2 |
 | `[[stitch]]` | `net`, `pitch_mm`, `size_mm`, `drill_mm`, `margin_mm` (default 0.3), `rect` | M2 |
 | `[[drc_allow]]` | `kind` (a KiCad DRC type), `nets`, `max`, `why` | M2 zone; the gate's allowance |
+| `[[paste]]` | `pad` (`REF.PAD`), `windows`, `size_mm`, `web_mm`, `pin_in_paste` | M3 paste |
+| `[[art]]` | `name`, `file` (GeoJSON), `key`, `frame` (`centre`, `board`), `layers`, `net` | M3 art |
+| `[[text]]` | `name`, `text`, `font`, `cap_mm`, `at`, `frame`, `rot_deg`, `layer`, `grow_mm`, `net` | M3 art |
+| `[parts.<LCSC>]` | `rotation_offset_deg`, `cpl_offset_mm`, `source` | M3 release (M4 parts solves them) |
+| `[[waiver]]` | `check`, `item`, `max`, `why` | M3 check, gate |
 | `[bringup]` | `ammeter_break` (nets), `test_points` (reference to what it measures) | M3 bring-up sheet |
 
 - **`pcb init BOARD`** writes a starter file, with `board` relative to the file's own folder (climbing with `..` when it must): the name (the board's stem unless `--name`), version 0.1.0, the layer count and `jlcpcb-<n>layer-1.6mm`, an empty `[decisions]`, and a `[nets.<NET>] width_mm` for every net whose most common track width is above the board's usual one. It never overwrites a file (`exists`), refuses to write one `status` would refuse (`config`), and checks that the board is found from the written file.
@@ -242,6 +247,74 @@ In order:
 - The fill flag (`(fill yes ...)`) follows pcbnew's after the gate's fill, so KiCad does not treat the carried-back fills as stale. The copy the gate fills gives its zones marker uuids that sort as their own uuids do, so the fills written are the ones a KiCad refill makes (review 13, 1).
 - **The badge (fixture `badge_r36a`).** `pcb zone` gives the zones spike 3 gave, with every overlapping pair of fills at its own priority, plus 203 GND stitching vias on a 5 mm grid; KiCad DRC goes from 144 to 27 violations. verify_zones checks the stitching (check J) and passes on the file as written and after a KiCad refill. J102 pad 4 and J701 pad 2 get one top-layer spoke each. Turning J102 pad 4's spokes 45° or narrowing its gap still gives one, and a solid pad override removes the reliefs its plated hole needs on the GND planes (verify_zones check D catches it). Both stay allowed in the fixture until the badge's design work after M4.
 - Cases: `tests/cases/zone_cases.py` on a synthetic board (each feature, 23 refusals, the allowance within and over `max`, determinism, a second run, a changed stitching pitch, a dropped override, P27 overlaps warned and settled, P28 a fill cutting off pads of the pour's net, P29 no floating via, stitching beside a via keep-out and pads); the badge fixture, with verify_zones, its mutations (a refilled unmutated control, the stitching, a solid override on J102 pad 4) and a second run; review 13's probes (`tests/review13/`).
+
+## Check and release (milestone M3)
+
+Gate: the paddle-keyer package built by `pcb release` matches the files it was ordered with (`paddle-keyer/order/`, v1.0.0), every difference explained in the test; badge 0.5.0 checked through `pcb check`.
+
+The flow, from a board to the order files: `import-tscircuit` (or, for new projects, the KiCad schematic in M4), `zone`, `paste`, `art`, `check`, `gate pass`, `release`. Each step that writes the board goes through the write gate.
+
+### Import additions
+
+- Ports a part joins inside itself (`source_component_internal_connection`, a USB-C shell's two holes per pin) are one net.
+- A trace or via `net_name` the circuit has no net for (an older router's name, cut short) takes the one net its traces land on, warned `net-renamed`; landing on two nets is a short and refused.
+- Silkscreen lines and circles, on footprints and on the board, are carried over. Text and rectangles are not: tscircuit draws text with strokes too thin to print, so labels come from `[[text]]`.
+
+### `pcb paste`
+
+`[[paste]]` rules for named pads (`REF.PAD`, every pad of that number), applied in the footprints:
+- `windows = [columns, rows]`, `size_mm`, `web_mm`: the pad loses its own paste opening and the footprint gains paste-only aperture pads centred on it (an exposed pad that would float on a full sheet of paste). Top side only for now.
+- `pin_in_paste = true`: a plated pad gains its side's paste layer, so the opening is the pad's own shape.
+
+The footprint records the pads' own layers in a hidden property `pcb:paste`, and aperture pads carry name-derived ids, so a later run restores the footprint first: dropping a rule undoes it, and a run gives the same bytes every time.
+
+### `pcb art`
+
+`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at`, grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
+
+### `pcb check`
+
+KiCad DRC on a copy with the fab's rule set (`project.fab`: `jlcpcb-2layer-1.6mm`, `jlcpcb-4layer-1.6mm`, `jlcpcb-6layer-1.6mm`, from GUIDELINES.md's JLCPCB table) added to the board's own rules, plus checks KiCad lacks:
+- **width-current:** on each net with `current_a`, the narrowest track per layer against the IPC-2221 width at a 10 °C rise (outer 1 oz, inner 0.5 oz).
+- **side:** an assembled part (LCSC code, not hand fitted, not excluded) on a side not in `[assembly] machine_sides`.
+- **paste:** an SMD pad of an assembled part with no paste opening and no window in its footprint.
+- **testpoint:** a `[bringup] test_points` reference missing, or with no exposed outer pad.
+
+A `[[waiver]]` (check, item as check names it, `max`, why) covers a finding up to `max`; waived findings are listed with their reason, and a waiver that matches nothing is warned `waiver-unused`. Any unwaived finding makes the outcome rejected.
+
+### `pcb gate status|pass NAME`
+
+A gate's inputs are the board file, pcb.toml without its `[gates.*]` tables, and every file pcb.toml names (art, fonts), hashed with SHA-256 in that order. `pass` runs `check` and records `[gates.NAME]` (version, date, inputs) only when nothing is unwaived (`gate-check`). `status` says which gates are stale and why.
+
+### `pcb release`
+
+Refuses with no gate recorded (`gate-missing`) or any stale (`gate-stale`), and into a folder that is not empty (`exists`). Then:
+- Gerbers (every copper layer, masks, paste, silkscreen, outline) and PTH and NPTH drill files by `kicad-cli`, zones plotted as filled, zipped with sorted names and a fixed date;
+- JLCPCB BOM (grouped by LCSC code, value and footprint) and CPL (centre of the outline as origin, y up, with `[parts.<LCSC>]` rotation and centre offsets), from parts with an LCSC code that are not excluded, not hand fitted and on a machine side; designators follow `[assembly] designators`;
+- `CHECKSUMS.txt`.
+
+KiCad stamps a creation date in each Gerber, so two releases of one board differ in those lines only.
+
+### `pcb compare-gerbers A B [--explain FILE] [--board BOARD]`
+
+Two fabrication sets (folders or zips) compared as shapes, layer by layer (found by X2 file function or name), aligned on the centres of their outlines, and hole by hole (place, size, slot length, plating; Excellon read by pcb, since gerbonara reports a slot's start as a hole too). Pieces under 0.01 mm² or thinner than 0.02 mm are rounding. Every other piece must be explained by an `[[explain]]` entry, or the outcome is rejected:
+- `layer` (or `*`), `side` ("a", "b" or "both"), `why`;
+- and one of: `rect` (in B's frame), `whole = true`, `thinner_than_mm` (only pieces no wider than that), or `zone_net` (A's copper that is wholly a zone fill of that net on `--board`).
+
+### The golden test
+
+`tests/fixtures/paddle_keyer_v1` holds the final circuit JSON, a pcb.toml, the art data, the font, the ordered files and `explain.toml`. The suite imports, runs zone, paste, art and `gate pass layout`, releases, and compares:
+- **drill:** all 65 holes the same;
+- **F.Mask, B.Mask, F.Paste, B.Cu art:** no difference;
+- **copper:** everything only in pcb's set is GND pour (KiCad's pour reaches further than the old script's), plus one 0.016 mm² sliver of the old pour;
+- **silkscreen:** text redrawn from the font differs from matplotlib's by under 0.1 mm at glyph edges;
+- **BOM and CPL:** the same designators, LCSC parts, places and rotations (`verify_release.py`).
+
+The connector CPL offsets in pcb.toml came from the order's own CPL (jlc_files.py solved them against JLCPCB's footprints); M4's `pcb parts` will solve them. The label places came from the order's silk_text.py run, recorded once as data.
+
+### Still to do for M3
+
+Badge 0.5.0 through `pcb check`; Gerber connectivity rebuilt and DFM run on the files `release` writes (P14, P30); fixtures for check, gate and release refusals; gerbonara in the CI image.
 
 ## Planning drawings
 
