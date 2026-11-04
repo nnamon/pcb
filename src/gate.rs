@@ -5,8 +5,8 @@
 //! candidate goes to the output; otherwise to `<output>.rejected.kicad_pcb`, and the output is not touched. The
 //! project file always travels with the result.
 //!
-//! A board with zones is filled on a copy, and only the new `filled_polygon` blocks are carried back into the
-//! candidate's own zones: the file pcbnew saves after filling reorders items and gives new ones random uuids, so it
+//! A board with zones is filled on a copy in which every zone carries a marker uuid, and only the new
+//! `filled_polygon` blocks are carried back, by marker, into the candidate's own zones: the file pcbnew saves after filling reorders items and gives new ones random uuids, so it
 //! is never the one written (review 8, 3). Everything but the fills stays as the command wrote it.
 
 use crate::kicad;
@@ -50,7 +50,7 @@ impl Gate {
         // zones inside footprints count too (review 9, 2)
         let text = if has_zones || candidate.contains("(zone") {
             let filled = self.work.join("candidate_filled.kicad_pcb");
-            std::fs::write(&filled, candidate)?;
+            std::fs::write(&filled, mark_zones(candidate)?)?;
             kicad::copy_rules(&self.input, &filled)?;
             kicad::helper(&self.work, &["fill", filled.to_str().unwrap()])?;
             splice_fills(candidate, &std::fs::read_to_string(&filled)?)?
@@ -82,99 +82,48 @@ impl Gate {
     }
 }
 
-/// One zone of a board, with what identifies it.
-struct ZoneId {
-    /// Top level (""), or the footprint holding it, by reference and position.
-    owner: String,
-    uuid: Option<String>,
-    /// Canonical text (`board::zone_canon`), relative to the owner's position.
-    canon: String,
-    /// Net, layers and outline only.
-    coarse: String,
-    net: String,
-    node: crate::sexpr::Node,
-}
-
-fn zone_ids(root: &crate::sexpr::Node) -> Vec<ZoneId> {
-    use crate::sexpr::Node;
-    let xy = |n: &Node| -> (f64, f64) { n.find("at").map(|a| (a.num(1).unwrap_or(0.0), a.num(2).unwrap_or(0.0))).unwrap_or((0.0, 0.0)) };
-    let mut owners: Vec<(String, &Node, (f64, f64))> = vec![(String::new(), root, (0.0, 0.0))];
+/// Every zone of a board, top level and inside footprints.
+fn all_zones(root: &crate::sexpr::Node) -> Vec<&crate::sexpr::Node> {
+    let mut v: Vec<&crate::sexpr::Node> = root.items().iter().filter(|z| z.is("zone")).collect();
     for f in root.items().iter().filter(|n| n.is("footprint")) {
-        // by reference and position: a footprint saved without a uuid gets a new one, and pcbnew's save reorders
-        // footprints, so neither tells two copies apart; their positions do
-        let r = f.find_all("property").find(|p| p.arg(1) == Some("Reference")).and_then(|p| p.arg(2)).unwrap_or("").to_string();
-        let (x, y) = xy(f);
-        owners.push((format!("{r}@{:.4},{:.4}", x, y), f, (x, y)));
+        v.extend(f.items().iter().filter(|z| z.is("zone")));
     }
-    let mut out = vec![];
-    for (owner, n, origin) in owners {
-        for z in n.items().iter().filter(|z| z.is("zone")) {
-            let net = z.find("net").and_then(|u| u.arg(1)).unwrap_or("").to_string();
-            let mut pts = vec![];
-            for p in z.find_all("polygon") {
-                let mut last = (f64::NAN, f64::NAN);
-                for q in p.find("pts").map(|q| q.items().to_vec()).unwrap_or_default().iter().filter(|q| q.is("xy")) {
-                    let v = (((q.num(1).unwrap_or(0.0) - origin.0) * 1e4).round() / 1e4, ((q.num(2).unwrap_or(0.0) - origin.1) * 1e4).round() / 1e4);
-                    if v != last {
-                        pts.push(format!("{} {}", v.0, v.1));
-                        last = v;
-                    }
-                }
-                pts.push("/".into());
-            }
-            let coarse = format!("{net}|{}|{}", crate::board::zone_layers(z).join(","), pts.join(";"));
-            out.push(ZoneId { owner: owner.clone(), uuid: z.find("uuid").and_then(|u| u.arg(1)).map(String::from), canon: crate::board::zone_canon(z, origin), coarse, net, node: z.clone() });
-        }
-    }
-    out
+    v
 }
 
-/// For each zone of `a`, the index of the same zone in `b`. A uuid pairs zones only where it is unique on both sides
-/// (copied text can repeat one, review 10, 2); then the canonical text, then net, layers and outline, then the net
-/// alone in file order, each within the same owner. pcbnew's save reorders zones and footprints, so file order is
-/// the last resort (reviews 9 and 10).
-fn pair_zones(a: &[ZoneId], b: &[ZoneId]) -> Result<Vec<usize>> {
-    let mut pair: Vec<Option<usize>> = vec![None; a.len()];
-    let mut used = vec![false; b.len()];
-    let count = |v: &[ZoneId], u: &str| v.iter().filter(|z| z.uuid.as_deref() == Some(u)).count();
-    for (i, z) in a.iter().enumerate() {
-        if let Some(u) = &z.uuid {
-            if count(a, u) == 1 && count(b, u) == 1 {
-                let j = b.iter().position(|y| y.uuid.as_deref() == Some(u.as_str())).unwrap();
-                pair[i] = Some(j);
-                used[j] = true;
-            }
-        }
-    }
-    let tiers: [&dyn Fn(&ZoneId) -> String; 3] = [&|z| format!("{}|{}", z.owner, z.canon), &|z| format!("{}|{}", z.owner, z.coarse), &|z| format!("{}|{}", z.owner, z.net)];
-    for key in tiers {
-        for i in 0..a.len() {
-            if pair[i].is_some() {
-                continue;
-            }
-            let k = key(&a[i]);
-            if let Some(j) = (0..b.len()).find(|j| !used[*j] && key(&b[*j]) == k) {
-                pair[i] = Some(j);
-                used[j] = true;
-            }
-        }
-    }
-    pair.iter()
-        .enumerate()
-        .map(|(i, p)| p.ok_or_else(|| anyhow::anyhow!("a zone of {:?}{} was not found after filling", a[i].net, if a[i].owner.is_empty() { String::new() } else { " in a footprint".to_string() })))
-        .collect()
+/// The id the gate gives zone `i` in the copy it fills.
+fn mark(i: usize) -> String {
+    format!("00000000-0000-4000-8000-{i:012}")
 }
 
-/// The candidate with each zone's `filled_polygon` blocks (top level and inside footprints) replaced by those of the
-/// same zone in `filled` (pcbnew's save after filling); see `pair_zones`.
+/// The candidate with every zone's uuid replaced by (or, without one, given) a marker of its own, for the copy pcbnew
+/// fills. pcbnew keeps zone uuids through a fill and a save, so the markers pair each zone with its fill whatever
+/// the zones' own uuids, settings or order (review 11, N1).
+pub fn mark_zones(candidate: &str) -> Result<String> {
+    let root = crate::sexpr::parse(candidate)?;
+    let mut e = crate::sexpr::Edits::default();
+    for (i, z) in all_zones(&root).into_iter().enumerate() {
+        match z.find("uuid") {
+            Some(u) => e.replace(u.span, format!("(uuid \"{}\")", mark(i))),
+            None => e.insert(z.items()[0].span.1, format!(" (uuid \"{}\")", mark(i))),
+        }
+    }
+    e.apply(candidate)
+}
+
+/// The candidate with each zone's `filled_polygon` blocks replaced by those `filled` (pcbnew's save of the marked
+/// copy, `mark_zones`) holds for the same marker.
 pub fn splice_fills(candidate: &str, filled: &str) -> Result<String> {
     let (a, b) = (crate::sexpr::parse(candidate)?, crate::sexpr::parse(filled)?);
-    let (za, zb) = (zone_ids(&a), zone_ids(&b));
+    let (za, zb) = (all_zones(&a), all_zones(&b));
     anyhow::ensure!(za.len() == zb.len(), "the filled board has {} zones, the candidate {}", zb.len(), za.len());
-    let pairs = pair_zones(&za, &zb)?;
     let mut e = crate::sexpr::Edits::default();
-    for (zi, j) in za.iter().zip(pairs) {
-        let (z, m) = (&zi.node, &zb[j].node);
+    for (i, z) in za.iter().enumerate() {
+        let id = mark(i);
+        let m = zb
+            .iter()
+            .find(|y| y.find("uuid").and_then(|u| u.arg(1)) == Some(id.as_str()))
+            .ok_or_else(|| anyhow::anyhow!("zone {} of {:?} lost its marker in pcbnew's save", i + 1, z.find("net").and_then(|n| n.arg(1)).unwrap_or("")))?;
         for old in z.find_all("filled_polygon") {
             crate::route::remove(&mut e, candidate, old.span);
         }
@@ -209,21 +158,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fills_carried_back_and_nothing_else() {
-        let cand = "(kicad_pcb\n\t(segment (start 0 0) (end 1 0) (net \"A\"))\n\t(zone\n\t\t(net \"GND\")\n\t\t(uuid \"z1\")\n\t\t(filled_polygon (layer \"F.Cu\") (pts (xy 9 9)))\n\t)\n)\n";
-        // pcbnew's save: items reordered, a uuid added to the segment, a new fill
-        let filled = "(kicad_pcb\n\t(zone (net \"GND\") (uuid \"z1\") (filled_polygon (layer \"F.Cu\") (pts (xy 1 1) (xy 2 2))))\n\t(segment (start 0 0) (end 1 0) (net \"A\") (uuid \"r\"))\n)\n";
-        let out = splice_fills(cand, filled).unwrap();
+    fn fills_carried_back_by_marker_and_nothing_else() {
+        let cand = "(kicad_pcb\n\t(segment (start 0 0) (end 1 0) (net \"A\"))\n\t(zone\n\t\t(net \"GND\")\n\t\t(uuid \"z1\")\n\t\t(filled_polygon (layer \"F.Cu\") (pts (xy 9 9)))\n\t)\n\t(zone (net \"GND\") (layer \"F.Cu\"))\n)\n";
+        let marked = mark_zones(cand).unwrap();
+        assert!(marked.contains(&mark(0)) && marked.contains(&mark(1)) && !marked.contains("\"z1\""), "{marked}");
+        // pcbnew's save: zones reordered, a uuid added to the segment, new fills
+        let filled = format!("(kicad_pcb\n\t(zone (net \"GND\") (uuid \"{}\") (filled_polygon (layer \"F.Cu\") (pts (xy 5 5))))\n\t(zone (net \"GND\") (uuid \"{}\") (filled_polygon (layer \"F.Cu\") (pts (xy 1 1) (xy 2 2))))\n\t(segment (start 0 0) (end 1 0) (net \"A\") (uuid \"r\"))\n)\n", mark(1), mark(0));
+        let out = splice_fills(cand, &filled).unwrap();
         assert!(out.contains("(segment (start 0 0) (end 1 0) (net \"A\"))"), "{out}");
-        assert!(out.contains("(xy 1 1) (xy 2 2)") && !out.contains("(xy 9 9)"), "{out}");
-        assert!(out.find("(segment").unwrap() < out.find("(zone").unwrap());
-        // zones without uuids, reordered by the save, pair by net, layers and outline
-        let c2 = "(kicad_pcb\n\t(zone (net \"GND\") (layer \"F.Cu\") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))))\n\t(zone (net \"VCC\") (layer \"F.Cu\") (polygon (pts (xy 5 5) (xy 6 5) (xy 6 6))))\n)\n";
-        let f2 = "(kicad_pcb\n\t(zone (net \"VCC\") (layer \"F.Cu\") (uuid \"u2\") (polygon (pts (xy 5 5) (xy 6 5) (xy 6 6))) (filled_polygon (layer \"F.Cu\") (pts (xy 5.5 5.5))))\n\t(zone (net \"GND\") (layer \"F.Cu\") (uuid \"u1\") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) (filled_polygon (layer \"F.Cu\") (pts (xy 0.5 0.5))))\n)\n";
-        let o2 = splice_fills(c2, f2).unwrap();
-        let (g, v) = (o2.find("GND").unwrap(), o2.find("VCC").unwrap());
-        let (p05, p55) = (o2.find("(xy 0.5 0.5)").unwrap(), o2.find("(xy 5.5 5.5)").unwrap());
-        assert!(g < p05 && p05 < v && v < p55, "{o2}");
+        assert!(out.contains("(uuid \"z1\")") && !out.contains("(xy 9 9)"), "{out}");
+        let (first, second) = (out.find("(xy 1 1) (xy 2 2)").unwrap(), out.find("(xy 5 5)").unwrap());
+        assert!(first < out.find("(zone (net").unwrap() && second > out.find("(zone (net").unwrap(), "{out}");
+        // a marker pcbnew dropped is an error, not a guess
+        assert!(splice_fills(cand, &filled.replace(&mark(1), "other")).is_err());
     }
 
     #[test]

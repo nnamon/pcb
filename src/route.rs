@@ -811,29 +811,41 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             .chain(b.vias.iter().filter(|v| rip_via(v)).map(|v| (v.net.clone(), (v.x, v.y))))
             .collect();
         let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < 1e-3;
-        // A prewire stub laid with a free end and joined by the router partway along: the stub from that join out to
-        // its free end may be pruned, through every segment of the stub (review 10, 7). The stub is the chain of
-        // prewire tracks walked from the free end; it qualifies only when the router split one of them. Its pieces
-        // that still reach copper are kept by the pruning itself.
+        // A prewire stub laid with a free end and joined by the router partway along: from the join out to the free
+        // end it may be pruned, through every segment of the stub (reviews 10, 7 and 11, N7). The stub is walked
+        // from its free end, segment by segment; the walk stops at the first segment the router's copper splits, or
+        // at the first inner corner the router's copper ends on, and only the segments up to there are marked. The
+        // segments between that point and the stub's anchor stay as they are (review 11, N3).
         let split = |t: &crate::board::Track| ends.iter().any(|(net, layer, p)| *net == t.net && layer.as_ref().is_none_or(|l| *l == t.layer) && interior_param(t, *p).is_some());
+        let lands = |net: &str, layer: &str, q: (f64, f64)| ends.iter().any(|(n2, l2, p)| n2 == net && l2.as_ref().is_none_or(|l| l == layer) && near(*p, q));
         let mut free_chain: std::collections::HashSet<usize> = Default::default();
         for (net, q0) in &prewire_free {
-            let mut chain = vec![];
+            // the chain: segment indices with the vertex each ends on, walking away from the free end
+            let mut chain: Vec<(usize, (f64, f64))> = vec![];
             let mut q = *q0;
             loop {
                 let next = b.tracks.iter().enumerate().find(|(k, t)| {
-                    !chain.contains(k) && t.net == *net && prewire_spans.contains(&t.span) && (near((t.x0, t.y0), q) || near((t.x1, t.y1), q))
+                    !chain.iter().any(|(c, _)| c == k) && t.net == *net && prewire_spans.contains(&t.span) && (near((t.x0, t.y0), q) || near((t.x1, t.y1), q))
                 });
                 match next {
                     Some((k, t)) => {
-                        chain.push(k);
                         q = if near((t.x0, t.y0), q) { (t.x1, t.y1) } else { (t.x0, t.y0) };
+                        chain.push((k, q));
                     }
                     None => break,
                 }
             }
-            if chain.iter().any(|k| split(&b.tracks[*k])) {
-                free_chain.extend(chain);
+            for (n_, (k, far)) in chain.iter().enumerate() {
+                let t = &b.tracks[*k];
+                if split(t) {
+                    free_chain.extend(chain[..=n_].iter().map(|(c, _)| *c));
+                    break;
+                }
+                // an inner corner (not the stub's last vertex, which is its anchor)
+                if n_ + 1 < chain.len() && lands(net, &t.layer, *far) {
+                    free_chain.extend(chain[..=n_].iter().map(|(c, _)| *c));
+                    break;
+                }
             }
         }
         for (i, t) in b.tracks.iter().enumerate() {
@@ -897,7 +909,15 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                 let sg = &segs[i];
                 let touches = |p: (f64, f64)| {
                     pads.iter().any(|pd| pd.net == sg.net && pad_on_layer(pd, &sg.layer) && in_pad(pd, p))
-                        || b.zones.iter().any(|z| z.net == sg.net && z.filled.iter().any(|(l, poly)| *l == sg.layer && point_in_poly(p, poly)))
+                        // a fill of the net; a zone never filled by its outline, as edit's join check counts it (review 11, N3)
+                        || b.zones.iter().any(|z| {
+                            z.net == sg.net
+                                && if z.filled.is_empty() {
+                                    z.layers.iter().any(|l| *l == sg.layer) && point_in_poly(p, &z.outline) && !z.holes.iter().any(|h| point_in_poly(p, h))
+                                } else {
+                                    z.filled.iter().any(|(l, poly)| *l == sg.layer && point_in_poly(p, poly))
+                                }
+                        })
                         || all_vias.iter().any(|(net, x, y, rad)| *net == sg.net && (p.0 - x).hypot(p.1 - y) <= rad + 1e-3)
                         || segs.iter().enumerate().any(|(j, o)| {
                             j != i && alive[j] && o.net == sg.net && o.layer == sg.layer && point_seg_dist(p, o.a, o.c) <= 1e-3
@@ -1192,7 +1212,7 @@ mod prune_tests {
         let tee_b = vec![seg((0.0, 0.0), (10.0, 0.0), "F.Cu"), seg((5.0, 0.0), (5.0, 5.0), "B.Cu")];
         assert_eq!(open_nets(&nets, &tee_b, &[true; 2], &[], &far, &[]), nets);
         // two pads in one fill on their layer are joined by it
-        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], outlines: vec![], settings: String::new(), owner: None, filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
+        let z = crate::board::Zone { net: "N".into(), layers: vec!["F.Cu".into()], outline: vec![], holes: vec![], settings: String::new(), owner: None, filled: vec![("F.Cu".into(), vec![(-1.0, -1.0), (11.0, -1.0), (11.0, 1.0), (-1.0, 1.0)])] };
         assert!(open_nets(&nets, &[], &[], &[], &pads, std::slice::from_ref(&z)).is_empty());
         let zb = crate::board::Zone { filled: vec![("B.Cu".into(), z.filled[0].1.clone())], ..z.clone() };
         assert_eq!(open_nets(&nets, &[], &[], &[], &pads, &[zb]), nets);

@@ -122,6 +122,7 @@ fn main() -> Result<()> {
     }
     // review 10's cases: zone pairing without uuids, joins through fills, diff on re-saves, prewire stubs
     s.py("review 10: gate, join, diff and prewire cases", "tests/review10/check.py", &[&pcb, &s.w("review10")]);
+    s.py("review 11: gate markers, prewire stubs, diff on re-saves", "tests/review11/check.py", &[&pcb, &s.w("review11")]);
     if s.py("edit edge cases", "tests/cases/edit_cases.py", &[&pcb, &s.w("edit_cases")]) {
         s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
         s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);

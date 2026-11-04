@@ -335,7 +335,7 @@ fn run(cli: Cli) -> Result<Reply> {
         }
         Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, width, prewire, out } => {
             let prewire = match &prewire {
-                Some(p) if !std::path::Path::new(p).exists() => return Err(contract::refused("usage", format!("--prewire {p}: no such file"))),
+                Some(p) if !std::path::Path::new(p).is_file() => return Err(contract::refused("usage", format!("--prewire {p}: no such file"))),
                 Some(p) => edit::parse_ops(&std::fs::read_to_string(p).map_err(|e| contract::failed("io", format!("reading {p}: {e}")))?)?,
                 None => vec![],
             };
@@ -466,7 +466,7 @@ fn run(cli: Cli) -> Result<Reply> {
                 let mut t = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut t)?;
                 t
-            } else if !std::path::Path::new(&ops).exists() {
+            } else if !std::path::Path::new(&ops).is_file() {
                 return Err(contract::refused("usage", format!("--ops {ops}: no such file")));
             } else {
                 std::fs::read_to_string(&ops).map_err(|e| contract::failed("io", format!("reading {ops}: {e}")))?

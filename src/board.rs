@@ -95,10 +95,10 @@ pub struct Via {
 pub struct Zone {
     pub net: String,
     pub layers: Vec<String>,
-    /// The first outline polygon.
+    /// The outline: the zone's first polygon.
     pub outline: Vec<(f64, f64)>,
-    /// Every outline polygon, the first included (review 9, 5).
-    pub outlines: Vec<Vec<(f64, f64)>>,
+    /// Holes in it: every polygon after the first, as KiCad 10 reads and writes them (review 11, N6).
+    pub holes: Vec<Vec<(f64, f64)>>,
     /// The zone in a canonical text (`zone_canon`): every setting and outline, no uuid, no fill; a footprint's zone
     /// relative to the footprint's position. For comparing zones across saves.
     pub settings: String,
@@ -233,14 +233,23 @@ pub fn zone_canon(n: &Node, origin: (f64, f64)) -> String {
     for c in n.items().iter().skip(1) {
         match c.head() {
             Some("uuid") | Some("filled_polygon") | Some("fill_segments") | Some("layer") | Some("layers") | Some("hatch") | Some("placement") | Some("fill") | Some("keepout")
-            | Some("connect_pads") | Some("min_thickness") => {}
+            | Some("connect_pads") | Some("min_thickness") | Some("filled_areas_thickness") => {}
+            // KiCad's save drops these at their defaults (review 11, N4)
+            Some("priority") if c.arg(1).and_then(|v| v.parse::<f64>().ok()) == Some(0.0) => {}
+            Some("name") | Some("net") if c.arg(1).is_some_and(|v| v.is_empty()) => {}
             _ => parts.push(walk(c, origin)),
         }
     }
     parts.push(n.find("min_thickness").map(|m| walk(m, origin)).unwrap_or_else(|| "(min_thickness 0.25)".into()));
+    // the `fill yes` flag says only whether the zone is filled now, not how: left out (review 11, N2); a hatched fill
+    // gets the hatch defaults KiCad's save writes
     let fill = n.find("fill");
-    let fill_mode: Vec<String> = fill.map(|f| f.items().iter().skip(1).filter_map(|a| a.atom()).map(String::from).collect()).unwrap_or_default();
-    parts.push(format!("{}{}", fill_mode.join(" "), with_defaults(fill, "fill", &[("thermal_gap", "0.5"), ("thermal_bridge_width", "0.5"), ("island_removal_mode", "0")])));
+    let hatched = fill.and_then(|f| f.find("mode")).and_then(|m| m.arg(1)) == Some("hatch");
+    let mut fd: Vec<(&str, &str)> = vec![("thermal_gap", "0.5"), ("thermal_bridge_width", "0.5"), ("island_removal_mode", "0")];
+    if hatched {
+        fd.extend([("hatch_border_algorithm", "hatch_thickness"), ("hatch_min_hole_area", "0.15")]);
+    }
+    parts.push(with_defaults(fill, "fill", &fd));
     match keepout {
         Some(k) => {
             parts.push(with_defaults(Some(k), "keepout", &[("tracks", "not_allowed"), ("vias", "not_allowed"), ("pads", "allowed"), ("copperpour", "allowed"), ("footprints", "allowed")]));
@@ -260,11 +269,12 @@ pub fn zone_canon(n: &Node, origin: (f64, f64)) -> String {
 
 fn parse_zone(n: &Node, owner: Option<String>, origin: (f64, f64)) -> Zone {
     let layers = zone_layers(n);
-    let outlines: Vec<Vec<(f64, f64)>> = n.find_all("polygon").map(pts).collect();
-    let outline = outlines.first().cloned().unwrap_or_default();
+    let mut polys: Vec<Vec<(f64, f64)>> = n.find_all("polygon").map(pts).collect();
+    let outline = if polys.is_empty() { vec![] } else { polys.remove(0) };
+    let holes = polys;
     let filled = n.find_all("filled_polygon").map(|f| (f.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string(), pts(f))).collect();
     let net = n.find("net").and_then(|x| x.arg(1)).unwrap_or("").to_string();
-    Zone { net, layers, outline, outlines, settings: zone_canon(n, origin), owner, filled }
+    Zone { net, layers, outline, holes, settings: zone_canon(n, origin), owner, filled }
 }
 
 /// Points along a three-point arc (start, mid, end), 16 segments; a straight line if the points are collinear.
@@ -293,8 +303,8 @@ pub fn arc_points(a: (f64, f64), m: (f64, f64), c: (f64, f64)) -> Vec<(f64, f64)
 impl Board {
     pub fn load(path: &str) -> Result<Board> {
         // a board that is not there is the caller's mistake, not a tool failure (review 10, 9)
-        if !std::path::Path::new(path).exists() {
-            return Err(crate::contract::refused("usage", format!("{path}: no such board")));
+        if !std::path::Path::new(path).is_file() {
+            return Err(crate::contract::refused("usage", format!("{path}: no such board file")));
         }
         let src = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
         Board::from_str(src)

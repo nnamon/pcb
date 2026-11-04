@@ -221,7 +221,7 @@ fn on_copper_except(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, sk
     // A zone never filled counts by its outline on each of its layers.
     let fills = b.zones.iter().filter(|z| z.net == net).any(|z| {
         if z.filled.is_empty() {
-            z.layers.iter().any(|l| layer.is_none_or(|x| x == l)) && z.outlines.iter().any(|o| crate::route::point_in_poly(p, o))
+            z.layers.iter().any(|l| layer.is_none_or(|x| x == l)) && crate::route::point_in_poly(p, &z.outline) && !z.holes.iter().any(|h| crate::route::point_in_poly(p, h))
         } else {
             z.filled.iter().any(|(l, poly)| layer.is_none_or(|x| x == l) && crate::route::point_in_poly(p, poly))
         }
@@ -540,6 +540,16 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zone_hole_is_not_copper() {
+        // a GND zone never filled, its second polygon a hole (KiCad 10 reads it so; review 11, N6)
+        let b = Board::from_str(r#"(kicad_pcb (version 20260206) (layers (0 "F.Cu" signal) (2 "B.Cu" signal)) (zone (net "GND") (layer "F.Cu") (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))) (polygon (pts (xy 5 5) (xy 10 5) (xy 10 10) (xy 5 10)))))"#.to_string()).unwrap();
+        assert!(on_net_copper(&b, "GND", (2.0, 2.0), Some("F.Cu"), None, None));
+        assert!(!on_net_copper(&b, "GND", (8.0, 8.0), Some("F.Cu"), None, None));
+        assert!(!on_net_copper(&b, "GND", (2.0, 2.0), Some("B.Cu"), None, None));
+        assert!(on_net_copper(&b, "GND", (2.0, 2.0), None, None, None));
+    }
 
     #[test]
     fn ops_parse_strictly() {

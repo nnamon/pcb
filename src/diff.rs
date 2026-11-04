@@ -165,10 +165,11 @@ fn pad_key(f: &crate::board::Footprint, p: &crate::board::Pad) -> String {
 fn fp_graphics(b: &Board, f: &crate::board::Footprint, copper: bool) -> Vec<String> {
     let Ok(n) = crate::sexpr::parse(&b.src[f.span.0..f.span.1]) else { return vec![] };
     let on = |l: Option<&str>| if copper { l.is_some_and(|l| l.ends_with(".Cu")) } else { l == Some("Edge.Cuts") };
+    // graphics, and text or properties put on a copper layer (review 11, N5)
     let mut v: Vec<String> = n
         .items()
         .iter()
-        .filter(|c| c.head().is_some_and(|h| h.starts_with("fp_")) && on(c.find("layer").and_then(|l| l.arg(1))))
+        .filter(|c| c.head().is_some_and(|h| h.starts_with("fp_") || h == "property" || h == "dimension") && on(c.find("layer").and_then(|l| l.arg(1))))
         .map(|c| {
             let nums: Vec<String> = c.items().iter().filter(|k| ["start", "end", "mid", "center", "pts"].iter().any(|h| k.is(h))).map(|k| {
                 let mut out = vec![];
@@ -198,7 +199,8 @@ fn pad_rules(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
         .iter()
         .filter(|c| c.is("pad"))
         .map(|p| {
-            let get = |h: &str| p.find(h).map(|x| x.args().join(" ")).unwrap_or_default();
+            // as numbers, so 0.30 and 0.3 are the same (review 11, N4)
+            let get = |h: &str| p.find(h).map(|x| x.args().iter().map(|a| a.parse::<f64>().map(|v| format!("{v}")).unwrap_or(a.to_string())).collect::<Vec<_>>().join(" ")).unwrap_or_default();
             format!("{} zc {} cl {} tw {} tg {} ta {}", p.arg(1).unwrap_or(""), get("zone_connect"), get("clearance"), get("thermal_bridge_width"), get("thermal_gap"), get("thermal_bridge_angle"))
         })
         .collect();
@@ -206,26 +208,68 @@ fn pad_rules(b: &Board, f: &crate::board::Footprint) -> Vec<String> {
     v
 }
 
-/// Board graphics on copper layers (a `gr_poly` on F.Cu is copper, and may carry a net), as canonical text.
+/// Board items on copper layers that are not tracks, vias or zones (a `gr_poly` on F.Cu is copper and may carry a
+/// net; text, dimensions and targets there are copper too), each by its geometry: kind, layer, net, the points that
+/// place it, width (`width` or `stroke`), fill (`solid` and `yes` alike), text. A KiCad re-save writes the same
+/// graphic in other words; this key reads them alike (review 11, N4 and N5).
 fn copper_graphics(b: &Board) -> BTreeMap<String, usize> {
+    let num = |s: &str| s.parse::<f64>().map(|v| format!("{}", (v * 1000.0).round() / 1000.0)).unwrap_or(s.to_string());
     let mut m = BTreeMap::new();
-    for c in b.root.items().iter().filter(|c| c.head().is_some_and(|h| h.starts_with("gr_")) && c.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".Cu"))) {
-        let mut nums = vec![];
-        fn walk(x: &crate::sexpr::Node, out: &mut Vec<String>) {
-            if x.is("uuid") {
-                return;
-            }
-            for a in x.items() {
-                match a.atom() {
-                    Some(t) => out.push(t.parse::<f64>().map(|v| format!("{}", (v * 1000.0).round() / 1000.0)).unwrap_or(t.to_string())),
-                    None => walk(a, out),
+    for c in b.root.items().iter().filter(|c| {
+        c.head().is_some_and(|h| h.starts_with("gr_") || h == "dimension" || h == "target") && c.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".Cu"))
+    }) {
+        let mut k = vec![c.head().unwrap_or("").to_string(), c.find("layer").and_then(|l| l.arg(1)).unwrap_or("").to_string()];
+        k.push(format!("net {}", c.find("net").and_then(|x| x.arg(1)).unwrap_or("")));
+        if c.is("gr_text") {
+            k.push(format!("text {:?}", c.arg(1).unwrap_or("")));
+        }
+        for h in ["start", "end", "center", "mid", "at", "size"] {
+            if let Some(x) = c.find(h) {
+                let mut v: Vec<String> = x.args().iter().map(|a| num(a)).collect();
+                if h == "at" && v.len() == 2 {
+                    v.push("0".into());
                 }
+                k.push(format!("{h} {}", v.join(" ")));
             }
         }
-        walk(c, &mut nums);
-        *m.entry(nums.join(" ")).or_default() += 1;
+        if let Some(p) = c.find("pts") {
+            k.push(format!("pts {}", p.items().iter().filter(|q| q.is("xy")).map(|q| q.args().iter().map(|a| num(a)).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join(";")));
+        }
+        let w = c.find("width").or_else(|| c.find("stroke").and_then(|s| s.find("width"))).and_then(|w| w.arg(1)).map(num).unwrap_or_default();
+        k.push(format!("width {w}"));
+        let fill = match c.find("fill").and_then(|f| f.arg(1)) {
+            Some("solid") | Some("yes") => "yes",
+            _ => "no",
+        };
+        k.push(format!("fill {fill}"));
+        if c.is("dimension") || c.is("target") {
+            // any other numbers that place it
+            let mut all = vec![];
+            fn walk(x: &crate::sexpr::Node, out: &mut Vec<String>) {
+                if x.is("uuid") {
+                    return;
+                }
+                for a in x.items() {
+                    match a.atom() {
+                        Some(t) if t.parse::<f64>().is_ok() => out.push(t.to_string()),
+                        Some(_) => {}
+                        None => walk(a, out),
+                    }
+                }
+            }
+            walk(c, &mut all);
+            k.push(all.iter().map(|a| num(a)).collect::<Vec<_>>().join(" "));
+        }
+        *m.entry(k.join(" | ")).or_default() += 1;
     }
     m
+}
+
+/// A footprint's own rules for how copper meets its pads: zone connection and clearance (review 11, N5).
+fn fp_rules(b: &Board, f: &crate::board::Footprint) -> String {
+    let Ok(n) = crate::sexpr::parse(&b.src[f.span.0..f.span.1]) else { return String::new() };
+    let get = |h: &str| n.find(h).map(|x| x.args().iter().map(|a| a.parse::<f64>().map(|v| format!("{v}")).unwrap_or(a.to_string())).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    format!("zc {} cl {} tw {} tg {}", get("zone_connect"), get("clearance"), get("thermal_width"), get("thermal_gap"))
 }
 
 /// Footprints by reference; the k-th repeat of a reference keyed `REF#k`.
@@ -288,7 +332,7 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
                 let value = f.value != g.value;
                 let cuts = fp_graphics(a, f, false) != fp_graphics(b, g, false);
                 let cu = fp_graphics(a, f, true) != fp_graphics(b, g, true);
-                let pads = pads || (!flipped && pad_rules(a, f) != pad_rules(b, g));
+                let pads = pads || (!flipped && pad_rules(a, f) != pad_rules(b, g)) || fp_rules(a, f) != fp_rules(b, g);
                 if moved || turned || flipped || pads || lock || value || cuts || cu {
                     let what: Vec<&str> = [(moved, "moved"), (turned, "turned"), (flipped, "flipped"), (pads, "pads changed"), (lock && g.locked, "locked"), (lock && !g.locked, "unlocked"), (value, "value changed"), (cuts, "edge cuts changed"), (cu, "copper graphics changed")].iter().filter(|(c, _)| *c).map(|(_, w)| *w).collect();
                     footprints.push(FootprintChange { reference: r.to_string(), change: what.join(", "), from: Some([f.x, f.y, f.rot]), to: Some([g.x, g.y, g.rot]), side_from: Some(f.layer.clone()), side_to: Some(g.layer.clone()) });
@@ -374,7 +418,7 @@ pub fn diff(a: &Board, b: &Board, a_name: &str, b_name: &str) -> Diff {
     let (mut copper_graphics_added, mut copper_graphics_removed) = (vec![], vec![]);
     for k in ga.keys().chain(gb.keys()).collect::<BTreeSet<_>>() {
         let (na, nb) = (ga.get(k).copied().unwrap_or(0), gb.get(k).copied().unwrap_or(0));
-        let what = k.split(' ').take(1).collect::<Vec<_>>().join(" ");
+        let what = k.split(" | ").take(2).collect::<Vec<_>>().join(" ");
         for _ in nb..na {
             copper_graphics_removed.push(what.clone());
         }

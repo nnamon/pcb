@@ -13,7 +13,9 @@ mm = pcbnew.FromMM
 
 class B:
     def __init__(self, w=80, h=50, nets=("GND", "VCC", "N", "S")):
-        self.b = pcbnew.NewBoard("x.kicad_pcb")
+        # NewBoard writes a project beside the name it is given: keep it out of the working folder (review 11, N9)
+        import tempfile
+        self.b = pcbnew.NewBoard(os.path.join(tempfile.mkdtemp(prefix="pcb_r10_"), "x.kicad_pcb"))
         self.b.SetCopperLayerCount(2)
         self.nets = {}
         for name in nets:
