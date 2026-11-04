@@ -216,8 +216,22 @@ def m_hole_renamed(t):
     return t[:m.start()] + '(property "Reference" "H9"' + t[m.end():]
 
 
+def m_silk_drop(t):
+    # M3: one footprint silk line gone
+    m = first_line(t, r'^    \(fp_line [^\n]*\(layer "[FB]\.SilkS"\)\)\n')
+    return t[:m.start()] + t[m.end():]
+
+
+def m_silk_side(t):
+    # M3: one footprint silk line on the other side
+    m = first_line(t, r'^    \(fp_line [^\n]*\(layer "F\.SilkS"\)\)')
+    return t[:m.start()] + m.group(0).replace('"F.SilkS"', '"B.SilkS"') + t[m.end():]
+
+
 # mutation -> words the check it targets prints (review 5, 6: caught by its own check, not by any)
 MUT = {
+    m_silk_drop: "silk segment",
+    m_silk_side: "silk segment",
     m_pad_net: "net ",
     m_crtyd_side: "courtyard",
     m_via_net: "via missing",

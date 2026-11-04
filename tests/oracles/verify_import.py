@@ -17,7 +17,7 @@ Board facts (hole names, a back-side part's library pads) come from the fixture 
 import json
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 
 import pcbnew
 from shapely.geometry import Polygon
@@ -79,15 +79,19 @@ for t in d:
         ids = list(t.get("connected_source_port_ids", [])) + list(t.get("connected_source_net_ids", []))
         for a_, b_ in zip(ids, ids[1:]):
             parent[find(a_)] = find(b_)
+    # ports a part joins inside itself are one net (M3)
+    if t["type"] == "source_component_internal_connection":
+        ids = list(t.get("source_port_ids", []))
+        for a_, b_ in zip(ids, ids[1:]):
+            parent[find(a_)] = find(b_)
 group_name = {}
 for nid, name in sn.items():
     group_name.setdefault(find(nid), name)
 port_net = {}
 for t in d:
-    if t["type"] == "source_trace":
-        for p in t.get("connected_source_port_ids", []):
-            r_ = find(p)
-            port_net[p] = group_name.get(r_, ("anon", r_))
+    for p in t.get("connected_source_port_ids", []) if t["type"] == "source_trace" else t.get("source_port_ids", []) if t["type"] == "source_component_internal_connection" else []:
+        r_ = find(p)
+        port_net[p] = group_name.get(r_, ("anon", r_))
 trace_by_id = {t["source_trace_id"]: t for t in d if t["type"] == "source_trace"}
 anon_map = {}   # anonymous group -> the KiCad net name it got
 
@@ -288,10 +292,23 @@ for k in extra[:10]:
 names = {"top": "F.Cu", "bottom": "B.Cu"}
 
 
+# a net_name no source net has (an older router's, cut short) stands for the one net its traces' ends land on (M3);
+# landing on two or none leaves the name as written
+_landed = defaultdict(set)
+for t in d:
+    if t["type"] == "pcb_trace" and t.get("net_name") and t["net_name"] not in sn.values():
+        r = t.get("route", [])
+        for q in (r[:1] + r[-1:]):
+            for e in pp.values():
+                if abs(e["x"] - q["x"]) < 0.01 and abs(e["y"] - q["y"]) < 0.01 and e["source_port_id"] in port_net:
+                    _landed[t["net_name"]].add(port_net[e["source_port_id"]])
+renamed = {g: next(iter(v)) for g, v in _landed.items() if len(v) == 1}
+
+
 def trace_net_of(t):
-    """A trace's net: its net_name, else its source trace's group, else its end ports' group."""
+    """A trace's net: its net_name (or the net it stands for), else its source trace's group, else its end ports' group."""
     if t.get("net_name"):
-        return t["net_name"]
+        return renamed.get(t["net_name"], t["net_name"])
     st = trace_by_id.get(t.get("source_trace_id"))
     if st:
         ids = st.get("connected_source_port_ids", []) + st.get("connected_source_net_ids", [])
@@ -402,7 +419,7 @@ via_size = next(((v["outer_diameter"], v["hole_diameter"]) for v in d if v["type
 for v in d:
     if v["type"] == "pcb_via":
         # a via's net: its net_name, else the net of the traces with a route point there (review 2, 3)
-        net_v = v.get("net_name") or next((n_ for (px, py), n_ in point_net if abs(px - v["x"]) < 1e-3 and abs(py - v["y"]) < 1e-3), "")
+        net_v = renamed.get(v.get("net_name"), v.get("net_name")) or next((n_ for (px, py), n_ in point_net if abs(px - v["x"]) < 1e-3 and abs(py - v["y"]) < 1e-3), "")
         cj_vias.append((T(v["x"], v["y"]), v["outer_diameter"], v["hole_diameter"], net_v))
 for x_, y_, n_ in route_vias:
     # a via route point with no pcb_via there gets a via of the board's usual size (review 2, 1)
@@ -525,10 +542,42 @@ for part, spec in fx.get("import", {}).get("back_side", {}).items():
 
 # net sets: the source nets plus one KiCad name per anonymous group that has copper
 kc_nets = {str(n) for n in b.GetNetsByName().keys()} - {""}   # net 0 is KiCad's "no net"
-cj_nets = set(sn.values()) | {t_.get("net_name") for t_ in d if t_["type"] in ("pcb_trace", "pcb_via") and t_.get("net_name")} | set(anon_map.values())
+cj_nets = set(sn.values()) | {t_.get("net_name") for t_ in d if t_["type"] in ("pcb_trace", "pcb_via") and t_.get("net_name") and t_["net_name"] not in renamed} | set(anon_map.values())
 report["nets"] = {"circuit_json": len(cj_nets), "kicad": len(kc_nets), "only_in_cj": sorted(cj_nets - kc_nets), "only_in_kicad": sorted(kc_nets - cj_nets)}
 if cj_nets != kc_nets:
     err(f"net sets differ: {report['nets']['only_in_cj']} / {report['nets']['only_in_kicad']}")
+
+# silkscreen (M3): every JSON silk path segment and circle is a KiCad silk line or circle on the same side, same
+# ends or centre and radius, same width; and KiCad has no other silk lines or circles
+silk_layer = {"top": pcbnew.F_SilkS, "bottom": pcbnew.B_SilkS}
+kg = [g for g in b.GetDrawings() if g.GetLayer() in silk_layer.values()] + [g for f in b.GetFootprints() for g in f.GraphicalItems() if g.GetLayer() in silk_layer.values() and g.GetClass() != "PCB_TEXT"]
+kseg = [(g.GetLayer(), (mm(g.GetStart().x), mm(g.GetStart().y)), (mm(g.GetEnd().x), mm(g.GetEnd().y)), mm(g.GetWidth())) for g in kg if g.GetShape() == pcbnew.SHAPE_T_SEGMENT]
+kcir = [(g.GetLayer(), (mm(g.GetCenter().x), mm(g.GetCenter().y)), mm(g.GetRadius()), mm(g.GetWidth())) for g in kg if g.GetShape() == pcbnew.SHAPE_T_CIRCLE]
+used_s, used_c, n_silk = set(), set(), 0
+for e in d:
+    if e["type"] == "pcb_silkscreen_path":
+        r = e.get("route", [])
+        for a_, b_ in zip(r, r[1:]):
+            n_silk += 1
+            A, B = T(a_["x"], a_["y"]), T(b_["x"], b_["y"])
+            k = next((i for i, (l, s_, e_, w) in enumerate(kseg) if i not in used_s and l == silk_layer[e.get("layer", "top")] and abs(w - e.get("stroke_width", 0.15)) < TOL
+                      and ((near(s_, A) and near(e_, B)) or (near(s_, B) and near(e_, A)))), None)
+            if k is None:
+                err(f"silk segment {A}-{B} on {e.get('layer')} missing")
+            else:
+                used_s.add(k)
+    if e["type"] == "pcb_silkscreen_circle":
+        n_silk += 1
+        C_ = T(e["center"]["x"], e["center"]["y"])
+        k = next((i for i, (l, c_, rr, w) in enumerate(kcir) if i not in used_c and l == silk_layer[e.get("layer", "top")] and near(c_, C_) and abs(rr - e["radius"]) < TOL and abs(w - e.get("stroke_width", 0.15)) < TOL), None)
+        if k is None:
+            err(f"silk circle at {C_} on {e.get('layer')} missing")
+        else:
+            used_c.add(k)
+extra_silk = len(kseg) - len(used_s) + len(kcir) - len(used_c)
+report["silk"] = {"json": n_silk, "kicad": len(kseg) + len(kcir), "extra_in_kicad": extra_silk}
+if extra_silk:
+    err(f"{extra_silk} KiCad silk lines or circles not in the JSON")
 
 report["ok"] = not report.get("error_count")
 print(json.dumps(report, indent=1))

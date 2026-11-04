@@ -177,6 +177,42 @@ def n4_offcentre():
 def name_escape():
     c,i=base(); a=c.net('N"ET (x)\\'); c.strace([i["s2"],i["s3"]],[a]); return c
 
+# M3 (paddle-keyer): a part's internal connection, a router's net name the circuit lacks, silkscreen
+def two_holes_one_pin(c, joined):
+    # a USB-C shell: hole EH1 is pin 1, and a second hole for the same pin has no pin number, only the hint
+    sa,pa=c.comp("J1",0,5,0); g=c.net("G"); out=[]
+    for k,x in enumerate((0,3)):
+        sp,pp=c.port(sa,pa,"EH1" if k==0 else "pin1_internal_1",1 if k==0 else None,x,5)
+        hints=["EH1","pin1","1"] if k==0 else ["pin1_internal_1","pin1","1"]
+        c.add({"type":"pcb_plated_hole","pcb_component_id":pa,"pcb_port_id":pp,"shape":"circle","x":x,"y":5,"outer_diameter":1.6,"hole_diameter":0.8,"port_hints":hints})
+        out.append(sp)
+    c.strace([out[0]],[g])
+    if joined: c.add({"type":"source_component_internal_connection","source_component_internal_connection_id":"ic1","source_component_id":sa,"source_port_ids":out})
+    return c
+@case
+def m3_internal_connection():
+    c,i=base(); return two_holes_one_pin(c, True)
+@case
+def m3_internal_connection_missing():
+    c,i=base(); return two_holes_one_pin(c, False)
+@case
+def m3_foreign_net_name():
+    c,i=base(); a=c.net("A"); c.strace([i["s2"],i["s3"]],[a])
+    c.add({"type":"pcb_trace","pcb_trace_id":"t1","net_name":"Net-(R1","route":[wire(-4.5,0),wire(0,0)]})
+    c.add({"type":"pcb_trace","pcb_trace_id":"t2","net_name":"Net-(R1","route":[wire(0,0,"bottom"),wire(4.5,0,"bottom")]})
+    c.add({"type":"pcb_via","pcb_via_id":"v1","net_name":"Net-(R1","x":0,"y":0,"outer_diameter":0.6,"hole_diameter":0.3,"from_layer":"top","to_layer":"bottom"}); return c
+@case
+def m3_foreign_net_two_nets():
+    c,i=base(); a=c.net("A"); b=c.net("B"); c.strace([i["s2"]],[a]); c.strace([i["s3"]],[b])
+    c.add({"type":"pcb_trace","pcb_trace_id":"t1","net_name":"Net-(R1","route":[wire(-4.5,0),wire(4.5,0)]}); return c
+@case
+def m3_silkscreen():
+    c,i=base()
+    pa=[e for e in c.d if e["type"]=="pcb_component"][0]["pcb_component_id"]
+    c.add({"type":"pcb_silkscreen_path","pcb_silkscreen_path_id":"sp1","pcb_component_id":pa,"layer":"top","route":[{"x":-6,"y":1},{"x":-4,"y":1},{"x":-4,"y":-1}],"stroke_width":0.15})
+    c.add({"type":"pcb_silkscreen_circle","pcb_silkscreen_circle_id":"sc1","pcb_component_id":pa,"layer":"top","center":{"x":-6,"y":-1},"radius":0.2,"stroke_width":0.15})
+    c.add({"type":"pcb_silkscreen_path","pcb_silkscreen_path_id":"sp2","layer":"bottom","route":[{"x":0,"y":10},{"x":5,"y":10}],"stroke_width":0.2}); return c
+
 
 # case -> (outcome, words the refusal must contain)
 EXPECT = {
@@ -218,7 +254,19 @@ EXPECT = {
     'n5_closed_outline': ('done', None),
     'n4_offcentre': ('done', None),
     'name_escape': ('done', None),
+    'm3_internal_connection': ('done', None),
+    'm3_internal_connection_missing': ('refused', 'two pads numbered'),
+    'm3_foreign_net_name': ('done', None),
+    'm3_foreign_net_two_nets': ('refused', 'a short'),
+    'm3_silkscreen': ('done', None),
 }
+# what a done case's board must also hold, as (text that must appear, count)
+HOLDS = {
+    'm3_internal_connection': [('(pad "1" thru_hole', 2), ('(net "G")', 2)],
+    'm3_foreign_net_name': [('(net "A")', 5), ('Net-(R1', 0)],
+    'm3_silkscreen': [('(type solid)) (layer "F.SilkS")', 2), ('(fp_circle', 1), ('(layer "B.SilkS")', 1)],
+}
+WARNS = {'m3_foreign_net_name': 'net-renamed'}
 
 if __name__ == "__main__":
     pcb, work = sys.argv[1:3]
@@ -244,6 +292,12 @@ if __name__ == "__main__":
         elif got == "done":
             v = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_import.py"), cj, out], capture_output=True, text=True)
             results[name] = "ok" if v.returncode == 0 else f"verify_import failed: {v.stdout[-400:]}{v.stderr[-300:]}"
+            text = open(out).read()
+            for needle, count in HOLDS.get(name, []):
+                if text.count(needle) != count:
+                    results[name] = f"the board holds {needle!r} {text.count(needle)} times, expected {count}"
+            if name in WARNS and not any(w.get("code") == WARNS[name] for w in d.get("warnings", [])):
+                results[name] = f"no {WARNS[name]} warning"
         else:
             results[name] = "ok"
     bad = {k: v for k, v in results.items() if v != "ok"}

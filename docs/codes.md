@@ -39,6 +39,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `source-errors` | import-tscircuit | The circuit JSON has tscircuit error elements (counted by kind) |
 | `layer-count` | import-tscircuit | `--layers` differs from the JSON's `num_layers` |
 | `cross-net-allowed` | import-tscircuit | A trace allowed by `--allow-cross-net` ends on another net's port |
+| `net-renamed` | import-tscircuit | Traces or vias carry a net name the circuit has no net for, and land only on one net's ports; they are written on that net, which the message names |
 | `mechanical-pad` | import-tscircuit | A pad with no port was written as mechanical pad MP |
 | `no-freerouting` | doctor | No Freerouting jar was given |
 | `config-mismatch` | status | pcb.toml names a net, footprint, pad or layer the board lacks, or a different layer count |

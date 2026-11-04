@@ -1,9 +1,12 @@
 //! `pcb import-tscircuit`: write a KiCad 10 board from a tscircuit circuit JSON (the badge carrier's routed design).
 //!
-//! Carried over: the outline, nets, every footprint with its pads, holes and courtyard, the footprint type, the LCSC
-//! code and do-not-place flag, every trace segment and via, and the mounting holes. Not carried over: silkscreen,
-//! fabrication drawings, solder paste (KiCad derives paste from the pads; tscircuit's 70 % paste is a known trap)
-//! and copper pours (`pcb` makes pours as KiCad zones). Any other `pcb_*` element stops the import rather than being
+//! Carried over: the outline, nets (ports a part joins inside itself are one net), every footprint with its pads,
+//! holes, courtyard and silkscreen lines and circles, the footprint type, the LCSC code and do-not-place flag, every
+//! trace segment and via, board silkscreen lines and circles, and the mounting holes. A trace or via net name the
+//! circuit has no net for (an older router's, cut short) takes the one net its traces land on (`net-renamed`). Not
+//! carried over: silkscreen text and rectangles (tscircuit's strokes are too thin to print), fabrication drawings,
+//! solder paste (KiCad derives paste from the pads; tscircuit's 70 % paste is a known trap) and copper pours (`pcb`
+//! makes pours as KiCad zones). Any other `pcb_*` element stops the import rather than being
 //! dropped (review 1, S6).
 //!
 //! Coordinates: tscircuit is millimetres, y up. KiCad is millimetres, y down. The board's top-left corner lands at
@@ -84,7 +87,7 @@ fn turned(w: f64, h: f64, ccw: f64) -> Result<(f64, f64)> {
 const READ: &[&str] = &[
     "pcb_board", "pcb_component", "pcb_smtpad", "pcb_plated_hole", "pcb_hole", "pcb_courtyard_rect",
     "pcb_courtyard_outline", "pcb_trace", "pcb_via", "pcb_port", "source_component", "source_port", "source_net",
-    "source_trace",
+    "source_trace", "source_component_internal_connection", "pcb_silkscreen_path", "pcb_silkscreen_circle",
 ];
 const IGNORED_PREFIX: &[&str] = &[
     "pcb_silkscreen_", "pcb_fabrication_note_", "pcb_solder_paste", "pcb_copper_pour", "pcb_note_", "schematic_",
@@ -92,7 +95,7 @@ const IGNORED_PREFIX: &[&str] = &[
 ];
 
 fn ignored(t: &str) -> bool {
-    t.ends_with("_warning") || t.ends_with("_error") || IGNORED_PREFIX.iter().any(|p| t.starts_with(p)) || (t.starts_with("source_") && !READ.contains(&t))
+    !READ.contains(&t) && (t.ends_with("_warning") || t.ends_with("_error") || IGNORED_PREFIX.iter().any(|p| t.starts_with(p)) || (t.starts_with("source_") && !READ.contains(&t)))
 }
 
 pub struct Stats {
@@ -208,6 +211,13 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
             uf.find(&ids[0]);
         }
     }
+    // ports a part joins inside itself (a USB-C shell's two holes per pin) are one net (M3, paddle-keyer)
+    for c in by(&d, "source_component_internal_connection") {
+        let ids: Vec<String> = c.get("source_port_ids").and_then(|v| v.as_array()).cloned().unwrap_or_default().iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        for w in ids.windows(2) {
+            uf.join(&w[0], &w[1]);
+        }
+    }
     let src_port: HashMap<&str, &Value> = by(&d, "source_port").map(|e| (s(e, "source_port_id"), e)).collect();
     let src_comp: HashMap<&str, &Value> = by(&d, "source_component").map(|e| (s(e, "source_component_id"), e)).collect();
     // name of each group: its source net; two different source nets in one group is a short in the source
@@ -257,10 +267,42 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         let first = t.get("connected_source_port_ids").and_then(|v| v.as_array()).and_then(|a| a.first()).and_then(|v| v.as_str())?;
         port_net.get(first).cloned()
     };
+    // a trace net_name the circuit has no net for (an older router's name, cut short) takes the one net its traces'
+    // ends land on, warned (M3, paddle-keyer); landing on two nets is left to the short check below
+    let known: std::collections::HashSet<String> = group_name.values().cloned().collect();
+    let mut landed: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for t in by(&d, "pcb_trace") {
+        let given = s(t, "net_name");
+        if given.is_empty() || known.contains(given) {
+            continue;
+        }
+        let e = landed.entry(given.to_string()).or_default();
+        let route = t.get("route").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        for p in [route.first(), route.last()].into_iter().flatten() {
+            let (Some(px), Some(py)) = (f(p, "x"), f(p, "y")) else { continue };
+            for pp in pcb_port.values() {
+                let (Some(qx), Some(qy)) = (f(pp, "x"), f(pp, "y")) else { continue };
+                if let Some(pn) = port_net.get(s(pp, "source_port_id")) {
+                    if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 {
+                        e.insert(pn.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut renamed: HashMap<String, String> = HashMap::new();
+    for (g, set) in &landed {
+        if set.len() == 1 {
+            let to = set.iter().next().unwrap().clone();
+            warnings.push(crate::contract::warn("net-renamed", format!("traces and vias named {g}, a net the circuit does not have, land only on {to}: written as {to}")));
+            renamed.insert(g.clone(), to);
+        }
+    }
+    let rename = |g: &str| -> String { renamed.get(g).cloned().unwrap_or_else(|| g.to_string()) };
     // net of a trace (review 1, S3): net_name if given, else from its source trace or its end ports; a trace whose
     // net cannot be found stops the import
     let trace_net = |t: &Value| -> Result<String> {
-        let given = s(t, "net_name").to_string();
+        let given = rename(s(t, "net_name"));
         let derived = src_trace_net(s(t, "source_trace_id")).or_else(|| {
             ["start_pcb_port_id", "end_pcb_port_id"].iter().find_map(|k| {
                 let pp = pcb_port.get(s(t, k))?;
@@ -293,7 +335,8 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
         let mut found: Vec<&String> = point_nets.iter().filter(|((px, py), _)| (px - vx).abs() < 1e-3 && (py - vy).abs() < 1e-3).map(|(_, n_)| n_).collect();
         found.sort();
         found.dedup();
-        let given = s(v, "net_name");
+        let given = rename(s(v, "net_name"));
+        let given = given.as_str();
         match (given.is_empty(), found.as_slice()) {
             (_, [a, b, ..]) => bail!("via {} joins traces of nets {a} and {b}", s(v, "pcb_via_id")),
             (false, [a]) if a.as_str() != given => bail!("via {} has net_name {given} but its traces are {a}", s(v, "pcb_via_id")),
@@ -361,11 +404,11 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
     let mut items: HashMap<&str, Vec<&Value>> = HashMap::new();
     for e in d.iter() {
         let t = s(e, "type");
-        if matches!(t, "pcb_smtpad" | "pcb_plated_hole" | "pcb_hole" | "pcb_courtyard_rect" | "pcb_courtyard_outline") {
+        if matches!(t, "pcb_smtpad" | "pcb_plated_hole" | "pcb_hole" | "pcb_courtyard_rect" | "pcb_courtyard_outline" | "pcb_silkscreen_path" | "pcb_silkscreen_circle") {
             let c = s(e, "pcb_component_id");
             if !c.is_empty() {
                 items.entry(c).or_default().push(e);
-            } else if t != "pcb_hole" {
+            } else if t != "pcb_hole" && !t.starts_with("pcb_silkscreen_") {
                 bail!("{t} {} belongs to no component", s(e, &format!("{t}_id")));
             }
         }
@@ -619,11 +662,48 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                     }
                     let _ = writeln!(o, "    (fp_poly (pts{prim}) (layer {}) (width 0.05) (fill none))", q(crt));
                 }
+                // silkscreen on the footprint, as drawn (M3: the release carries it)
+                "pcb_silkscreen_path" => {
+                    let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
+                    let w = f(e, "stroke_width").unwrap_or(0.15);
+                    let pts: Vec<(f64, f64)> = e.get("route").and_then(|v| v.as_array()).context("silk route")?.iter().filter_map(|p| Some((f(p, "x")?, f(p, "y")?))).collect();
+                    for seg in pts.windows(2) {
+                        let (a, b) = (local(seg[0].0, seg[0].1), local(seg[1].0, seg[1].1));
+                        let _ = writeln!(o, "    (fp_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {}))", n(a.0), n(a.1), n(b.0), n(b.1), n(w), q(lay));
+                    }
+                }
+                "pcb_silkscreen_circle" => {
+                    let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
+                    let w = f(e, "stroke_width").unwrap_or(0.15);
+                    let (cx_, cy_) = (e.pointer("/center/x").and_then(|v| v.as_f64()).context("silk circle x")?, e.pointer("/center/y").and_then(|v| v.as_f64()).context("silk circle y")?);
+                    let r = f(e, "radius").context("silk circle radius")?;
+                    let c = local(cx_, cy_);
+                    let _ = writeln!(o, "    (fp_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill none) (layer {}))", n(c.0), n(c.1), n(c.0 + r), n(c.1), n(w), q(lay));
+                }
                 other => bail!("{reference}: element {other} not handled"),
             }
         }
         o.push_str("  )\n");
         st.footprints += 1;
+    }
+
+    // silkscreen that belongs to no footprint: board graphics
+    for e in by(&d, "pcb_silkscreen_path").filter(|e| s(e, "pcb_component_id").is_empty()) {
+        let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
+        let w = f(e, "stroke_width").unwrap_or(0.15);
+        let pts: Vec<(f64, f64)> = e.get("route").and_then(|v| v.as_array()).context("silk route")?.iter().filter_map(|p| Some((f(p, "x")?, f(p, "y")?))).collect();
+        for seg in pts.windows(2) {
+            let (a, b) = (x.pt(seg[0].0, seg[0].1), x.pt(seg[1].0, seg[1].1));
+            let _ = writeln!(o, "  (gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {}))", n(a.0), n(a.1), n(b.0), n(b.1), n(w), q(lay));
+        }
+    }
+    for e in by(&d, "pcb_silkscreen_circle").filter(|e| s(e, "pcb_component_id").is_empty()) {
+        let lay = if s(e, "layer") == "bottom" { "B.SilkS" } else { "F.SilkS" };
+        let w = f(e, "stroke_width").unwrap_or(0.15);
+        let (cx_, cy_) = (e.pointer("/center/x").and_then(|v| v.as_f64()).context("silk circle x")?, e.pointer("/center/y").and_then(|v| v.as_f64()).context("silk circle y")?);
+        let r = f(e, "radius").context("silk circle radius")?;
+        let c = x.pt(cx_, cy_);
+        let _ = writeln!(o, "  (gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill none) (layer {}))", n(c.0), n(c.1), n(c.0 + r), n(c.1), n(w), q(lay));
     }
 
     // board-level holes (mounting holes): tscircuit keeps no name for them, so they are H1, H2, ... in the order
