@@ -587,7 +587,12 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
                     rep.stitch_unfilled.push(format!("{}:{l}", st.net));
                 }
             }
-            let pts = stitch_points(&bf, st, &via_keepouts, &placed);
+            let mut pts = stitch_points(&bf, st, &via_keepouts, &placed);
+            if st.join {
+                let mut with: Vec<(f64, f64, f64)> = placed.clone();
+                with.extend(pts.iter().map(|(x, y)| (*x, *y, st.size_mm)));
+                pts.extend(join_points(&bf, st, &via_keepouts, &with, &pts));
+            }
             placed.extend(pts.iter().map(|(x, y)| (*x, *y, st.size_mm)));
             for (x, y) in &pts {
                 vias.push_str(&format!("\t(via (at {} {}) (size {}) (drill {}) (layers \"F.Cu\" \"B.Cu\") (net {}) (uuid \"{}\"))\n", n(*x), n(*y), n(st.size_mm), n(st.drill_mm), sexpr::quote(&st.net), stitch_uuid(&st.net, *x, *y)));
@@ -614,6 +619,95 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
 /// Grid points where a via of `st` sits inside the net's fill on every copper layer, its edge at least the margin
 /// inside each fill, clear of every pad's outline and every via (on the board, or placed by an earlier entry) by the
 /// margin, and outside keep-outs that forbid vias.
+/// Vias that join the net's fill pieces nothing else joins (`[[stitch]] join`): candidates on a 0.25 mm grid, each
+/// held to the rules `stitch_points` holds a grid via to; one is laid where it sits in pieces of two groups not yet
+/// connected by the net's pads, tracks, vias, the grid's vias (`grid`) or a via laid before it.
+fn join_points(b: &Board, st: &crate::project::Stitch, keepouts: &[Polygon<f64>], placed: &[(f64, f64, f64)], grid: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    use geo::Contains;
+    let fine = crate::project::Stitch { pitch_mm: 0.25, rect: st.rect, net: st.net.clone(), size_mm: st.size_mm, drill_mm: st.drill_mm, margin_mm: Some(0.05), join: false };
+    let cand = stitch_points(b, &fine, keepouts, placed);
+    // nodes: fill pieces, then pads, tracks and vias of the net
+    let pieces: Vec<(&String, Polygon<f64>)> = b.zones.iter().filter(|z| z.net == st.net).flat_map(|z| z.filled.iter()).map(|(l, pts)| (l, Polygon::new(LineString::from(pts.clone()), vec![]))).collect();
+    let pads: Vec<&Pad> = b.footprints.iter().flat_map(|f| f.pads.iter()).filter(|p| p.net == st.net).collect();
+    let tracks: Vec<&crate::board::Track> = b.tracks.iter().filter(|t| t.net == st.net).collect();
+    let mut vias: Vec<(f64, f64, f64)> = b.vias.iter().filter(|v| v.net == st.net).map(|v| (v.x, v.y, v.size)).collect();
+    vias.extend(grid.iter().map(|(x, y)| (*x, *y, st.size_mm)));
+    let (np, nd, nt) = (pieces.len(), pads.len(), tracks.len());
+    let mut parent: Vec<usize> = (0..np + nd + nt + vias.len()).collect();
+    fn find(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    let join = |p: &mut Vec<usize>, a: usize, c: usize| {
+        let (ra, rc) = (find(p, a), find(p, c));
+        p[ra] = rc;
+    };
+    let in_piece = |k: usize, layer: &str, x: f64, y: f64| pieces[k].0 == layer && pieces[k].1.contains(&Point::new(x, y));
+    let near = |a: (f64, f64), c: (f64, f64), d: f64| (a.0 - c.0).hypot(a.1 - c.1) <= d;
+    for (i, pd) in pads.iter().enumerate() {
+        for k in 0..np {
+            if on_layer(pd, pieces[k].0) && (in_piece(k, pieces[k].0, pd.x, pd.y) || pad_rect(pd).0.iter().any(|q| q.exterior().points().any(|c| pieces[k].1.contains(&c)))) {
+                join(&mut parent, np + i, k);
+            }
+        }
+    }
+    for (i, t) in tracks.iter().enumerate() {
+        for e in [(t.x0, t.y0), (t.x1, t.y1)] {
+            for k in 0..np {
+                if in_piece(k, &t.layer, e.0, e.1) {
+                    join(&mut parent, np + nd + i, k);
+                }
+            }
+            for (j, pd) in pads.iter().enumerate() {
+                if on_layer(pd, &t.layer) && pad_has(pd, e) {
+                    join(&mut parent, np + nd + i, np + j);
+                }
+            }
+            for (j, u) in tracks.iter().enumerate() {
+                if j != i && u.layer == t.layer && (near(e, (u.x0, u.y0), 1e-3) || near(e, (u.x1, u.y1), 1e-3)) {
+                    join(&mut parent, np + nd + i, np + nd + j);
+                }
+            }
+            for (j, v) in vias.iter().enumerate() {
+                if near(e, (v.0, v.1), v.2 / 2.0) {
+                    join(&mut parent, np + nd + i, np + nd + nt + j);
+                }
+            }
+        }
+    }
+    for (j, v) in vias.iter().enumerate() {
+        for k in 0..np {
+            if pieces[k].1.contains(&Point::new(v.0, v.1)) {
+                join(&mut parent, np + nd + nt + j, k);
+            }
+        }
+    }
+    let r = st.size_mm / 2.0;
+    let margin = st.margin_mm.unwrap_or(0.3);
+    let mut out: Vec<(f64, f64)> = vec![];
+    if std::env::var("PCB_DEBUG_JOIN").is_ok() {
+        let roots: std::collections::BTreeSet<usize> = (0..np).map(|k| find(&mut parent, k)).collect();
+        eprintln!("join: {np} pieces, {} groups, {} candidates", roots.len(), cand.len());
+    }
+    for (x, y) in cand {
+        if out.iter().any(|(vx, vy)| (x - vx).hypot(y - vy) < 2.0 * r + margin) {
+            continue;
+        }
+        let hit: Vec<usize> = (0..np).filter(|&k| pieces[k].1.contains(&Point::new(x, y))).collect();
+        let roots: std::collections::BTreeSet<usize> = hit.iter().map(|&k| find(&mut parent, k)).collect();
+        if roots.len() >= 2 {
+            for w in hit.windows(2) {
+                join(&mut parent, w[0], w[1]);
+            }
+            out.push((x, y));
+        }
+    }
+    out
+}
+
 fn stitch_points(b: &Board, st: &crate::project::Stitch, keepouts: &[Polygon<f64>], placed: &[(f64, f64, f64)]) -> Vec<(f64, f64)> {
     let r = st.size_mm / 2.0;
     let margin = st.margin_mm.unwrap_or(0.3);

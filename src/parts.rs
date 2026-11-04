@@ -228,7 +228,9 @@ pub fn solve(board: &[(String, f64, f64)], jlc: &[(String, f64, f64)]) -> Option
             best = Some((res, rot, t));
         }
     }
-    best.map(|(res, rot, t)| (rot, [(t[0] * 1e4).round() / 1e4, (t[1] * 1e4).round() / 1e4], res, by_number))
+    // to the micrometre, no negative zero
+    let um = |v: f64| (v * 1e3).round() / 1e3 + 0.0;
+    best.map(|(res, rot, t)| (rot, [um(t[0]), um(t[1])], res, by_number))
 }
 
 /// The checks (see the module documentation), from the cache.

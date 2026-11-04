@@ -132,6 +132,7 @@ fn main() -> Result<()> {
     s.py("check, gate and release cases", "tests/cases/release_cases.py", &[&pcb, &s.w("release_cases")]);
     s.py("review 13: zone probes", "tests/review13/check.py", &[&pcb, &s.w("review13")]);
     s.py("review 14: zone confirmation probes", "tests/review14/check.py", &[&pcb, &s.w("review14")]);
+    s.py("M4 cases: parts, sync, place, drawing", "tests/cases/m4_cases.py", &[&pcb, &s.w("m4_cases")]);
     s.py("review 15: check, gate, release and compare probes", "tests/review15/check.py", &[&pcb, &s.w("review15")]);
     match (&jar, s.fast) {
         (Some(j), false) => {
@@ -161,6 +162,9 @@ fn main() -> Result<()> {
 fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()> {
     let fx: toml::Value = toml::from_str(&std::fs::read_to_string(dir.join("fixture.toml"))?)?;
     let name = fx["fixture"]["name"].as_str().context("fixture name")?.to_string();
+    if fx.get("flow").is_some() {
+        return flow(s, dir, &fx, &name, pcb, jar);
+    }
     let ftoml = dir.join("fixture.toml").to_string_lossy().to_string();
     let cj = dir.join(fx["fixture"]["circuit_json"].as_str().context("circuit_json")?).to_string_lossy().to_string();
     let wd = s.work.join(&name);
@@ -379,6 +383,67 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             s.run(&format!("{name}: compare-gerbers with the ordered files"), pcb, &["--json", "compare-gerbers", &zip, &f("golden_gerbers"), "--explain", &f("explain"), "--board", &format!("{rdir}/board.kicad_pcb"), "--work", &w("compare_w")]);
             s.py(&format!("{name}: verify_release"), "tests/oracles/verify_release.py", &[&out, &f("golden_bom"), &f("golden_cpl"), pn, pv]);
             s.py(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&w("release_w/gerbers"), &format!("{rdir}/board.kicad_pcb"), &w("vmut")]);
+        }
+    }
+    Ok(())
+}
+
+/// A project's own flow (M4): a copy of the fixture folder, each `[flow] steps` command run on it in turn (`{p}` the
+/// copy, `{w}` a work folder per step), then the oracles: the board against the netlist and JLCPCB's footprints, the
+/// release against the golden BOM and CPL, the read-back's mutations, the drawing against the board and CPL.
+fn flow(s: &mut Suite, dir: &Path, fx: &toml::Value, name: &str, pcb: &str, jar: Option<&str>) -> Result<()> {
+    let f = &fx["flow"];
+    let wd = s.work.join(name);
+    if wd.exists() {
+        std::fs::remove_dir_all(&wd)?;
+    }
+    let p = wd.join("project");
+    std::fs::create_dir_all(&p)?;
+    copy_dir(dir, &p)?;
+    let ps = p.to_string_lossy().to_string();
+    let mut ok = true;
+    for (i, step) in f["steps"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).enumerate() {
+        if !ok {
+            break;
+        }
+        if step.starts_with("route ") && jar.is_none() {
+            s.skip(&format!("{name}: pcb {step}"), "no Freerouting (--fast)");
+            return Ok(());
+        }
+        let w = wd.join(format!("w{i}")).to_string_lossy().to_string();
+        let line = step.replace("{p}", &ps).replace("{w}", &w);
+        let mut args: Vec<&str> = vec!["--json"];
+        args.extend(line.split_whitespace());
+        let short = step.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        ok = s.run(&format!("{name}: pcb {short}"), pcb, &args);
+    }
+    if !ok {
+        return Ok(());
+    }
+    let net = wd.join("netlist.net").to_string_lossy().to_string();
+    let sch = p.join("schematic/paddle-keyer.kicad_sch");
+    let _ = Command::new("kicad-cli").args(["sch", "export", "netlist", "--format", "kicadsexpr", "-o", &net]).arg(&sch).output();
+    let board = p.join("board.kicad_pcb").to_string_lossy().to_string();
+    s.py(&format!("{name}: verify_sync"), "tests/oracles/verify_sync.py", &[&board, &net, &format!("{ps}/parts"), &format!("{ps}/pcb.toml")]);
+    let pt: toml::Value = toml::from_str(&std::fs::read_to_string(p.join("pcb.toml"))?)?;
+    let (pn, pv) = (pt["project"]["name"].as_str().unwrap_or(""), pt["project"]["version"].as_str().unwrap_or(""));
+    let g = |k: &str| f.get(k).and_then(|v| v.as_str()).map(|v| dir.join(v).to_string_lossy().to_string()).unwrap_or_default();
+    let rel = format!("{ps}/release");
+    s.py(&format!("{name}: verify_release against v1.0.0's BOM and CPL"), "tests/oracles/verify_release.py", &[&rel, &g("golden_bom"), &g("golden_cpl"), pn, pv]);
+    s.py(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&wd.join(format!("w{}/gerbers", 9)).to_string_lossy(), &board, &wd.join("vmut").to_string_lossy()]);
+    s.py(&format!("{name}: verify_drawing"), "tests/oracles/verify_drawing.py", &[&format!("{ps}/drawings"), &board, &format!("{rel}/{pn}_v{pv}_CPL.csv")]);
+    Ok(())
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let t = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            std::fs::create_dir_all(&t)?;
+            copy_dir(&e.path(), &t)?;
+        } else {
+            std::fs::copy(e.path(), &t)?;
         }
     }
     Ok(())

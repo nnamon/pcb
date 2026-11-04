@@ -41,6 +41,56 @@ kind = "silk_over_copper"
 max = 2
 why = "neighbouring parts' outlines cross pads; JLCPCB clips silkscreen off exposed copper"
 
+# pcb check's DRC findings the same layout went out with on v1.0.0, reviewed at its Gate 2
+[[waiver]]
+check = "drc"
+item = "courtyards_overlap <no net>"
+max = 8
+why = "v1.0.0's places; bodies checked at its Gate 2 against bodies.json"
+
+[[waiver]]
+check = "drc"
+item = "hole_clearance <no net> GND"
+max = 2
+why = "J1's own GND pads sit 0.2 mm from its own NPTH pegs, as JLCPCB's footprint draws them"
+
+[[waiver]]
+check = "drc"
+item = "silk_edge_clearance <no net>"
+max = 9
+why = "the connectors' body outlines on silkscreen run to the edge they overhang; JLCPCB clips silkscreen at the edge"
+
+[[waiver]]
+check = "drc"
+item = "silk_over_copper <no net>"
+max = 2
+why = "neighbouring parts' outlines cross pads; JLCPCB clips silkscreen off exposed copper"
+
+[[waiver]]
+check = "drc"
+item = "silk_over_copper <no net> GND"
+max = 2
+why = "neighbouring parts' outlines cross pads; JLCPCB clips silkscreen off exposed copper"
+
+[[waiver]]
+check = "drc"
+item = "silk_over_copper <no net> LED_R"
+max = 1
+why = "neighbouring parts' outlines cross pads; JLCPCB clips silkscreen off exposed copper"
+
+[[waiver]]
+check = "drc"
+item = "silk_over_copper <no net> TIP"
+max = 2
+why = "neighbouring parts' outlines cross pads; JLCPCB clips silkscreen off exposed copper"
+
+# the same silkscreen crossings, as the release reads them back from the Gerbers
+[[waiver]]
+check = "dfm"
+item = "silk_on_copper F.Silk"
+max = 3
+why = "neighbouring parts' outlines cross pads (the silk_over_copper findings above); JLCPCB clips silkscreen off exposed copper"
+
 [nets.VBUS]
 current_a = 0.5
 [nets.V3V3]
@@ -53,6 +103,15 @@ net = "GND"
 layers = ["F.Cu", "B.Cu"]
 clearance_mm = 0.25
 min_width_mm = 0.25
+connect = "solid"
+
+# GND vias joining the two pours: a 2.5 mm grid, and wherever one joins pieces nothing else joins
+[[stitch]]
+net = "GND"
+pitch_mm = 2.5
+join = true
+size_mm = 0.6
+drill_mm = 0.3
 
 [[paste]]
 pad = "U1.57"

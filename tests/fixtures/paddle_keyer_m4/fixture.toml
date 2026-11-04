@@ -1,0 +1,23 @@
+# paddle-keyer from its KiCad schematic to an order through pcb alone: the M4 gate. No circuit JSON and no per-board
+# code: the flow is pcb's own commands on the project in this folder, in this order
+[fixture]
+name = "paddle_keyer_m4"
+
+[flow]
+# {p} is the project folder (a copy of this one), {w} a work folder per step
+steps = [
+  "sync --project {p} --work {w}",
+  "place --project {p} --work {w}",
+  "route {p}/board.kicad_pcb --region 0,0,200,200 --passes 100 --work {w}",
+  "zone --project {p} --work {w}",
+  "paste --project {p} --work {w}",
+  "art --project {p} --work {w}",
+  "parts --project {p} --work {w}",
+  "check --project {p} --work {w}",
+  "gate pass layout --project {p} --work {w}",
+  "release --project {p} -o {p}/release --work {w}",
+  "drawing placement --project {p} -o {p}/drawings",
+]
+# the release must place every part where paddle-keyer v1.0.0's order placed it, with the same LCSC parts
+golden_bom = "../paddle_keyer_v1/golden/paddle-keyer_v1.0.0_BOM.csv"
+golden_cpl = "../paddle_keyer_v1/golden/paddle-keyer_v1.0.0_CPL.csv"

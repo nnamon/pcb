@@ -323,9 +323,61 @@ On the zoned badge fixture with the 4-layer JLCPCB rules, `pcb check` finds what
 
 The CI image with gerbonara (image 8) is built by the image workflow when this branch is pushed; the same layer on image 7 passes the whole suite locally.
 
+## Netlist and placement (milestone M4)
+
+The flow for a new board, every step pcb's: `parts --live` (once, and again before ordering), `sync`, `place`, `route`, `zone`, `paste`, `art`, `check`, `gate pass`, `release`, `drawing placement`.
+
+### `pcb parts [--live]`
+
+The cache is `parts/` beside pcb.toml, committed with the project: `<LCSC>.easyeda.json` (the EasyEDA component, JLCPCB's footprint and symbol, from lceda.cn, which serves the same library when easyeda.com refuses) and `<LCSC>.jlc.json` (`fetched` date and the JLCPCB parts record: library type, `componentProductType`, stock). `--live` fetches every part the board or the netlist has; without it nothing reads the network, so every test runs from the cache. The checks: a part with no data or not listed (`missing`), stock under `[assembly] boards` (default 5) times the part's count (`stock`), `componentProductType` 2 (`economic`, Standard assembly only). Warnings: stock under 20 times the need or 1000 (`buy-ahead`), Extended parts (`extended-parts`), data over 30 days old (`parts-stale`).
+
+With a board, each assembled top-side part's pads are matched to JLCPCB's footprint over the four quarter turns, by pad number when the numbers are the same and by shape otherwise. The turn and where JLCPCB's origin lands are the rotation and CPL offsets; they must equal `[parts.<LCSC>]` (zero when there is none), and the pads must land within 0.05 mm (0.15 mm for two-pad parts). On paddle-keyer v1.0.0's tscircuit board this reproduces the offsets its order was solved with: J1 [0, 0.125] and J2 [-0.1, 0], and none for the RP2040's QFN-56, the SOT-23s and the passives (P8).
+
+`pcb release` runs the same checks from the cache when `parts/` exists: findings are release problems, warnings the release's (P9); without a cache it warns `parts-unchecked`.
+
+### `pcb sync`
+
+The circuit is `project.netlist`: a KiCad schematic (exported with `kicad-cli sch export netlist`) or a `.net`. Each part's footprint:
+- with an LCSC code, JLCPCB's own, converted from the cache (`src/easyeda.rs`: rectangle, oval, polygon and turned pads, plated holes and slots, unplated holes, silkscreen lines, arcs and circles, a courtyard round the pads and the body outline). Its origin is JLCPCB's placement point, so the CPL needs no offsets;
+- a Footprint field `LIB:NAME` with `footprints/NAME.kicad_mod` beside pcb.toml: that footprint (test pads, for example).
+
+Every connected pin must be a pad of the footprint (`pin-missing`), and its name must match JLCPCB's symbol, or `[parts.<LCSC>] pins` (from the datasheet) where JLCPCB's is wrong (`pin-name`). Names match ignoring case, punctuation and active-low marks, a number that only tells repeated pins apart (DVDD1 and DVDD), the `_<pin>` KiCad's netlist adds, and the usual synonyms (VSS and GND, anode and A, cathode and K, + and POS, - and NEG); a name that is only the pin number is not compared. paddle-keyer's XC6206 is the case: JLCPCB's symbol for C5446 has VIN and VOUT the wrong way round, so sync refuses until pcb.toml gives the datasheet's pins (P7).
+
+A part not on the board is added beside the outline for `pcb place`; a part whose footprint changed is replaced where it stands; a part the circuit dropped is removed (refused when locked). Each pad gets its pin's net; a pin alone on its net gets none. Copper on a net whose pads change is refused (`sync-copper`) unless `--rip`, which removes and lists it. A new board gets `[outline]` (a GeoJSON polygon about its own centre, or `rect_mm`) and a project file whose DRC ignores silkscreen touching silkscreen (cosmetic, and dense boards pass KiCad's listing limit with it). The written board is read back: every pad must carry the circuit's net.
+
+`src/footprint.rs` places a footprint's text: pad and text angles are absolute in KiCad 10, so a turn adds to them; the back is the library footprint mirrored in y (local y, angles and F/B layers), then turned, as `pcb doctor` checks KiCad does.
+
+### `pcb place`
+
+`[[place]]` entries give each part's footprint origin in the board's centred frame (mm, y up), its rotation (KiCad's angle) and side; for a JLCPCB footprint these are exactly the CPL's numbers. Refused before anything is written: moving a locked part (`locked = true` locks it once placed), an assembled part on a side the assembler does not place (`side`, P17), pads off the outline (`off-board`), pads in a keep-out that forbids footprints (`keepout`), and a part covering a plated through-hole pad of a part on the other side (`plated-pad`, the C125-on-J101 case, P16). Tracks ending on a moved part's pads are removed with every track and via that hangs from them alone, and listed (P18). The board goes through the gate with the owner's `[[drc_allow]]`, the ripped nets allowed to open.
+
+### Routing additions
+
+- `pcb route --attempts N` runs Freerouting N times and keeps the run with fewest nets open.
+- With no nets named, every net with pads in the region (but the plane nets) is judged open or not, and listed in `still_open`.
+- Zone nets are plane nets to the router: a fill its tracks cut apart, or a stitching via they cut off, is reported `plane-split` and left to the next `pcb zone`, not a regression. `--no-zones` hides the zones from the router so it routes their nets as tracks.
+- The DSN gains a via-to-via clearance from the board's hole-to-hole minimum (Freerouting knows no hole rule) and a boundary drawn in by the copper-to-edge minimum less the router's own clearance. Without the boundary inset Freerouting left paddle-keyer with five to seven connections open; with it, the whole board routes in one run.
+
+### `[[stitch]] join`
+
+Besides the grid, a via wherever one fits in two of the net's fill pieces that its pads, tracks and vias do not already join (candidates on a 0.25 mm grid, held 0.05 mm inside the fills).
+
+### `pcb drawing placement`
+
+The Gate 1 placement proposal in the house style (`docs/drawing-standard.md`): three A3 sheets as SVG (true size), PNG previews at 150 dpi and one PDF (svg2pdf, a page per sheet, 420 x 297 mm). Sheet 1: the top view at the largest of 5:1, 4:1, 2:1, 1:1, 1:2 and 1:5 that fits, every top part (pads, courtyard, pin-1 mark, designator), plated pads of bottom parts, keep-outs hatched, overall dimensions, ordinates from datum A for `[drawing] ordinates` (default: connectors, switches and mounting holes), leader notes (`[[drawing.leader]]`), legend and numbered notes. Sheet 2: the bottom view seen from below, top-side plated pads in grey, and the stack-up section. Sheet 3: the placement table (REF, X, Y from datum A, ROT, SIDE, LCSC, MPN from the cache). Text never overlaps: ordinates and leaders are spread, and a designator that would cross other text is drawn smaller down to 0.6 mm, then left off the view (`labels-omitted`; the table lists it). The outcome is rejected if any two texts overlap.
+
+### The M4 gate: paddle-keyer from netlist to order
+
+Fixture `paddle_keyer_m4`: a KiCad schematic of paddle-keyer (made once by `make_fixture.py` from its v1.0.0 netlist with the netlist's pin names; tscircuit's own KiCad export lost 31 of 45 nets), the parts cache, two test-pad footprints, the outline and pcb.toml with v1.0.0's places. The suite runs the flow above on a copy with no per-board code and checks:
+- `verify_sync.py`: every pad on its netlist net, every JLCPCB pad where JLCPCB's footprint puts it, every part at its `[[place]]`;
+- `verify_release.py` against v1.0.0's ordered BOM and CPL: the same LCSC part for every designator, and every part at the same CPL place and rotation, within 1 um (the CPL is v1.0.0's, to the digit);
+- the read-back mutations on the released Gerbers, and `verify_drawing.py` (sheet sizes, the table against the CPL, ordinates against the board, no text overlapping).
+
+The routing is Freerouting's and differs from v1.0.0's; pcb check finds the DRC items v1.0.0 went out with (courtyards and silkscreen against JLCPCB's footprints), waived in the fixture with v1.0.0's reasons.
+
 ## Planning drawings
 
-`pcb drawing placement` writes the Gate 1 placement proposal in the house drawing style, written down in `docs/drawing-standard.md` from the badge's NNDC27-CAR-PLC-001 (A3 at 1:1, zoned frame, title block, datum A ordinates, leaders, mirrored bottom view with a stack-up section, placement table). All its facts come from the board and `pcb.toml [drawing]`. Milestone M4 in the proposal.
+`pcb drawing placement` writes the Gate 1 placement proposal in the house drawing style, written down in `docs/drawing-standard.md` from the badge's NNDC27-CAR-PLC-001 (A3 at 1:1, zoned frame, title block, datum A ordinates, leaders, mirrored bottom view with a stack-up section, placement table). All its facts come from the board and `pcb.toml [drawing]`. Built in M4: see "Netlist and placement".
 
 ## Engineering choices
 
@@ -384,7 +436,7 @@ The original six phases became five milestones in the proposal ("pcb tool: propo
 | M1 Project file and explicit edits | `pcb.toml`, `init`, `status`; `edit` and `diff` through the write gate; `route --width`, `--prewire` | Every M1 command passes its cases, oracles and mutations; review closed and confirmed |
 | M2 Zones | `pcb zone`: planes, pours, power fills, keep-outs, net ties, pad overrides, stitching vias | The spike 3 oracle passes on the Rust version; the badge's J102 thermal and GND vias as cases; review closed and confirmed |
 | M3 Check and release | `pcb check` (fab rule sets, path width, ratings, paste, bring-up), `pcb gate`, `pcb release` | The paddle-keyer package matches the files it was ordered with; badge 0.5.0 checked through `pcb` |
-| M4 Netlist and placement | `pcb sync` with pin-name checks, `pcb parts`, `pcb place`, `pcb drawing`, locks | paddle-keyer from netlist to order with no per-board code |
+| M4 Netlist and placement | `pcb sync` with pin-name checks, `pcb parts`, `pcb place`, `pcb drawing`, locks | paddle-keyer from netlist to order with no per-board code (see "Netlist and placement") |
 
 **The tool before the boards** (owner, 4 Nov 2026). Every gate is judged on the tool alone. Real boards serve as fixtures, and their hard spots become cases, but no board's design work (the badge's ILM, VBUS_F and J102 fixes, its release) is done until M4 closes.
 

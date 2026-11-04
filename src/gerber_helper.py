@@ -100,7 +100,11 @@ def prim_shape(p):
     if isinstance(p, Arc):
         p = p.to_arc_poly()
     if isinstance(p, ArcPoly):
-        pts = [tuple(q) for q, _, _ in p.approximate_arcs().segments]
+        try:
+            pts = [tuple(q) for q, _, _ in p.approximate_arcs().segments]
+        except ZeroDivisionError:
+            # an arc of no radius (KiCad writes one for a zero-length arc): its end points are the shape
+            pts = [tuple(q) for q in p.outline]
         return Polygon(pts).buffer(0) if len(pts) >= 3 else None
     raise TypeError(f"gerber primitive {type(p).__name__}")
 

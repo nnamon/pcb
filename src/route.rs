@@ -49,6 +49,11 @@ pub struct Opts {
     pub prewire: Vec<crate::edit::Op>,
     /// Seconds before Freerouting is stopped.
     pub timeout_s: u64,
+    /// Freerouting runs, the best kept (fewest nets open).
+    pub attempts: u32,
+    /// Leave the copper zones out of what the router sees, so it routes their nets as tracks (`--no-zones`): a net
+    /// whose pads its pours cannot reach. The zones stay on the board.
+    pub no_zones: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -93,6 +98,8 @@ pub struct Report {
     pub pruned_segments: usize,
     /// Requested nets that KiCad still reports as not fully connected after the route.
     pub still_open: Vec<String>,
+    /// Zone nets whose fills the new tracks left in more pieces (`plane-split`): run pcb zone again.
+    pub plane_split: Vec<String>,
     /// Nets routed wider than the default, at their existing tracks' most common width (mm).
     pub net_widths: BTreeMap<String, f64>,
     /// Where the result went: the output, or `<output>.rejected.kicad_pcb` when DRC found a new violation.
@@ -423,6 +430,44 @@ fn via_spacing(dsn: &str, board: &Path) -> Result<String> {
     e.apply(dsn)
 }
 
+/// The board boundary in the DSN drawn in by the copper-to-edge minimum less the clearance the router keeps from
+/// it anyway (M4: Freerouting kept 0.15 mm from paddle-keyer's edge, under JLCPCB's 0.3 mm).
+fn edge_inset(dsn: &str, board: &Path) -> Result<String> {
+    use geo::{Buffer, LineString, Polygon};
+    let pro = board.with_extension("kicad_pro");
+    let edge = std::fs::read_to_string(&pro).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.pointer("/board/design_settings/rules/min_copper_edge_clearance").and_then(|x| x.as_f64()));
+    let Some(edge) = edge.filter(|e| *e > 0.0) else { return Ok(dsn.to_string()) };
+    let root = sexpr::parse(dsn)?;
+    let Some(structure) = root.find("structure") else { return Ok(dsn.to_string()) };
+    let Some(rule) = structure.find("rule") else { return Ok(dsn.to_string()) };
+    let clear = rule.find("clearance").and_then(|c| c.num(1)).unwrap_or(0.0);
+    let inset = edge * 1000.0 - clear;
+    if inset <= 0.0 {
+        return Ok(dsn.to_string());
+    }
+    let mut e = Edits::default();
+    for bd in structure.find_all("boundary") {
+        let Some(path) = bd.find("path") else { continue };
+        let nums: Vec<f64> = path.items()[3..].iter().filter_map(|x| x.atom().and_then(|a| a.parse().ok())).collect();
+        if nums.len() < 6 {
+            continue;
+        }
+        let ring: Vec<(f64, f64)> = nums.chunks(2).map(|c| (c[0], c[1])).collect();
+        let poly = Polygon::new(LineString::from(ring), vec![]);
+        let inner = poly.buffer(-inset);
+        let Some(q) = inner.0.iter().max_by(|a, b| {
+            use geo::Area;
+            a.unsigned_area().partial_cmp(&b.unsigned_area()).unwrap()
+        }) else {
+            continue;
+        };
+        let pts: Vec<String> = q.exterior().coords().map(|c| format!("{} {}", n((c.x * 10.0).round() / 10.0), n((c.y * 10.0).round() / 10.0))).collect();
+        let head: Vec<&str> = path.items()[..3].iter().filter_map(|x| x.atom()).collect();
+        e.replace(path.span, format!("({} {} {}  {})", head[0], head[1], head[2], pts.join("  ")));
+    }
+    e.apply(dsn)
+}
+
 /// Move every net not in `nets` into a sibling of its class, with the same rule, and return the new classes'
 /// names for `--router.autorouter.ignore_net_classes`. Freerouting otherwise tries every open connection on the
 /// board, all of them behind the region's keep-outs; 2.5 spent over 9 minutes on the badge doing that. A class
@@ -714,6 +759,11 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
 
     // 1. scratch copy: lock outside, remove unlocked inside
     let mut scratch = Edits::default();
+    if o.no_zones {
+        for z in b.root.items().iter().filter(|z| z.is("zone") && z.find("net").and_then(|n| n.arg(1)).is_some_and(|n| !n.is_empty())) {
+            remove(&mut scratch, src, z.span);
+        }
+    }
     let mut final_edits = Edits::default();
     for t in &b.tracks {
         if rip_track(t) {
@@ -762,13 +812,14 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     rep.net_widths = widths;
     let (dsn_text, ignored) = ignore_other_nets(&dsn_text, &o.nets)?;
     let dsn_text = via_spacing(&dsn_text, Path::new(board_path))?;
+    let dsn_text = edge_inset(&dsn_text, Path::new(board_path))?;
     // Freerouting 1.9 hung on a dialog for any non-ASCII character; 2.5 runs headless, but the session must still
     // match the board's names, so the DSN stays ASCII
     let dsn_text: String = dsn_text.chars().map(|c| if c.is_ascii() { c } else { '_' }).collect();
     let (dsn_keep, routable) = keepouts(&dsn_text, &scratch_board, Some(r), &o.layers)?;
     let (dsn_open, _) = keepouts(&dsn_text, &scratch_board, None, &o.layers)?;
     std::fs::write(&dsn, &dsn_keep)?;
-    let mut plane_nets: Vec<String> = b.zones.iter().map(|z| z.net.clone()).filter(|n| !n.is_empty()).collect();
+    let mut plane_nets: Vec<String> = b.zones.iter().filter(|_| !o.no_zones).map(|z| z.net.clone()).filter(|n| !n.is_empty()).collect();
     plane_nets.sort();
     plane_nets.dedup();
 
@@ -1055,14 +1106,28 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         }
 
         // 5e. requested nets whose pads this copper leaves in more than one piece
-        let open = open_nets(&o.nets, &segs, &alive, &all_vias, &pads, &b.zones);
+        // with no nets named, every net with pads in the region that is not a plane net
+        let judged: Vec<String> = if o.nets.is_empty() {
+            let mut v: Vec<String> = pads.iter().filter(|p| !p.net.is_empty() && inside(ri, p.x, p.y) && !plane_nets.contains(&p.net)).map(|p| p.net.clone()).collect();
+            v.sort();
+            v.dedup();
+            v
+        } else {
+            o.nets.clone()
+        };
+        let open = open_nets(&judged, &segs, &alive, &all_vias, &pads, &b.zones);
         Ok(Laid { rep, edits: final_edits, new_text, open })
     };
     // Freerouting's insertion step can fail on a path its search found (the badge's PMUX_SS, 2.5.0: "insert trace
     // failed" at a 0.15 mm gap), and whether it does depends on how the keep-outs cut the board into rooms. So when
     // named nets are left open, the router runs once more with no region keep-outs; copper it lays outside the
     // region is still dropped, so that attempt can only win by closing nets inside the region.
-    let plan: &[(bool, &str)] = if o.nets.is_empty() { &[(true, "region")] } else { &[(true, "region"), (false, "open")] };
+    // Freerouting 2.5 runs its passes on several threads and does not give the same result twice, so `--attempts N`
+    // runs it N times and keeps the run that leaves fewest nets open (M4: paddle-keyer from scratch)
+    let mut plan: Vec<(bool, String)> = (0..o.attempts.max(1)).map(|k| (true, if k == 0 { "region".to_string() } else { format!("region{}", k + 1) })).collect();
+    if !o.nets.is_empty() {
+        plan.push((false, "open".to_string()));
+    }
     let mut laids: Vec<(usize, Laid)> = vec![];
     for (i, (keep, tag)) in plan.iter().enumerate() {
         let laid = match attempt(*keep, tag) {
@@ -1095,18 +1160,26 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // When the preferred run makes the board worse and the other run does not, the other run is kept: a run that
     // closes a net but adds a violation must not cost a result the first run would have given (review 8, 17).
     let has_zones = !b.zones.is_empty();
+    // the router leaves zone nets to their zones (plane nets), so a fill its tracks cut in two is the next pcb zone's
+    // to join (stitching vias) and pcb check's to judge: reported, not a regression (M4, paddle-keyer's GND)
+    // a stitching via the new tracks cut from its fill likewise: pcb zone lays the stitching again
+    let plane_allow: Vec<crate::project::DrcAllow> = plane_nets
+        .iter()
+        .flat_map(|n| ["unconnected_items", "via_dangling"].map(|k| crate::project::DrcAllow { kind: k.into(), nets: vec![n.clone()], max: usize::MAX, why: "a plane net, joined by its zones".into() }))
+        .collect();
+    let finish = |t: &str| gate.finish_allowing(t, out_path, has_zones, &plane_allow);
     let mut chosen = 0;
-    let mut g = gate.finish(&text_of(&laids[0].1)?, out_path, has_zones)?;
+    let mut g = finish(&text_of(&laids[0].1)?)?;
     if !g.regressions.is_empty() && laids.len() > 1 {
         let rejected = g.written.clone();
-        let g2 = gate.finish(&text_of(&laids[1].1)?, out_path, has_zones)?;
+        let g2 = finish(&text_of(&laids[1].1)?)?;
         if g2.regressions.is_empty() {
             crate::gate::remove_result(&rejected);
             g = g2;
             chosen = 1;
         } else {
             // both worse: report, and leave in .rejected, the preferred run
-            g = gate.finish(&text_of(&laids[0].1)?, out_path, has_zones)?;
+            g = finish(&text_of(&laids[0].1)?)?;
         }
     }
     let lr = &laids[chosen].1.rep;
@@ -1123,6 +1196,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     rep.freerouting_log = lr.freerouting_log.clone();
     rep.fixed = g.fixed;
     rep.regressions = g.regressions;
+    rep.plane_split = g.allowed;
     rep.drc_total_before = g.total_before;
     rep.drc_total_after = g.total_after;
     // requested nets (every net, when none were named) KiCad still reports as not connected
@@ -1130,7 +1204,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         let (kind, nets) = kicad::key_parts(k);
         if kind == "unconnected_items" {
             for net in &nets {
-                if (o.nets.is_empty() || o.nets.iter().any(|x| x == net)) && !net.is_empty() && !rep.still_open.contains(&net.to_string()) && *v > 0 {
+                if (o.nets.is_empty() || o.nets.iter().any(|x| x == net)) && !net.is_empty() && !plane_nets.iter().any(|p| p == net) && !rep.still_open.contains(&net.to_string()) && *v > 0 {
                     rep.still_open.push(net.to_string());
                 }
             }

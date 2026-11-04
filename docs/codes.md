@@ -37,6 +37,22 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `gerbonara` | failed | The Gerber helper (python3 with gerbonara and shapely) failed | Read the message's traceback |
 | `sha256sum` | failed | `sha256sum` could not run for the release checksums | Install coreutils |
 | `io` | failed | A file that exists could not be read, or one could not be written | Check the path and permissions |
+| `netlist` | refused | The netlist (or the schematic's) cannot be read, or two parts share a reference or one is not annotated | Annotate the schematic; check the file |
+| `footprint` | refused | `pcb sync`: a part has neither an LCSC code nor a project footprint (`footprints/NAME.kicad_mod` for its Footprint field `LIB:NAME`) | Give the symbol an LCSC field or a project footprint |
+| `pin-missing` | refused | `pcb sync`: the netlist connects a pin number the footprint has no pad for | Fix the symbol's pin numbers to the footprint's pads |
+| `pin-name` | refused | `pcb sync`: a connected pin's name differs from JLCPCB's symbol (or `[parts.<LCSC>] pins`); the XC6206 trap | Check the datasheet; fix the schematic, or give the datasheet's names in `[parts.<LCSC>] pins` |
+| `sync-copper` | refused | `pcb sync`: tracks or vias of a net whose pads change would be left wrong | Run `pcb sync --rip` and route the nets again |
+| `locked` | refused | `pcb sync` or `pcb place` would remove, replace or move a locked part | Unlock it, or change the circuit or the place |
+| `unknown-ref` | refused | `pcb place`: a `[[place]]` or `--ref` names a part the board does not have | Run `pcb sync` first; check the reference |
+| `side` | refused | `pcb place`: an assembled part placed on a side the assembler does not place | Move it, or change `[assembly] machine_sides` |
+| `off-board` | refused | `pcb place`: a pad's centre would be outside the outline | Change the place |
+| `keepout` | refused | `pcb place`: a part's pads would fall in a `[[keepout]]` that forbids footprints | Change the place or the keep-out |
+| `plated-pad` | refused | `pcb place`: a part would cover a plated through-hole pad of a part on the other side | Move one of them |
+| `parts-cache` | refused | `pcb sync` or `pcb parts`: a part's EasyEDA data is missing from `parts/` or does not convert | Run `pcb parts --live` |
+| `network` | failed | `pcb parts --live` could not reach EasyEDA or JLCPCB, or the reply was not a part | Retry; check the LCSC code |
+| `pdf` | failed | `pcb drawing` could not write the PDF | Report it with the SVG sheets |
+| `kicad-cli` | failed | kicad-cli could not export the schematic's netlist | Open the schematic in KiCad 10 and check it loads |
+| `sync` | failed | `pcb sync`'s own read-back of the board it wrote found a pad on the wrong net (pcb's bug) | Report it with the board and netlist |
 
 ## Warnings
 
@@ -63,3 +79,12 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `drc-allowed` | zone | A DRC kind grew within its `pcb.toml [[drc_allow]]` allowance; the message names it |
 | `second-run-failed` | route | The router's second run (no region keep-outs) failed or timed out; the first run's result stands |
 | `join-outside-region` | route | The router joined tracks wholly outside the region in their middle; they were left unsplit |
+| `unplaced` | sync, place | Parts added beside the board, or with no `[[place]]` and off the board |
+| `ripped` | place | Tracks and vias on a moved part's pads were removed; route those nets again |
+| `buy-ahead` | parts, release | A part's JLCPCB stock is under 20 times the order's need, or under 1000 |
+| `extended-parts` | parts, release | Extended parts, each a loading fee, listed |
+| `parts-stale` | parts, release | JLCPCB data in the cache is over 30 days old |
+| `parts-unchecked` | release | The project has no `parts/` cache, so JLCPCB's data was not checked |
+| `labels-omitted` | drawing | Designators that would overlap other text were left off a view; the table lists them |
+| `plane-split` | route | The new tracks cut a zone net's fills apart (the router leaves zone nets to their zones); run `pcb zone` again |
+| `arcs-kept` | sync | The board has track arcs, which `pcb sync --rip` does not remove; check them |

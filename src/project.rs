@@ -118,6 +118,19 @@ pub struct DrawingInfo {
     /// Board thickness and finish for the stack-up section.
     pub thickness_mm: Option<f64>,
     pub finish: Option<String>,
+    /// Parts given ordinates from datum A (default: connectors, switches and mounting holes: J, SW, K, H).
+    pub ordinates: Option<Vec<String>>,
+    /// Leader notes: a part and the text, which says the reason as well as the fact.
+    #[serde(default)]
+    pub leader: Vec<Leader>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Leader {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub text: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -206,6 +219,10 @@ pub struct Stitch {
     pub margin_mm: Option<f64>,
     /// Only inside this rectangle, x0, y0, x1, y1 mm (default: the whole board).
     pub rect: Option<[f64; 4]>,
+    /// Also join the net's fill pieces that nothing else joins: a via wherever one fits in two pieces not yet
+    /// connected (a 0.25 mm grid of candidates), until no more can be joined.
+    #[serde(default)]
+    pub join: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

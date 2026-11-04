@@ -105,6 +105,9 @@
      "bottom_parts": {
       "type": "integer",
       "minimum": 0
+     },
+     "parts_checked": {
+      "type": "boolean"
      }
     }
    }

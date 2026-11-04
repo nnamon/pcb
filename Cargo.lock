@@ -771,6 +771,7 @@ dependencies = [
  "anyhow",
  "clap",
  "geo",
+ "pdf-writer",
  "resvg 0.49.0",
  "serde",
  "serde_json",

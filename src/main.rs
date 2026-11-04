@@ -5,6 +5,7 @@ mod board;
 mod check;
 mod contract;
 mod diff;
+mod drawing;
 mod doctor;
 mod easyeda;
 mod edit;
@@ -106,6 +107,12 @@ enum Cmd {
         /// find room. Checked as edits; their copper is kept; the whole result is gated once against the input.
         #[arg(long)]
         prewire: Option<String>,
+        /// Leave the copper zones out of what the router sees, so it routes their nets as tracks too
+        #[arg(long)]
+        no_zones: bool,
+        /// Freerouting runs; the one that leaves fewest nets open is kept (Freerouting does not repeat itself)
+        #[arg(long, default_value_t = 1)]
+        attempts: u32,
         /// Output board (default: overwrite the input).
         #[arg(long, short)]
         out: Option<String>,
@@ -304,6 +311,24 @@ enum Cmd {
         #[arg(short, long)]
         out: Option<String>,
     },
+    /// Planning drawings in the house style (docs/drawing-standard.md): `placement` writes the top view, the bottom
+    /// view and the placement table as A3 SVG sheets, PNG previews and one PDF
+    Drawing {
+        /// The drawing: placement
+        kind: String,
+        /// pcb.toml, or the folder holding it
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// PROPOSAL, REVIEWED or RELEASED
+        #[arg(long, default_value = "PROPOSAL")]
+        status: String,
+        /// The drawing's revision (default: the project version)
+        #[arg(long)]
+        rev: Option<String>,
+        /// Folder for the sheets
+        #[arg(short, long)]
+        out: String,
+    },
     /// PNG of the board or a region, nets labelled.
     Render {
         board: String,
@@ -368,6 +393,7 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Parts { .. } => "parts",
         Cmd::Sync { .. } => "sync",
         Cmd::Place { .. } => "place",
+        Cmd::Drawing { .. } => "drawing",
     }
 }
 
@@ -497,7 +523,7 @@ fn run(cli: Cli) -> Result<Reply> {
                 data: json!({ "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
             })
         }
-        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, width, prewire, out } => {
+        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, width, prewire, no_zones, attempts, out } => {
             let prewire = match &prewire {
                 Some(p) if !std::path::Path::new(p).is_file() => return Err(contract::refused("usage", format!("--prewire {p}: no such file"))),
                 Some(p) => edit::parse_ops(&std::fs::read_to_string(p).map_err(|e| contract::failed("io", format!("reading {p}: {e}")))?)?,
@@ -527,6 +553,8 @@ fn run(cli: Cli) -> Result<Reply> {
                 timeout_s: timeout,
                 widths,
                 prewire,
+                no_zones,
+                attempts,
             };
             let out = out.unwrap_or_else(|| board.clone());
             let rep = route::run(&board, &out, &o)?;
@@ -539,6 +567,9 @@ fn run(cli: Cli) -> Result<Reply> {
             warnings.extend(rep.declared_pinless_nets.iter().map(|n| contract::warn("pinless-net", format!("{n} has copper but no pads; declared to Freerouting"))));
             if let Some(e) = &rep.attempt_error {
                 warnings.push(contract::warn("second-run-failed", format!("the router's second run, without region keep-outs, gave no result; the first run's stands: {e}")));
+            }
+            if !rep.plane_split.is_empty() {
+                warnings.push(contract::warn("plane-split", format!("the new tracks cut zone fills apart ({}); run pcb zone again, with stitching vias for the net", rep.plane_split.join("; "))));
             }
             if rep.joins_outside_region > 0 {
                 warnings.push(contract::warn("join-outside-region", format!("{} joins in the middle of tracks wholly outside the region were left unsplit", rep.joins_outside_region)));
@@ -626,6 +657,17 @@ fn run(cli: Cli) -> Result<Reply> {
             );
             Ok(Reply { outcome: if r.regressions.is_empty() { Outcome::Done } else { Outcome::Rejected }, error: None, written: Some(r.written.clone()), warnings: r.warnings.clone(), human: h, data: serde_json::to_value(&r)? })
         }
+        Cmd::Drawing { kind, project: proj, status, rev, out } => {
+            let l = project::load(&project::locate(&proj))?;
+            let rev = rev.unwrap_or_else(|| l.project.project.version.clone());
+            let r = drawing::run(&l, &kind, &status, &rev, &out)?;
+            let mut warnings = vec![];
+            if !r.omitted_labels.is_empty() {
+                warnings.push(contract::warn("labels-omitted", format!("{} designator(s) would overlap other text and are left off the views (the table lists them): {}", r.omitted_labels.len(), r.omitted_labels.join(", "))));
+            }
+            let h = format!("wrote {} files to {out}: scale {}, {} table rows, {} ordinates, {} overlapping texts", r.files.len(), r.scale, r.table_rows, r.ordinates.len(), r.overlaps);
+            Ok(Reply { outcome: if r.overlaps == 0 { Outcome::Done } else { Outcome::Rejected }, error: None, written: Some(out.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
+        }
         Cmd::Parts { project: proj, live, work } => {
             let l = project::load(&project::locate(&proj))?;
             let r = parts::run(&l, live, std::path::Path::new(&work))?;
@@ -666,7 +708,7 @@ fn run(cli: Cli) -> Result<Reply> {
                 h += &format!("\n  FAIL {x}");
             }
             let outcome = if r.problems.is_empty() { Outcome::Done } else { Outcome::Rejected };
-            let mut warnings = vec![];
+            let mut warnings = r.warnings.clone();
             if r.bottom_parts > 0 {
                 warnings.push(contract::warn("bottom-cpl-unverified", format!("{} bottom-side parts in the CPL: their rotations are KiCad's board angles, not checked against JLCPCB's bottom-side convention; check them in JLCPCB's placement preview", r.bottom_parts)));
             }

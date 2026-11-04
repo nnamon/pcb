@@ -38,6 +38,10 @@ pub struct Report {
     /// copper, DFM findings. Any makes the outcome rejected.
     pub problems: Vec<String>,
     pub written: String,
+    /// `pcb parts` run again from the cache (M4): its findings are problems, its warnings the release's.
+    pub parts_checked: bool,
+    #[serde(skip)]
+    pub warnings: Vec<crate::contract::Warning>,
 }
 
 #[derive(Serialize)]
@@ -167,6 +171,17 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
         }
     }
     rep.verify = v;
+
+    // JLCPCB's data again, from the cache `pcb parts --live` keeps (re-run at release, P9): stock, Economic, the
+    // footprints' offsets; a project with no cache is warned
+    if crate::parts::dir(l).is_dir() {
+        let pr = crate::parts::check(l, Some(&b), work)?;
+        rep.problems.extend(pr.findings.iter().map(|f| format!("parts {}: {}", f.item, f.message)));
+        rep.warnings.extend(pr.warnings);
+        rep.parts_checked = true;
+    } else {
+        rep.warnings.push(crate::contract::warn("parts-unchecked", "no parts/ cache beside pcb.toml: stock, Economic eligibility and footprint offsets were not checked; run pcb parts --live".to_string()));
+    }
 
     // 2. BOM and CPL
     let hand: Vec<String> = asm.map(|a| a.hand_fit.clone()).unwrap_or_default();
