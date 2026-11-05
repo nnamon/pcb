@@ -1,6 +1,6 @@
 """Runs review 17's probes (confirmation of review 16's closures, milestone M3) and checks the outcome each case
 must have. The probes print evidence, one JSON line per case; this file holds the verdicts. Exit 1 on any miss.
-Cases for notes in reviews/17_m3_confirmation.md print under "notes" and do not fail the run.
+Cases for notes in docs/reviews/17_m3_confirmation.md print under "notes" and do not fail the run.
 
 Usage: python3 check.py pcb-binary workdir [probe.py ...]
 """

@@ -1,6 +1,6 @@
 """Runs review 19's probes (confirmation of reviews 17 and 18's closures) and checks the outcome each case must have.
 The probes print evidence, one JSON line per case; this file holds the verdicts. Exit 1 on any miss. Cases for notes
-in reviews/19_confirmation.md print under "notes" and do not fail the run.
+in docs/reviews/19_confirmation.md print under "notes" and do not fail the run.
 
 The probes on the M4 project need its fixture flow run to the release once (route included, a few minutes). Set
 PCB_R19_BASE to a project folder the flow has finished, or the first such probe runs it into workdir/_flow

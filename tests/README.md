@@ -1,6 +1,6 @@
 # pcb tests
 
-`cargo xtask test` runs everything from a clean checkout, and CI runs the same command in the pinned image (`ci/Dockerfile`) on every push that touches `tools/pcb`. It needs `PCB_FREEROUTING_JAR`, or `--fast`, which skips the Freerouting runs and the mutation suites. The summary is written to `target/xtask/summary.json`.
+`cargo xtask test` runs everything from a clean checkout. Run it in the pinned image (`ci/Dockerfile`) before every push that touches `tools/pcb`; there is no CI test run, so this local run is the check. It needs `PCB_FREEROUTING_JAR`, or `--fast`, which skips the Freerouting runs and the mutation suites. The summary is written to `target/xtask/summary.json`.
 
 | Folder | What it holds |
 | --- | --- |

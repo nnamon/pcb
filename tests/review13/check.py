@@ -1,5 +1,5 @@
 """Runs review 13's probes and checks the outcome each case must have (the probes print evidence, one JSON line per
-case; this file holds the verdicts). Exit 1 on any miss. Cases marked NOTE in reviews/13_m2.md are printed under
+case; this file holds the verdicts). Exit 1 on any miss. Cases marked NOTE in docs/reviews/13_m2.md are printed under
 "notes" and do not fail the run.
 
 Usage: python3 check.py pcb-binary workdir

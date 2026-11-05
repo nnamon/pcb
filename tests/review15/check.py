@@ -1,6 +1,6 @@
 """Runs review 15's probes (milestone M3: check, gate, release, compare-gerbers, paste, art, import additions) and
 checks the outcome each case must have. The probes print evidence, one JSON line per case; this file holds the
-verdicts. Exit 1 on any miss. Cases for findings marked NOTE in reviews/15_m3.md are printed under "notes" and do
+verdicts. Exit 1 on any miss. Cases for findings marked NOTE in docs/reviews/15_m3.md are printed under "notes" and do
 not fail the run.
 
 Usage: python3 check.py pcb-binary workdir [probe.py ...]

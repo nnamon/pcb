@@ -1,4 +1,4 @@
-# pcb zone settings for the badge fixture, the same zones spike 3 (phase0/spike3.py) built by hand: the M2 gate is
+# pcb zone settings for the badge fixture, the same zones spike 3 built by hand (phase0/spike3.py, in git history at 1afa4bb): the M2 gate is
 # that verify_zones passes on what pcb zone makes from this. The suite copies it beside the imported board.
 schema = 1
 

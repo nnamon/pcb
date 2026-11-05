@@ -145,7 +145,7 @@ Every command:
 
 ## Testing and contract (milestone M0)
 
-- **The suite:** `cargo xtask test` (see `tests/README.md`), run by CI in the pinned image (`ci/Dockerfile`, published to GHCR by `.github/workflows/pcb-ci-image.yml`; tested by `pcb-test.yml`).
+- **The suite:** `cargo xtask test` (see `tests/README.md`), run locally in the pinned image (`ci/Dockerfile`, published to GHCR by `.github/workflows/pcb-ci-image.yml`) before every push. The CI test workflow was deleted on 5 Nov 2026 (owner): it repeated the local run and spent paid Actions minutes.
 - **Output contract:** every command keeps it (`src/contract.rs`, `schemas/`, `docs/codes.md`).
 - **One write path for edits:** every command that changes an existing board writes through `src/gate.rs` (DRC before and after; a worse result goes to `.rejected`). Commands that make a new file have nothing to compare against and write directly: `import-tscircuit` (checked by `verify_import`) and `render` (review 5, 15).
 - **One door to KiCad:** every KiCad call goes through `src/kicad.rs`.
@@ -226,7 +226,7 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 
 ## Zones (milestone M2)
 
-`pcb zone [--project DIR] [-o OUT] [--work DIR]` (`src/zone.rs`) builds every zone `pcb.toml` asks for and writes the result through the write gate. It replaces `phase0/spike3.py`; the badge fixture's `pcb.toml` gives the same zones, and `verify_zones.py` passes on the result.
+`pcb zone [--project DIR] [-o OUT] [--work DIR]` (`src/zone.rs`) builds every zone `pcb.toml` asks for and writes the result through the write gate. It replaces the spike 3 script (`phase0/spike3.py`, removed; in git history at 1afa4bb); the badge fixture's `pcb.toml` gives the same zones, and `verify_zones.py` passes on the result.
 
 In order:
 1. **Earlier work goes.** Zones whose name starts `pcb:` and stitching vias whose uuid still matches their net and place are removed. A zone or via the owner made, or a stitching via moved by hand, has no such name or uuid and stays.
@@ -405,7 +405,7 @@ The routing is Freerouting's and differs from v1.0.0's; pcb check finds the DRC 
   - **CI image** (`ci/Dockerfile`, image 7). Ubuntu packages come from the live archive and KiCad is pinned by version; every package version in an image is listed in `/opt/pcb-ci/packages.txt`, and a published tag is never overwritten. Image 6 read Ubuntu's snapshot service instead, which served GitHub's runners at about 270 kB/s: the build took 32 minutes, against about 4, and Actions is billed by the minute. Layers are cached in GitHub's Actions cache. The test workflow skips pushes that change only Markdown or only `ci/`; the "tests after a new image" trigger (`workflow_run`) fires only from the default branch, so on a branch run `pcb tests` by hand after an image build. A local image build adds this workspace's proxy CA, so certificate problems show only on GitHub.
   - **Checked against 7.0.11.** The old CI image (KiCad 7.0.11) run on the last KiCad 7 commit gives the same 34 power fills per net and layer as KiCad 10. Fill areas differ between runs on either version, because the prototype's overlapping fills share one priority (review 4, Z11).
 
-  Phase 0 (`phase0/probe.py`, KiCad 7.0.11, kept as it ran) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
+  Phase 0 (`phase0/probe.py`, KiCad 7.0.11, removed; in git history at bd895cc) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
 
   `pcb` runs a fixed helper script (`src/kicad_helper.py`, embedded in the binary) with python3 and reads its JSON; the agent never calls KiCad directly.
 
@@ -463,7 +463,7 @@ After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB
 
 ## Spike 3: KiCad zones and the coil as a net tie (30 Oct 2026)
 
-Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/oracles/verify_zones.py`, whose sensitivity is shown by `tests/mutations/zone_mutations.py`.
+Prototype: `phase0/spike3.py` (pcbnew; removed, in git history at 1afa4bb), then `kicad_helper.py fill` in a fresh process. Checked by `tests/oracles/verify_zones.py`, whose sensitivity is shown by `tests/mutations/zone_mutations.py`.
 
 - **NFC coil:** the 49 spiral segments became copper inside L601, a net tie for pads 1 and 3. The two coil vias became L601 pads 3 and 4, and the bottom bridge and top link stay NFC_AC1 tracks. The coil copper is unchanged (same ends and widths). KiCad DRC's 4 coil clearance errors and 2 mask bridges are gone.
 - **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 34 power fills grown from each power net's copper (35 in the first run, before later import changes); GND pours on both outer layers. Copper areas differ from the old scripts' pours by up to −47 % (BAT_RAW top) and +71 % (VBAT bottom); the top GND pour is 21 % smaller (review 4, Z3). The bottom-layer exclusion under the power stage is missing (Z4).
