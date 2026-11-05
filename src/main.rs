@@ -36,7 +36,7 @@ use contract::{Outcome, Warning};
 use serde_json::json;
 
 #[derive(Parser)]
-#[command(name = "pcb", about = "Board tooling for agents: KiCad files, region-locked routing, checks, JLCPCB releases")]
+#[command(name = "pcb", version, about = "Board tooling for agents: KiCad files, region-locked routing, checks, JLCPCB releases")]
 struct Cli {
     /// Print one JSON object instead of the human summary.
     #[arg(long, global = true)]
