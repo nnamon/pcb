@@ -1,0 +1,158 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:compare-gerbers",
+ "title": "pcb compare-gerbers output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/compare-gerbers/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "ok",
+     "layers",
+     "drill",
+     "missing",
+     "outline"
+    ],
+    "properties": {
+     "ok": {
+      "type": "boolean"
+     },
+     "error": {
+      "type": "string"
+     },
+     "missing": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "outline": {
+      "type": "object",
+      "required": [
+       "a_size",
+       "b_size",
+       "shift"
+      ]
+     },
+     "layers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "object",
+       "required": [
+        "a_mm2",
+        "b_mm2",
+        "explained",
+        "unexplained"
+       ],
+       "properties": {
+        "a_mm2": {
+         "type": "number"
+        },
+        "b_mm2": {
+         "type": "number"
+        },
+        "explained": {
+         "type": "array",
+         "items": {
+          "$ref": "#/$defs/piece"
+         }
+        },
+        "unexplained": {
+         "type": "array",
+         "items": {
+          "$ref": "#/$defs/piece"
+         }
+        }
+       }
+      }
+     },
+     "drill": {
+      "type": "object",
+      "required": [
+       "a",
+       "b",
+       "matched",
+       "differ"
+      ],
+      "properties": {
+       "a": {
+        "type": "integer"
+       },
+       "b": {
+        "type": "integer"
+       },
+       "matched": {
+        "type": "integer"
+       },
+       "differ": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "side",
+          "at",
+          "d",
+          "plated",
+          "slot"
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "$defs": {
+  "piece": {
+   "type": "object",
+   "required": [
+    "side",
+    "mm2",
+    "bbox"
+   ],
+   "properties": {
+    "side": {
+     "enum": [
+      "a",
+      "b"
+     ]
+    },
+    "mm2": {
+     "type": "number"
+    },
+    "bbox": {
+     "type": "array",
+     "items": {
+      "type": "number"
+     },
+     "minItems": 4,
+     "maxItems": 4
+    },
+    "why": {
+     "type": "string"
+    }
+   }
+  }
+ }
+}

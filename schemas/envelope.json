@@ -1,0 +1,135 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:envelope",
+ "title": "pcb command output envelope",
+ "type": "object",
+ "required": [
+  "schema",
+  "ok",
+  "outcome",
+  "warnings",
+  "data"
+ ],
+ "additionalProperties": false,
+ "properties": {
+  "schema": {
+   "type": "string",
+   "pattern": "^pcb/[a-z-]+/[0-9]+$"
+  },
+  "ok": {
+   "type": "boolean"
+  },
+  "outcome": {
+   "enum": [
+    "done",
+    "rejected",
+    "refused",
+    "failed"
+   ]
+  },
+  "written": {
+   "type": "string"
+  },
+  "warnings": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "code",
+     "message"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z-]*$"
+     },
+     "message": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "error": {
+   "type": "object",
+   "required": [
+    "code",
+    "message"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "code": {
+     "type": "string",
+     "pattern": "^[a-z][a-z-]*$"
+    },
+    "message": {
+     "type": "string"
+    }
+   }
+  },
+  "data": {
+   "type": "object"
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "outcome": {
+      "const": "done"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "ok": {
+      "const": true
+     }
+    },
+    "not": {
+     "required": [
+      "error"
+     ]
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "outcome": {
+      "enum": [
+       "refused",
+       "failed"
+      ]
+     }
+    }
+   },
+   "then": {
+    "required": [
+     "error"
+    ],
+    "properties": {
+     "ok": {
+      "const": false
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "outcome": {
+      "const": "rejected"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "ok": {
+      "const": false
+     }
+    }
+   }
+  }
+ ]
+}

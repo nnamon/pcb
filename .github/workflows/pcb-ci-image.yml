@@ -1,0 +1,52 @@
+# Builds the CI image for tools/pcb and publishes it to the repository's GitHub Container Registry.
+# Runs when tools/pcb/ci/ changes, or by hand. The tag is the image version in the Dockerfile.
+name: pcb CI image
+
+on:
+  push:
+    paths: [tools/pcb/ci/**, .github/workflows/pcb-ci-image.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Image version
+        id: v
+        # GHCR names must be lowercase; an owner or repository name with capitals would not push (review 5, 16)
+        run: |
+          echo "version=$(sed -n 's/^ARG IMAGE_VERSION=//p' tools/pcb/ci/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/pcb-ci" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # an image version is published once; a changed Dockerfile needs a new IMAGE_VERSION (review 6, K11)
+      - name: Refuse to overwrite a published version
+        # only a clear "not found" lets the build go on; any other error (auth, rate limit, network) stops it,
+        # so a failed lookup cannot overwrite a published tag (review 7, C7)
+        run: |
+          ref="${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}"
+          if out=$(docker manifest inspect "$ref" 2>&1); then
+            echo "$ref is already published; bump IMAGE_VERSION in tools/pcb/ci/Dockerfile"
+            exit 1
+          fi
+          if ! grep -qiE "manifest unknown|not found" <<< "$out"; then
+            echo "could not tell whether $ref is published: $out"
+            exit 1
+          fi
+      # layers cached in GitHub's Actions cache: a change to a late step (Rust, Freerouting) reuses the apt layer
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          context: tools/pcb/ci
+          push: true
+          tags: ${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}

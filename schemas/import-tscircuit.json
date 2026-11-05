@@ -1,0 +1,65 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:import-tscircuit",
+ "title": "pcb import-tscircuit output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/import-tscircuit/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "footprints",
+     "pads",
+     "nets",
+     "segments",
+     "vias",
+     "origin_margin_mm"
+    ],
+    "properties": {
+     "footprints": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "pads": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "nets": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "segments": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "vias": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "origin_margin_mm": {
+      "type": "number"
+     }
+    }
+   }
+  }
+ }
+}

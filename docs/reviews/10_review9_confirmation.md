@@ -1,0 +1,21 @@
+# Review 10: confirmation of review 9 (M1)
+
+Independent reviewer, 4 Nov 2026, at commit bbf00d2. Saved by the designer from the reviewer's hand-back. The reviewer's probes joined the suite in `tests/review10/`, with their verdicts in `check.py`.
+
+The suite passed (42 of 42 steps, 750 s) and the unit tests (47). No BLOCKER.
+
+**Review 9 closures:** 2, 3, 4, 5, 7, 9, 11 hold. 6 and 10 hold as scoped, with more cases in 5 and 9 below. 1 held except for uuid-less zones sharing net, layers and outline (1 below). 8 held only for one-segment stubs (7 below).
+
+**Found sound:** joins through a stale or empty fill pass the edit check and the gate then rejects the floating copper, which is acceptable because the gate refills and judges; prewire pruning removed nothing but free-end pieces in four cases; the output contract held for 26 runs; rejected edits go to `<out>.rejected.kicad_pcb`.
+
+| # | Severity | Finding | Closure |
+| --- | --- | --- | --- |
+| 1 | SHOULD-FIX | Two uuid-less GND zones on one outline with different clearance and priority got each other's fills, and runs differed. Boards imported from tscircuit have no zone uuids, so this is the main path. | Fixed. Zones without a unique uuid pair by their canonical text (`board::zone_canon`: every setting and outline, no uuid or fill, KiCad's defaults filled in), then net, layers and outline, then net in file order, within the same owner (`pair_zones`, `src/gate.rs`). Probe `dup_no_uuid` (`tests/review10/gate_probes.py`): three runs, one file, every fill pcbnew's. |
+| 2 | NOTE | Two copied footprints sharing a zone uuid: the first got the other's fill. | Fixed. A uuid pairs zones only when it is unique on both sides; footprints are told apart by reference and position, which a save does not change. Probes `same_ref_dup_zone_uuid`, `top_dup_uuid`. |
+| 3 | NOTE | A uuid-less zone with a repeated point or reversed layers was refused with an internal key in the message. | Fixed. Layers are sorted and repeated points dropped in every key, and the last tier pairs by net in file order; the message, if pairing ever fails, names the net. Probes `repeated_point_no_uuid`, `zone_layers_reversed_no_uuid`. |
+| 4 | SHOULD-FIX | Diff missed copper graphics: a `gr_poly` with a net on F.Cu, a `gr_text` on F.Cu. | Fixed. Board graphics on copper layers are compared (`copper_graphics_added`, `copper_graphics_removed`) and a footprint's own copper graphics report "copper graphics changed". Probes `copper_gr_poly_added`, `copper_gr_text_added` (`tests/review10/diff_probes.py`). |
+| 5 | NOTE | Diff missed thermal gap and bridge, `connect_pads no`, island removal, hatched fill, a footprint zone's outline, and a pad's `zone_connect`. | Fixed. Zones compare as canonical text, every setting included; footprint zones are compared in the footprint's frame; pad zone connection, clearance and thermal settings count as a pad change. Same script. |
+| 6 | NOTE | A KiCad re-save of hand-written text showed zones and vias changed: via layers reversed, a zone with no minimum thickness and clearance `0.30`, a partial keep-out, `F&B.Cu`. | Fixed. Via layers sort; numbers compare as numbers; `F&B.Cu` expands; KiCad 10.0.8's save defaults are written out (minimum thickness, thermal gap and bridge, island removal, rule-area fields, rule-area clearance). Probes `resave_minimal_zone`, `resave_partial_keepout`, `resave_zone_layers_FB`, `resave_via_layers_reversed`. |
+| 7 | NOTE | A two-segment prewire stub joined partway along kept its tail and was rejected. | Fixed. The stub is walked from its free end through every prewire segment; when the router split one of them, the whole chain may be pruned, and the pieces that still reach copper are kept by the pruning. Probe `two_segment_stub` (`tests/review10/prewire_probes.py`). |
+| 8 | NOTE | `add_via` in a filled footprint zone was refused, and a never-filled zone counted only its first outline polygon. | Fixed. `Board::zones` holds footprint zones too (`Zone::owner`), and a never-filled zone counts every outline polygon. Probe `via_in_filled_footprint_zone` reaches the gate. |
+| 9 | NOTE | Missing files still failed as `io`: edit's `--ops`, init's board, route's board. | Fixed. A missing board is refused (`usage`) wherever a board is loaded, and so are a missing `--ops` or `--prewire` file. |

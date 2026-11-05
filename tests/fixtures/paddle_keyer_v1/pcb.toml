@@ -1,0 +1,328 @@
+# pcb settings for paddle-keyer v1.0.0, rebuilt through pcb from its final circuit JSON. The release must match the
+# files that were ordered (golden/), every difference explained in explain.toml: the M3 gate.
+schema = 1
+
+[project]
+name = "paddle-keyer"
+version = "1.0.0"
+board = "board.kicad_pcb"
+layers = 2
+fab = "jlcpcb-2layer-1.6mm"
+
+[assembly]
+machine_sides = ["top"]
+# the BOM and CPL renumber the parts named descriptively in the design (jlc_files.py did the same)
+designators = { R_A = "R12", R_B = "R13", C_F = "C16", C_DC = "C17", Q_PTT = "Q2" }
+
+# GND pours on both sides, joining GND pads solid, as the old pour script did
+[[zone]]
+net = "GND"
+layers = ["F.Cu", "B.Cu"]
+clearance_mm = 0.25
+min_width_mm = 0.25
+connect = "solid"
+
+# the RP2040's exposed pad: four windows (about 65 % paste), so the part does not float; the USB-C shell slots take
+# paste over their pads (pin in paste)
+[[paste]]
+pad = "U1.57"
+windows = [2, 2]
+size_mm = 1.25
+web_mm = 0.35
+
+[[paste]]
+pad = "J1.13"
+pin_in_paste = true
+
+[[paste]]
+pad = "J1.14"
+pin_in_paste = true
+
+# KiCad DRC findings the v1.0.0 order went out with, each reviewed at Gate 2
+[[waiver]]
+check = "drc"
+item = "courtyards_overlap <no net>"
+max = 28
+why = "tscircuit's courtyards are the parts' land patterns drawn tight; Gate 2 checked the real bodies (bodies.json) for clearance"
+
+[[waiver]]
+check = "drc"
+item = "hole_clearance <no net> GND"
+max = 2
+why = "J1's own GND pads 15 and 26 sit 0.2 mm from its own NPTH pegs, as the maker's footprint draws them"
+
+[[waiver]]
+check = "drc"
+item = "silk_overlap <no net>"
+max = 8
+why = "footprint outlines of U1 and C10, and U3 and C12, touch; outlines only, no text"
+
+# GUIDELINES' 0.6 mm floor for silkscreen text
+[[waiver]]
+check = "silk"
+item = "text label18"
+why = "\"Designed in Singapore\" went out on v1.0.0 at 0.5 mm cap height, under the 0.6 mm floor; the next spin raises it"
+
+# the CPL centres of the two connectors, from JLCPCB's own footprints (solved by jlc_files.py for the order)
+[parts.C2765186]
+cpl_offset_mm = [0, 0.125]
+source = "paddle-keyer v1.0.0 CPL, solved against JLCPCB's EasyEDA footprint by jlc_files.py"
+
+[parts.C20182907]
+cpl_offset_mm = [-0.1, 0]
+source = "paddle-keyer v1.0.0 CPL, solved against JLCPCB's EasyEDA footprint by jlc_files.py"
+
+# artwork, in the design's centred frame (y up): the fish touch key and the flower in exposed copper on the back,
+# the photo on the back silkscreen, the hidden marks under parts on the top, the Morse rows and pin-1 dots
+[[art]]
+name = "fish"
+file = "art/fish_fixed.json"
+key = "fish"
+frame = "centre"
+layers = ["B.Cu", "B.Mask"]
+net = "FISH"
+
+[[art]]
+name = "flower"
+file = "art/logos.json"
+key = "flower"
+frame = "centre"
+layers = ["B.Cu", "B.Mask"]
+net = "GND"
+
+[[art]]
+name = "photo"
+file = "art/art.json"
+frame = "centre"
+layers = ["B.SilkS"]
+
+[[art]]
+name = "hidden"
+file = "art/hidden_top.json"
+frame = "centre"
+layers = ["F.SilkS"]
+
+[[art]]
+name = "morse"
+file = "art/silk_marks.json"
+key = "morse"
+frame = "centre"
+layers = ["B.SilkS"]
+
+[[art]]
+name = "pin1_dots"
+file = "art/silk_marks.json"
+key = "pin1_dots"
+frame = "centre"
+layers = ["F.SilkS"]
+
+# silkscreen labels in Inter ExtraBold, at the places silk_text.py chose for v1.0.0, grown so thin strokes print
+
+[[text]]
+name = "label0"
+text = "TONE"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.0, 16.15]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label1"
+text = "GND"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.25, 18.69]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label2"
+text = "PTT"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.4, 21.23]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label3"
+text = "MCW"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-5.0, 14.05]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label4"
+text = "BOOT"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.0, -28.65]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label5"
+text = "CLK"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.4, -26.11]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label6"
+text = "GND"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.25, -23.57]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label7"
+text = "DIO"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.65
+at = [-2.45, -21.03]
+frame = "centre"
+rot_deg = 0
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label8"
+text = "9V1NE"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 1.0
+at = [6.15, 26.25]
+frame = "centre"
+rot_deg = 90
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label9"
+text = "cwfren"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 1.0
+at = [-6.15, 26.25]
+frame = "centre"
+rot_deg = 90
+layer = "B.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label10"
+text = "9V1NE"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 1.0
+at = [-6.2, 26.35]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label11"
+text = "CW NR7Y"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 1.0
+at = [6.2, 26.35]
+frame = "centre"
+rot_deg = 90
+layer = "F.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label12"
+text = "v{version}"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 1.0
+at = [-6.2, 15.95]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.02
+
+[[text]]
+name = "label13"
+text = "BOOT"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.6
+at = [-2.5, -13.05]
+frame = "centre"
+rot_deg = 0
+layer = "F.SilkS"
+grow_mm = 0.03
+
+[[text]]
+name = "label14"
+text = "T=DIT"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.6
+at = [-6.35, -29.15]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.03
+
+[[text]]
+name = "label15"
+text = "R=DAH"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.6
+at = [-5.65, -29.15]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.03
+
+[[text]]
+name = "label16"
+text = "PC"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.6
+at = [5.1, 20.55]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.03
+
+[[text]]
+name = "label17"
+text = "RADIO"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.6
+at = [-5.2, 20.45]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.03
+
+[[text]]
+name = "label18"
+text = "Designed in Singapore"
+font = "fonts/Inter-ExtraBold.ttf"
+cap_mm = 0.5
+at = [-6.65, -3.65]
+frame = "centre"
+rot_deg = 270
+layer = "F.SilkS"
+grow_mm = 0.03

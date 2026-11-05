@@ -1,0 +1,32 @@
+# paddle-keyer v1.0.0: how the files pcb release makes differ from the files that were ordered, and why
+
+[[explain]]
+layer = "F.Cu"
+side = "a"
+zone_net = "GND"
+why = "KiCad's GND pour reaches further than the old pour script's: it keeps necks under 0.25 mm, fills to the 0.3 mm edge gap and joins GND pads solid"
+
+[[explain]]
+layer = "B.Cu"
+side = "a"
+zone_net = "GND"
+why = "KiCad's GND pour reaches further than the old pour script's (as on F.Cu)"
+
+[[explain]]
+layer = "F.Cu"
+side = "b"
+rect = [5.45, 7.95, 5.65, 8.3]
+thinner_than_mm = 0.1
+why = "a 0.016 mm2 sliver of the old pour inside KiCad's clearance"
+
+[[explain]]
+layer = "F.Silk"
+side = "both"
+thinner_than_mm = 0.1
+why = "silkscreen text redrawn from the font by pcb: glyph edges differ by under 0.1 mm from matplotlib's"
+
+[[explain]]
+layer = "B.Silk"
+side = "both"
+thinner_than_mm = 0.1
+why = "silkscreen text redrawn from the font by pcb: glyph edges differ by under 0.1 mm from matplotlib's"

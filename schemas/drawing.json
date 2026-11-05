@@ -1,0 +1,94 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:drawing",
+ "title": "pcb drawing output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/drawing/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "files",
+     "scale",
+     "datum",
+     "ordinates",
+     "table_rows",
+     "omitted_labels",
+     "overlaps",
+     "overlapping"
+    ],
+    "properties": {
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "scale": {
+      "type": "string"
+     },
+     "datum": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      }
+     },
+     "ordinates": {
+      "type": "array",
+      "items": {
+       "type": "array",
+       "prefixItems": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ]
+      }
+     },
+     "table_rows": {
+      "type": "integer"
+     },
+     "omitted_labels": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "overlaps": {
+      "type": "integer"
+     },
+     "overlapping": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

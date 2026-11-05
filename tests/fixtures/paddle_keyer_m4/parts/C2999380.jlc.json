@@ -1,0 +1,14 @@
+{
+  "fetched": "2026-11-04",
+  "part": {
+    "componentBrandEn": "Winbond Elec",
+    "componentCode": "C2999380",
+    "componentLibraryType": "expand",
+    "componentModelEn": "W25Q32JVUUIQ",
+    "componentProductType": 0,
+    "componentSpecificationEn": "USON-8(3x4)",
+    "describe": "-40℃~+85℃ 100,000 cycles 10uA 133MHz 2.7V~3.6V 20 Years 32Mbit Power-on reset、Hardware write protection、Software write protection、Write enable latch、Absolute write protection SPI USON-8(3x4) NOR FLASH ROHS",
+    "preferredComponentFlag": false,
+    "stockCount": 2081
+  }
+}
