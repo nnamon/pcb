@@ -87,6 +87,143 @@ pub enum Op {
         #[serde(default)]
         unlock: bool,
     },
+    /// Pad `pad` of footprint `ref`, now centred at `at` (board coordinates): moved to `to`, resized to `size`
+    /// (width, height in the pad's own frame), its round drill set to `drill`. Tracks do not move.
+    SetPad {
+        #[serde(rename = "ref")]
+        reference: String,
+        pad: String,
+        at: [f64; 2],
+        to: Option<[f64; 2]>,
+        size: Option<[f64; 2]>,
+        drill: Option<f64>,
+        #[serde(default)]
+        unlock: bool,
+    },
+    /// Every footprint silkscreen line, arc, circle, rectangle and polygon outline under `min` mm becomes `min` mm
+    /// wide; a circle whose hole would then be under `min` (a pin-1 mark) is filled. `refs` limits it to those
+    /// footprints.
+    SilkWiden { min: f64, refs: Option<Vec<String>> },
+    /// Footprint silkscreen lines cut back from every pad on their side (`pads` mm plus half the line's width) and
+    /// from the board's edge (`edge` mm); a line loses only what crosses, pieces under 0.2 mm are dropped. Arcs,
+    /// circles, rectangles and polygons are not cut: each that crosses is named in the report.
+    SilkClear { pads: f64, edge: f64, refs: Option<Vec<String>> },
+    /// The footprints' own silkscreen shapes removed (their text fields stay), for a board whose legend comes from
+    /// `[[art]]`. `refs` limits it to those footprints.
+    SilkRemove { refs: Option<Vec<String>> },
+    /// A milled slot through the board on Edge.Cuts, `width` mm wide with round ends, from centre `from` to centre `to`.
+    AddSlot { from: [f64; 2], to: [f64; 2], width: f64 },
+    /// A non-plated drilled hole of `drill` mm at `at`, as a hole footprint named `ref` (not placed, not in the BOM).
+    AddHole {
+        #[serde(rename = "ref")]
+        reference: String,
+        at: [f64; 2],
+        drill: f64,
+    },
+}
+
+/// Footprint silkscreen shapes, as KiCad 10 writes them.
+const SILK_SHAPES: &[&str] = &["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly"];
+
+fn silk_layer(g: &sexpr::Node) -> Option<&str> {
+    g.find("layer").and_then(|l| l.arg(1)).filter(|l| *l == "F.SilkS" || *l == "B.SilkS")
+}
+
+/// Each footprint (in `refs`, when given) with its parsed node, and its silkscreen shapes as (absolute span, node).
+fn silk_of<'a>(b: &'a Board, refs: &Option<Vec<String>>, i: usize) -> Result<Vec<(&'a Footprint, Vec<((usize, usize), sexpr::Node)>)>> {
+    if let Some(rs) = refs {
+        if let Some(r) = rs.iter().find(|r| b.footprint_by_ref(r).is_none()) {
+            return Err(refused("edit-no-target", format!("operation {i}: no footprint {r}")));
+        }
+    }
+    let mut out = vec![];
+    for f in &b.footprints {
+        if refs.as_ref().is_some_and(|rs| !rs.contains(&f.reference)) {
+            continue;
+        }
+        let node = sexpr::parse(&b.src[f.span.0..f.span.1])?;
+        let gs = node
+            .items()
+            .iter()
+            .filter(|g| SILK_SHAPES.iter().any(|s| g.is(s)) && silk_layer(g).is_some())
+            .map(|g| ((f.span.0 + g.span.0 - node.span.0, f.span.0 + g.span.1 - node.span.0), g.clone()))
+            .collect();
+        out.push((f, gs));
+    }
+    Ok(out)
+}
+
+/// The span of child `name` of `g` (whose absolute span starts at `g_abs`), as an absolute span.
+fn child_span(g: &sexpr::Node, g_abs: usize, name: &str) -> Option<(usize, usize)> {
+    g.find(name).map(|c| (g_abs + c.span.0 - g.span.0, g_abs + c.span.1 - g.span.0))
+}
+
+/// Where along p0 -> p1 (t in 0..1) the segment lies inside the rectangle of half sizes (hx, hy) centred at c and
+/// turned by `rot` degrees (board::rotate's sense): the interval, or none.
+fn seg_in_rect(p0: (f64, f64), p1: (f64, f64), c: (f64, f64), rot: f64, hx: f64, hy: f64) -> Option<(f64, f64)> {
+    let a = rotate(p0.0 - c.0, p0.1 - c.1, -rot);
+    let b = rotate(p1.0 - c.0, p1.1 - c.1, -rot);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, d, h) in [(a.0, b.0 - a.0, hx), (a.1, b.1 - a.1, hy)] {
+        if d.abs() < 1e-12 {
+            if p.abs() > h {
+                return None;
+            }
+            continue;
+        }
+        let (mut u0, mut u1) = ((-h - p) / d, (h - p) / d);
+        if u0 > u1 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        t0 = t0.max(u0);
+        t1 = t1.min(u1);
+        if t0 >= t1 {
+            return None;
+        }
+    }
+    Some((t0, t1))
+}
+
+/// Where along p0 -> p1 the segment lies within `r` of c.
+fn seg_in_circle(p0: (f64, f64), p1: (f64, f64), c: (f64, f64), r: f64) -> Option<(f64, f64)> {
+    let (dx, dy) = (p1.0 - p0.0, p1.1 - p0.1);
+    let (fx, fy) = (p0.0 - c.0, p0.1 - c.1);
+    let a = dx * dx + dy * dy;
+    if a < 1e-18 {
+        return (fx.hypot(fy) <= r).then_some((0.0, 1.0));
+    }
+    let bq = 2.0 * (fx * dx + fy * dy);
+    let cq = fx * fx + fy * fy - r * r;
+    let disc = bq * bq - 4.0 * a * cq;
+    if disc <= 0.0 {
+        return None;
+    }
+    let s = disc.sqrt();
+    let (t0, t1) = (((-bq - s) / (2.0 * a)).max(0.0), ((-bq + s) / (2.0 * a)).min(1.0));
+    (t0 < t1).then_some((t0, t1))
+}
+
+/// [0, 1] less the given intervals, as sorted pieces.
+fn keep_pieces(keep: (f64, f64), mut cut: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    cut.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = vec![];
+    let mut at = keep.0;
+    for (a, b) in cut {
+        if b <= at {
+            continue;
+        }
+        if a > at {
+            out.push((at, a.min(keep.1)));
+        }
+        at = at.max(b);
+        if at >= keep.1 {
+            break;
+        }
+    }
+    if at < keep.1 {
+        out.push((at, keep.1));
+    }
+    out.into_iter().filter(|(a, b)| b > a).collect()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
@@ -447,6 +584,245 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                     edits.replace((f.span.0 + s0 - node.span.0, f.span.0 + s1 - node.span.0), format!("(xy {} {})", n(x + dx), n(y + dy)));
                 }
                 lines.push(format!("{i}: move_footprint {reference} {} -> {}", p2(*from), p2(*to)));
+            }
+            Op::SetPad { reference, pad, at, to, size, drill, unlock } => {
+                if to.is_none() && size.is_none() && drill.is_none() {
+                    return Err(refused("edit-op", format!("operation {i}: set_pad changes nothing (give to, size or drill)")));
+                }
+                if size.is_some_and(|s| !(s[0] > 0.0 && s[1] > 0.0 && s[0].is_finite() && s[1].is_finite())) || drill.is_some_and(|d| !(d > 0.0 && d.is_finite())) {
+                    return Err(refused("edit-op", format!("operation {i}: set_pad needs a size and drill above 0")));
+                }
+                if let Some(t) = to {
+                    check_in(*t)?;
+                }
+                let f: &Footprint = b.footprint_by_ref(reference).ok_or_else(|| refused("edit-no-target", format!("operation {i}: no footprint {reference}")))?;
+                if f.locked && !unlock {
+                    return Err(locked_refusal(i, reference));
+                }
+                let node = sexpr::parse(&src[f.span.0..f.span.1])?;
+                let found: Vec<&sexpr::Node> = node.items().iter().filter(|p| p.is("pad") && p.arg(1) == Some(pad.as_str())).filter(|p| {
+                    let (px, py) = p.find("at").map(|a| (a.num(1).unwrap_or(0.0), a.num(2).unwrap_or(0.0))).unwrap_or((0.0, 0.0));
+                    let (dx, dy) = rotate(px, py, f.rot);
+                    near((f.x + dx, f.y + dy), *at)
+                }).collect();
+                let pn = match found.as_slice() {
+                    [p] => *p,
+                    [] => return Err(refused("edit-no-target", format!("operation {i}: {reference} has no pad {pad} at {}", p2(*at)))),
+                    _ => return Err(refused("edit-no-target", format!("operation {i}: {reference} has {} pads {pad} at {}; set_pad cannot tell them apart", found.len(), p2(*at)))),
+                };
+                let pabs = f.span.0 + pn.span.0 - node.span.0;
+                touch((pabs, f.span.0 + pn.span.1 - node.span.0), i)?;
+                let mut what = vec![];
+                if let Some(t) = to {
+                    let a = pn.find("at").ok_or_else(|| anyhow::anyhow!("pad without at"))?;
+                    let (lx, ly) = rotate(t[0] - f.x, t[1] - f.y, -f.rot);
+                    let rot = a.num(3).map(|r| format!(" {}", n(r))).unwrap_or_default();
+                    edits.replace(child_span(pn, pabs, "at").unwrap(), format!("(at {} {}{rot})", n(lx), n(ly)));
+                    what.push(format!("to {}", p2(*t)));
+                }
+                if let Some(s) = size {
+                    let sp = child_span(pn, pabs, "size").ok_or_else(|| refused("edit-op", format!("operation {i}: pad {pad} of {reference} has no size")))?;
+                    edits.replace(sp, format!("(size {} {})", n(s[0]), n(s[1])));
+                    what.push(format!("size {} x {}", n(s[0]), n(s[1])));
+                }
+                if let Some(d) = drill {
+                    let dn = pn.find("drill").filter(|d| d.arg(1) != Some("oval")).ok_or_else(|| refused("edit-op", format!("operation {i}: pad {pad} of {reference} has no round drill")))?;
+                    let rest: String = dn.items().iter().filter(|c| c.is("offset")).map(|c| format!(" {}", &src[f.span.0 + c.span.0 - node.span.0..f.span.0 + c.span.1 - node.span.0])).collect();
+                    edits.replace(child_span(pn, pabs, "drill").unwrap(), format!("(drill {}{rest})", n(*d)));
+                    what.push(format!("drill {}", n(*d)));
+                }
+                lines.push(format!("{i}: set_pad {reference}.{pad} at {}: {}", p2(*at), what.join(", ")));
+            }
+            Op::SilkWiden { min, refs } => {
+                if !(*min > 0.0 && min.is_finite()) {
+                    return Err(refused("edit-op", format!("operation {i}: silk_widen needs a width above 0")));
+                }
+                let (mut widened, mut filled) = (0, 0);
+                for (_, gs) in silk_of(b, refs, i)? {
+                    for (sp, g) in gs {
+                        let w = g.find("stroke").and_then(|s| s.find("width")).and_then(|w| w.num(1));
+                        let thin = w.is_some_and(|w| w > 0.0 && w < *min - 1e-9);
+                        let small_ring = g.is("fp_circle") && g.find("fill").and_then(|f| f.arg(1)).is_some_and(|v| v == "no" || v == "none") && {
+                            let c = g.find("center").and_then(|c| Some((c.num(1)?, c.num(2)?)));
+                            let e = g.find("end").and_then(|c| Some((c.num(1)?, c.num(2)?)));
+                            matches!((c, e), (Some(c), Some(e)) if 2.0 * (c.0 - e.0).hypot(c.1 - e.1) - w.unwrap_or(0.0).max(*min) < *min)
+                        };
+                        if !thin && !small_ring {
+                            continue;
+                        }
+                        touch(sp, i)?;
+                        if thin {
+                            let st = g.find("stroke").unwrap();
+                            let ws = st.find("width").unwrap();
+                            edits.replace((sp.0 + ws.span.0 - g.span.0, sp.0 + ws.span.1 - g.span.0), format!("(width {})", n(*min)));
+                            widened += 1;
+                        }
+                        if small_ring {
+                            edits.replace(child_span(&g, sp.0, "fill").unwrap(), "(fill yes)");
+                            filled += 1;
+                        }
+                    }
+                }
+                lines.push(format!("{i}: silk_widen {widened} shape(s) to {} mm, {filled} small circle(s) filled", n(*min)));
+            }
+            Op::SilkClear { pads, edge, refs } => {
+                if !(*pads >= 0.0 && *edge >= 0.0 && pads.is_finite() && edge.is_finite()) {
+                    return Err(refused("edit-op", format!("operation {i}: silk_clear needs clearances of 0 or more")));
+                }
+                // the obstacles on each side: every pad with copper there, and every hole
+                let on_side = |p: &crate::board::Pad, side: &str| p.layers.iter().any(|l| l == &format!("{side}.Cu") || l == "*.Cu") || p.drill.is_some();
+                let (cut, dropped, mut crossing) = (std::cell::Cell::new(0usize), std::cell::Cell::new(0usize), vec![]);
+                for (f, gs) in silk_of(b, refs, i)? {
+                    for (sp, g) in gs {
+                        let side = if silk_layer(&g) == Some("F.SilkS") { "F" } else { "B" };
+                        let hw = g.find("stroke").and_then(|s| s.find("width")).and_then(|w| w.num(1)).unwrap_or(0.0) / 2.0;
+                        let (ex0, ey0, ex1, ey1) = (bx0 + edge + hw, by0 + edge + hw, bx1 - edge - hw, by1 - edge - hw);
+                        let e = pads + hw;
+                        let board_pt = |x: f64, y: f64| {
+                            let (dx, dy) = rotate(x, y, f.rot);
+                            (f.x + dx, f.y + dy)
+                        };
+                        if !g.is("fp_line") {
+                            // not cut: named when its extent reaches a pad's keep-out or the edge
+                            let mut xs = vec![];
+                            for k in ["start", "end", "center", "mid"] {
+                                if let Some(c) = g.find(k).and_then(|c| Some((c.num(1)?, c.num(2)?))) {
+                                    xs.push(board_pt(c.0, c.1));
+                                }
+                            }
+                            if let Some(pts) = g.find("pts") {
+                                for xy in pts.find_all("xy") {
+                                    if let (Some(x), Some(y)) = (xy.num(1), xy.num(2)) {
+                                        xs.push(board_pt(x, y));
+                                    }
+                                }
+                            }
+                            let r = if g.is("fp_circle") { xs.get(1).map(|e1| (xs[0].0 - e1.0).hypot(xs[0].1 - e1.1)).unwrap_or(0.0) } else { 0.0 };
+                            let (gx0, gy0, gx1, gy1) = xs.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p.0 - r), a.1.min(p.1 - r), a.2.max(p.0 + r), a.3.max(p.1 + r)));
+                            let hits = b.footprints.iter().flat_map(|q| q.pads.iter()).filter(|p| on_side(p, side)).any(|p| {
+                                let pr = 0.5 * p.w.max(p.h).max(p.drill.map(|d| d.0.max(d.1)).unwrap_or(0.0)) + e;
+                                p.x + pr > gx0 && p.x - pr < gx1 && p.y + pr > gy0 && p.y - pr < gy1
+                            }) || gx0 < ex0 || gy0 < ey0 || gx1 > ex1 || gy1 > ey1;
+                            if hits {
+                                crossing.push(format!("{} {}", f.reference, g.head().unwrap_or("")));
+                            }
+                            continue;
+                        }
+                        let (Some(s), Some(t)) = (g.find("start").and_then(|c| Some((c.num(1)?, c.num(2)?))), g.find("end").and_then(|c| Some((c.num(1)?, c.num(2)?)))) else { continue };
+                        let (p0, p1) = (board_pt(s.0, s.1), board_pt(t.0, t.1));
+                        let len = (p1.0 - p0.0).hypot(p1.1 - p0.1);
+                        // inside the edge inset: the part of the line to keep at most
+                        let Some(keep) = seg_in_rect(p0, p1, ((ex0 + ex1) / 2.0, (ey0 + ey1) / 2.0), 0.0, ((ex1 - ex0) / 2.0).max(0.0), ((ey1 - ey0) / 2.0).max(0.0)) else {
+                            touch(sp, i)?;
+                            crate::route::remove(&mut edits, src, sp);
+                            cut.set(cut.get() + 1);
+                            dropped.set(dropped.get() + 1);
+                            continue;
+                        };
+                        let mut away = vec![];
+                        for p in b.footprints.iter().flat_map(|q| q.pads.iter()).filter(|p| on_side(p, side)) {
+                            let has_cu = p.layers.iter().any(|l| l == &format!("{side}.Cu") || l == "*.Cu");
+                            if has_cu {
+                                let iv = if p.shape == "circle" {
+                                    seg_in_circle(p0, p1, (p.x, p.y), p.w / 2.0 + e)
+                                } else if let (Some((x0, y0, x1, y1)), "custom") = (p.prims, p.shape.as_str()) {
+                                    let (ox, oy) = rotate((x0 + x1) / 2.0, (y0 + y1) / 2.0, p.rot);
+                                    seg_in_rect(p0, p1, (p.x + ox, p.y + oy), p.rot, (x1 - x0).max(p.w) / 2.0 + e, (y1 - y0).max(p.h) / 2.0 + e)
+                                } else {
+                                    seg_in_rect(p0, p1, (p.x, p.y), p.rot, p.w / 2.0 + e, p.h / 2.0 + e)
+                                };
+                                away.extend(iv);
+                            }
+                            if let Some((dx, dy)) = p.drill {
+                                away.extend(seg_in_circle(p0, p1, (p.x, p.y), dx.max(dy) / 2.0 + e));
+                            }
+                        }
+                        let pieces: Vec<(f64, f64)> = keep_pieces(keep, away).into_iter().filter(|(a, b)| (b - a) * len >= 0.2 - 1e-9).collect();
+                        if pieces.len() == 1 && pieces[0].0 <= 1e-9 && pieces[0].1 >= 1.0 - 1e-9 {
+                            continue;
+                        }
+                        touch(sp, i)?;
+                        cut.set(cut.get() + 1);
+                        if pieces.is_empty() {
+                            dropped.set(dropped.get() + 1);
+                            crate::route::remove(&mut edits, src, sp);
+                            continue;
+                        }
+                        // each piece is the line's own text with new ends (local coordinates, along the original)
+                        let text = &src[sp.0..sp.1];
+                        let (ss, es) = (child_span(&g, sp.0, "start").unwrap(), child_span(&g, sp.0, "end").unwrap());
+                        let at = |u: f64| (s.0 + u * (t.0 - s.0), s.1 + u * (t.1 - s.1));
+                        let mut out = vec![];
+                        let us = child_span(&g, sp.0, "uuid");
+                        for (k, (a, bb)) in pieces.into_iter().enumerate() {
+                            let (q0, q1) = (at(a), at(bb));
+                            let mut reps = vec![(ss, format!("(start {} {})", n(q0.0), n(q0.1))), (es, format!("(end {} {})", n(q1.0), n(q1.1)))];
+                            // a piece after the first must not repeat the line's uuid
+                            if let (true, Some(u)) = (k > 0, us) {
+                                reps.push((u, String::new()));
+                            }
+                            reps.sort_by(|x, y| y.0.0.cmp(&x.0.0));
+                            let mut piece = text.to_string();
+                            for (r, s2) in reps {
+                                piece.replace_range(r.0 - sp.0..r.1 - sp.0, &s2);
+                            }
+                            out.push(piece);
+                        }
+                        edits.replace(sp, out.join("\n\t\t"));
+                    }
+                }
+                crossing.sort();
+                crossing.dedup();
+                lines.push(format!(
+                    "{i}: silk_clear {} line(s) cut back ({} dropped whole), {} mm from pads and {} mm from the edge{}",
+                    cut.get(), dropped.get(), n(*pads), n(*edge),
+                    if crossing.is_empty() { String::new() } else { format!("; not cut, crossing: {}", crossing.join(", ")) }
+                ));
+            }
+            Op::SilkRemove { refs } => {
+                let mut k = 0;
+                for (_, gs) in silk_of(b, refs, i)? {
+                    for (sp, _) in gs {
+                        touch(sp, i)?;
+                        crate::route::remove(&mut edits, src, sp);
+                        k += 1;
+                    }
+                }
+                lines.push(format!("{i}: silk_remove {k} footprint silkscreen shape(s)"));
+            }
+            Op::AddSlot { from, to, width } => {
+                let len = (to[0] - from[0]).hypot(to[1] - from[1]);
+                if !(*width > 0.0 && width.is_finite()) || len < 1e-6 {
+                    return Err(refused("edit-op", format!("operation {i}: add_slot needs a width above 0 and two different ends")));
+                }
+                let r = width / 2.0;
+                let (ux, uy) = ((to[0] - from[0]) / len, (to[1] - from[1]) / len);
+                let (vx, vy) = (-uy * r, ux * r);
+                for p in [[from[0] - ux * r, from[1] - uy * r], [to[0] + ux * r, to[1] + uy * r], [from[0] + vx, from[1] + vy], [from[0] - vx, from[1] - vy], [to[0] + vx, to[1] + vy], [to[0] - vx, to[1] - vy]] {
+                    check_in(p)?;
+                }
+                let pt = |x: f64, y: f64| format!("{} {}", n(x), n(y));
+                let st = "(stroke (width 0.05) (type default)) (layer \"Edge.Cuts\")";
+                appended.push_str(&format!("  (gr_line (start {}) (end {}) {st})\n", pt(from[0] + vx, from[1] + vy), pt(to[0] + vx, to[1] + vy)));
+                appended.push_str(&format!("  (gr_line (start {}) (end {}) {st})\n", pt(to[0] - vx, to[1] - vy), pt(from[0] - vx, from[1] - vy)));
+                appended.push_str(&format!("  (gr_arc (start {}) (mid {}) (end {}) {st})\n", pt(to[0] + vx, to[1] + vy), pt(to[0] + ux * r, to[1] + uy * r), pt(to[0] - vx, to[1] - vy)));
+                appended.push_str(&format!("  (gr_arc (start {}) (mid {}) (end {}) {st})\n", pt(from[0] - vx, from[1] - vy), pt(from[0] - ux * r, from[1] - uy * r), pt(from[0] + vx, from[1] + vy)));
+                lines.push(format!("{i}: add_slot {} -> {}, {} mm wide, {} mm long", p2(*from), p2(*to), n(*width), n(len + width)));
+            }
+            Op::AddHole { reference, at, drill } => {
+                if !(*drill > 0.0 && drill.is_finite()) {
+                    return Err(refused("edit-op", format!("operation {i}: add_hole needs a drill above 0")));
+                }
+                check_in(*at)?;
+                if b.footprint_by_ref(reference).is_some() || ops[..k].iter().any(|o| matches!(o, Op::AddHole { reference: r, .. } if r == reference)) {
+                    return Err(refused("edit-op", format!("operation {i}: the board already has a footprint {reference}")));
+                }
+                let font = "(effects (font (size 0.6 0.6) (thickness 0.1)))";
+                appended.push_str(&format!(
+                    "  (footprint \"Hole_{d}mm\" (layer \"F.Cu\") (at {x} {y})\n    (property \"Reference\" {r} (at 0 0 0) (layer \"F.SilkS\") (hide yes) {font})\n    (property \"Value\" \"Hole\" (at 0 0 0) (layer \"F.Fab\") (hide yes) {font})\n    (attr exclude_from_pos_files exclude_from_bom)\n    (pad \"\" np_thru_hole circle (at 0 0) (size {d} {d}) (drill {d}) (layers \"*.Cu\" \"*.Mask\"))\n  )\n",
+                    d = n(*drill), x = n(at[0]), y = n(at[1]), r = sexpr::quote(reference)
+                ));
+                lines.push(format!("{i}: add_hole {reference} at {}, {} mm non-plated", p2(*at), n(*drill)));
             }
         }
     }
