@@ -12,6 +12,8 @@ The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M
 - `pcb zone`: `[[stitch]] join`.
 - `pcb check` and `pcb release`: stale-input records, circuit and placement drift, two DRC runs (own rules and fab rules), parts re-check.
 - Gate run: paddle-keyer from netlist to order with no per-board code; the CPL matches the one v1.0.0 was ordered with. Reviews 18 to 20.
+- `pcb --version`.
+- Tests: the steps are data (`tests/cases/steps.toml`, `tests/regressions/*/steps.toml`), not a list in xtask; the review probes moved to `tests/regressions/rNN/` with an index by command; `cargo xtask test --only` and `--list`; reviews 18 to 20 reuse the M4 fixture's flow instead of routing it three more times.
 
 ## 0.3.0 (4 Nov 2026): M3, check and release
 

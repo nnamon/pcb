@@ -1,9 +1,12 @@
-//! `cargo xtask test [--fast]`: runs the whole pcb test suite from a clean checkout and prints one summary.
+//! `cargo xtask test [--fast] [--only WORD] [--list]`: runs the pcb test suite from a clean checkout and prints one
+//! summary.
 //!
-//! Layers (proposal, "Testing"): unit tests; the output contract; the import and route edge cases on synthetic
-//! inputs; and each fixture in tests/fixtures run through import, route and zones, each result checked by its
-//! independent oracle and each oracle by its mutation suite. `--fast` skips everything that runs Freerouting and
-//! the mutation suites. Freerouting comes from PCB_FREEROUTING_JAR. Exit status 1 if any step fails.
+//! Order (proposal, "Testing"): unit tests; `pcb doctor`; the edge cases listed in tests/cases/steps.toml; each
+//! fixture in tests/fixtures (a folder with a fixture.toml) through its import, route, edit, zone, release or M4 flow,
+//! each result checked by its independent oracle and each oracle by its mutation suite; then the regression tests in
+//! tests/regressions/*/steps.toml. `--fast` skips everything that runs Freerouting and the mutation suites. `--only`
+//! runs the steps whose id, folder or `covers` is WORD (a fixture by its name, or all with `fixtures`); `--list`
+//! prints what covers each command. Freerouting comes from PCB_FREEROUTING_JAR. Exit status 1 if any step fails.
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -25,6 +28,10 @@ struct Suite {
     jar: Option<PathBuf>,
     fast: bool,
     steps: Vec<Step>,
+    /// ids of the scripted steps that passed, for `after`
+    passed: std::collections::HashSet<String>,
+    /// fixture name to its project folder, for each fixture flow that ran to the end, for `{flow:<name>}`
+    flows: std::collections::HashMap<String, String>,
 }
 
 fn tail(s: &str, n: usize) -> String {
@@ -35,9 +42,13 @@ fn tail(s: &str, n: usize) -> String {
 impl Suite {
     /// Runs one command as a step: passes when it exits 0.
     fn run(&mut self, name: &str, prog: &str, args: &[&str]) -> bool {
+        self.run_env(name, prog, args, &[])
+    }
+
+    fn run_env(&mut self, name: &str, prog: &str, args: &[&str], env: &[(String, String)]) -> bool {
         let t0 = Instant::now();
         eprintln!("-- {name}");
-        let out = Command::new(prog).args(args).current_dir(&self.root).output();
+        let out = Command::new(prog).args(args).envs(env.iter().map(|(k, v)| (k, v))).current_dir(&self.root).output();
         let (ok, detail) = match out {
             Ok(o) => {
                 let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
@@ -71,16 +82,27 @@ impl Suite {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let usage = "usage: cargo xtask test [--fast] [--only WORD] [--list]";
     if args.first().map(|s| s.as_str()) != Some("test") {
-        bail!("usage: cargo xtask test [--fast]");
+        bail!(usage);
     }
     let fast = args.iter().any(|a| a == "--fast");
+    let only = match args.iter().position(|a| a == "--only") {
+        Some(i) => Some(args.get(i + 1).cloned().context(usage)?),
+        None => None,
+    };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().context("xtask sits in tools/pcb")?.to_path_buf();
+    let regressions = load_regressions(&root)?;
+    if args.iter().any(|a| a == "--list") {
+        let cases = load_specs(&root.join("tests/cases/steps.toml"))?;
+        list(&cases.iter().chain(regressions.iter()).collect::<Vec<_>>());
+        return Ok(());
+    }
     let work = root.join("target").join("xtask");
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work)?;
     let jar = std::env::var("PCB_FREEROUTING_JAR").ok().map(PathBuf::from).filter(|p| p.exists());
-    let mut s = Suite { root: root.clone(), work: work.clone(), pcb: root.join("target/release/pcb"), jar, fast, steps: vec![] };
+    let mut s = Suite { root: root.clone(), work: work.clone(), pcb: root.join("target/release/pcb"), jar, fast, steps: vec![], passed: Default::default(), flows: Default::default() };
     let t0 = Instant::now();
 
     // unit tests and the release binary every later step uses
@@ -105,64 +127,113 @@ fn main() -> Result<()> {
     if !s.run("pcb doctor", &pcb, &dargs) {
         return finish(&s, t0);
     }
-    s.py("output contract", "tests/cases/contract_cases.py", &[&pcb, &s.w("contract")]);
-    s.py("kicad adapter", "tests/cases/adapter_cases.py", &[&s.w("adapter")]);
-    s.py("import edge cases", "tests/cases/import_cases.py", &[&pcb, &s.w("import_cases")]);
-    s.py("import orientation sweep", "tests/cases/orient_cases.py", &[&pcb, &s.w("orient_cases")]);
-    // review 8's probes, kept as cases: edit, diff, init and status, the edit oracle's mutations, and move_footprint
-    // against pcbnew's own move
-    for (n, f) in [("review 8: edit probes", "edit_probes"), ("review 8: diff probes", "diff_probes"), ("review 8: project probes", "project_probes"), ("review 8: verify_edit mutations", "verify_edit_mutations"), ("review 8: move_footprint against pcbnew", "move_fp_vs_pcbnew")] {
-        s.py(n, &format!("tests/review8/{f}.py"), &[&pcb, &s.w(&format!("review8_{f}"))]);
-    }
-    // review 9's cases: zone fills through the gate, the join rule, diff, the router's run choice (a stand-in java, no
-    // Freerouting) and prewire with --rip
-    s.py("review 9: zone gate cases", "tests/review9/zone_gate_cases.py", &[&pcb, &s.w("review9_zone")]);
-    for (n, f) in [("review 9: join probes", "join_probes"), ("review 9: diff misses", "diff_misses"), ("review 9: route branches", "route_branches"), ("review 9: prewire probes", "prewire_probes")] {
-        s.py(n, "tests/review9/expect_pass.py", &[&format!("tests/review9/{f}.py"), &pcb, &s.w(&format!("review9_{f}"))]);
-    }
-    // review 10's cases: zone pairing without uuids, joins through fills, diff on re-saves, prewire stubs
-    s.py("review 10: gate, join, diff and prewire cases", "tests/review10/check.py", &[&pcb, &s.w("review10")]);
-    s.py("review 11: gate markers, prewire stubs, diff on re-saves", "tests/review11/check.py", &[&pcb, &s.w("review11")]);
-    s.py("review 12: markers, copper graphics, stubs at a shared pad", "tests/review12/check.py", &[&pcb, &s.w("review12")]);
-    if s.py("edit edge cases", "tests/cases/edit_cases.py", &[&pcb, &s.w("edit_cases")]) {
-        s.py("edit mutations", "tests/mutations/edit_mutations.py", &[&s.w("edit_cases")]);
-        s.py("diff cases", "tests/cases/diff_cases.py", &[&pcb, &s.w("edit_cases"), &s.w("diff_cases")]);
-    }
-    s.py("zone cases", "tests/cases/zone_cases.py", &[&pcb, &s.w("zone_cases")]);
-    s.py("check, gate and release cases", "tests/cases/release_cases.py", &[&pcb, &s.w("release_cases")]);
-    s.py("review 13: zone probes", "tests/review13/check.py", &[&pcb, &s.w("review13")]);
-    s.py("review 14: zone confirmation probes", "tests/review14/check.py", &[&pcb, &s.w("review14")]);
-    s.py("M4 cases: parts, sync, place, drawing", "tests/cases/m4_cases.py", &[&pcb, &s.w("m4_cases")]);
-    s.py("review 15: check, gate, release and compare probes", "tests/review15/check.py", &[&pcb, &s.w("review15")]);
-    s.py("review 16: M3 confirmation probes", "tests/review16/check.py", &[&pcb, &s.w("review16")]);
-    s.py("review 17: M3 confirmation probes", "tests/review17/check.py", &[&pcb, &s.w("review17")]);
-    match (&jar, s.fast) {
-        (Some(j), false) => {
-            let j = j.clone();
-            // review 18's probes run the M4 fixture flow themselves (Freerouting)
-            s.py("review 18: M4 probes", "tests/review18/check.py", &[&pcb, &s.w("review18")]);
-            s.py("review 19: confirmation probes", "tests/review19/check.py", &[&pcb, &s.w("review19")]);
-            s.py("review 20: confirmation probes", "tests/review20/check.py", &[&pcb, &s.w("review20")]);
-            s.py("route edge cases", "tests/cases/route_cases.py", &[&pcb, &j, &s.w("route_cases")]);
-            s.py("review 8: route probes", "tests/review8/route_probes.py", &[&pcb, &j, &s.w("review8_route_probes")]);
-        }
-        _ => {
-            s.skip("route edge cases", "--fast");
-            s.skip("review 8: route probes", "--fast");
-        }
-    }
-
-    // fixtures
+    // the edge cases, then the fixtures, then the regression tests (some share a fixture's flow, so they come last)
+    let cases = load_specs(&root.join("tests/cases/steps.toml"))?;
+    run_specs(&mut s, &cases, &pcb, jar.as_deref(), only.as_deref());
     let fx_dir = root.join("tests/fixtures");
     let mut fixtures: Vec<_> = std::fs::read_dir(&fx_dir)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("fixture.toml").exists()).collect();
     fixtures.sort();
     for dir in fixtures {
+        let fname = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        if only.as_deref().is_some_and(|o| o != "fixtures" && o != fname) {
+            continue;
+        }
         // a fixture that cannot even be read is a failed step, and the summary is still written
         if let Err(e) = fixture(&mut s, &dir, &pcb, jar.as_deref()) {
             s.steps.push(Step { name: format!("fixture {}", dir.display()), ok: false, seconds: 0.0, detail: format!("{e:#}") });
         }
     }
+    run_specs(&mut s, &regressions, &pcb, jar.as_deref(), only.as_deref());
     finish(&s, t0)
+}
+
+/// One scripted step from a `steps.toml` (format: tests/cases/steps.toml).
+struct Spec {
+    id: String,
+    name: String,
+    run: Vec<String>,
+    covers: Vec<String>,
+    needs: Vec<String>,
+    after: Option<String>,
+    env: Vec<(String, String)>,
+    group: String,
+}
+
+fn load_specs(path: &Path) -> Result<Vec<Spec>> {
+    let v: toml::Value = toml::from_str(&std::fs::read_to_string(path).with_context(|| format!("{}", path.display()))?).with_context(|| format!("{}", path.display()))?;
+    let group = path.parent().and_then(|p| p.file_name()).unwrap_or_default().to_string_lossy().to_string();
+    let strs = |t: &toml::Value, k: &str| -> Vec<String> { t.get(k).and_then(|x| x.as_array()).into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect() };
+    let mut out = vec![];
+    for t in v.get("step").and_then(|x| x.as_array()).into_iter().flatten() {
+        let get = |k: &str| t.get(k).and_then(|x| x.as_str()).map(String::from);
+        let id = get("id").with_context(|| format!("{}: a step without an id", path.display()))?;
+        let env = t.get("env").and_then(|x| x.as_table()).into_iter().flatten().map(|(k, x)| (k.clone(), x.as_str().unwrap_or_default().to_string())).collect();
+        out.push(Spec { name: get("name").unwrap_or_else(|| id.clone()), run: strs(t, "run"), covers: strs(t, "covers"), needs: strs(t, "needs"), after: get("after"), env, group: group.clone(), id });
+    }
+    Ok(out)
+}
+
+/// Every `tests/regressions/*/steps.toml`, in folder order.
+fn load_regressions(root: &Path) -> Result<Vec<Spec>> {
+    let mut dirs: Vec<_> = std::fs::read_dir(root.join("tests/regressions"))?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("steps.toml").exists()).collect();
+    dirs.sort();
+    let mut out = vec![];
+    for d in dirs {
+        out.extend(load_specs(&d.join("steps.toml"))?);
+    }
+    Ok(out)
+}
+
+/// A step is selected by `--only` when the word is its id, its folder or one of what it covers.
+fn selected(sp: &Spec, only: Option<&str>) -> bool {
+    only.is_none_or(|o| sp.id == o || sp.group == o || sp.covers.iter().any(|c| c == o))
+}
+
+fn run_specs(s: &mut Suite, specs: &[Spec], pcb: &str, jar: Option<&str>, only: Option<&str>) {
+    for sp in specs.iter().filter(|sp| selected(sp, only)) {
+        if sp.needs.iter().any(|n| n == "freerouting") && (s.fast || jar.is_none()) {
+            s.skip(&sp.name, "--fast");
+            continue;
+        }
+        if let Some(a) = &sp.after {
+            if !s.passed.contains(a) {
+                s.skip(&sp.name, &format!("needs {a}, which did not pass"));
+                continue;
+            }
+        }
+        let fill = |a: &str| -> Option<String> {
+            let mut a = a.replace("{pcb}", pcb).replace("{jar}", jar.unwrap_or("")).replace("{work}", &s.w(&sp.id));
+            while let Some(i) = a.find("{work:") {
+                let j = a[i..].find('}')? + i;
+                a = format!("{}{}{}", &a[..i], s.w(&a[i + 6..j]), &a[j + 1..]);
+            }
+            while let Some(i) = a.find("{flow:") {
+                let j = a[i..].find('}')? + i;
+                a = format!("{}{}{}", &a[..i], s.flows.get(&a[i + 6..j])?, &a[j + 1..]);
+            }
+            Some(a)
+        };
+        let args: Vec<String> = sp.run.iter().map(|a| fill(a).unwrap_or_default()).collect();
+        // an env value naming a flow that did not run is left out: the probes then run that flow themselves
+        let env: Vec<(String, String)> = sp.env.iter().filter_map(|(k, v)| fill(v).map(|v| (k.clone(), v))).collect();
+        let a: Vec<&str> = args.iter().map(|x| x.as_str()).collect();
+        if s.run_env(&sp.name, "python3", &a, &env) {
+            s.passed.insert(sp.id.clone());
+        }
+    }
+}
+
+fn list(specs: &[&Spec]) {
+    let mut by: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+    for sp in specs {
+        for c in &sp.covers {
+            by.entry(c).or_default().push(format!("{}/{}", sp.group, sp.id));
+        }
+    }
+    for (c, ids) in by {
+        println!("{c}: {}", ids.join(", "));
+    }
+    println!("fixtures (tests/fixtures/*/fixture.toml): import, route, edit, zone, check, release and the M4 flow, by what each fixture lists");
 }
 
 fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()> {
@@ -426,6 +497,7 @@ fn flow(s: &mut Suite, dir: &Path, fx: &toml::Value, name: &str, pcb: &str, jar:
     if !ok {
         return Ok(());
     }
+    s.flows.insert(name.to_string(), ps.clone());
     let net = wd.join("netlist.net").to_string_lossy().to_string();
     let sch = p.join("schematic/paddle-keyer.kicad_sch");
     let _ = Command::new("kicad-cli").args(["sch", "export", "netlist", "--format", "kicadsexpr", "-o", &net]).arg(&sch).output();

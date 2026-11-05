@@ -1,0 +1,8 @@
+# Review 11's probes, kept as regression tests for its closed findings. Report: docs/reviews/11_review10_confirmation.md
+# Format: tests/cases/steps.toml.
+
+[[step]]
+id = "review11"
+name = "review 11: gate markers, prewire stubs, diff on re-saves"
+run = ["tests/regressions/r11/check.py", "{pcb}", "{work}"]
+covers = ["gate", "diff", "route"]

@@ -1,0 +1,10 @@
+# Review 19's probes, kept as regression tests for its closed findings. Report: docs/reviews/19_confirmation.md
+# Format: tests/cases/steps.toml. The probes on the M4 project share the paddle_keyer_m4 fixture's flow ({flow:...}); without it they run the flow themselves.
+
+[[step]]
+id = "review19"
+name = "review 19: confirmation probes"
+run = ["tests/regressions/r19/check.py", "{pcb}", "{work}"]
+covers = ["check", "sync", "footprint", "parts", "release"]
+needs = ["freerouting"]
+env = { PCB_R19_BASE = "{flow:paddle_keyer_m4}" }

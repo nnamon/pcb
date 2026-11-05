@@ -1,0 +1,77 @@
+# The edge cases, run by `cargo xtask test` in this order. Each step runs `python3` with `run` from tools/pcb.
+#
+#   id      the step's work folder, target/xtask/<id>; other steps name it in {work:<id>} and `after`
+#   covers  the pcb commands or parts of pcb it tests (`cargo xtask test --only <word>`, `--list`)
+#   needs   "freerouting": skipped with --fast or without PCB_FREEROUTING_JAR
+#   after   runs only if that step passed
+#
+# Arguments may use {pcb} (the release binary), {jar} (Freerouting), {work} and {work:<id>}.
+
+[[step]]
+id = "contract"
+name = "output contract"
+run = ["tests/cases/contract_cases.py", "{pcb}", "{work}"]
+covers = ["contract", "doctor", "init", "status"]
+
+[[step]]
+id = "adapter"
+name = "kicad adapter"
+run = ["tests/cases/adapter_cases.py", "{work}"]
+covers = ["kicad"]
+
+[[step]]
+id = "import_cases"
+name = "import edge cases"
+run = ["tests/cases/import_cases.py", "{pcb}", "{work}"]
+covers = ["import"]
+
+[[step]]
+id = "orient_cases"
+name = "import orientation sweep"
+run = ["tests/cases/orient_cases.py", "{pcb}", "{work}"]
+covers = ["import"]
+
+[[step]]
+id = "edit_cases"
+name = "edit edge cases"
+run = ["tests/cases/edit_cases.py", "{pcb}", "{work}"]
+covers = ["edit", "gate"]
+
+[[step]]
+id = "edit_mutations"
+name = "edit mutations"
+run = ["tests/mutations/edit_mutations.py", "{work:edit_cases}"]
+covers = ["edit"]
+after = "edit_cases"
+
+[[step]]
+id = "diff_cases"
+name = "diff cases"
+run = ["tests/cases/diff_cases.py", "{pcb}", "{work:edit_cases}", "{work}"]
+covers = ["diff"]
+after = "edit_cases"
+
+[[step]]
+id = "zone_cases"
+name = "zone cases"
+run = ["tests/cases/zone_cases.py", "{pcb}", "{work}"]
+covers = ["zone"]
+
+[[step]]
+id = "release_cases"
+name = "check, gate and release cases"
+run = ["tests/cases/release_cases.py", "{pcb}", "{work}"]
+covers = ["check", "gate", "release"]
+
+[[step]]
+id = "m4_cases"
+name = "M4 cases: parts, sync, place, drawing"
+run = ["tests/cases/m4_cases.py", "{pcb}", "{work}"]
+covers = ["parts", "sync", "place", "drawing"]
+
+[[step]]
+id = "route_cases"
+name = "route edge cases"
+run = ["tests/cases/route_cases.py", "{pcb}", "{jar}", "{work}"]
+covers = ["route"]
+needs = ["freerouting"]

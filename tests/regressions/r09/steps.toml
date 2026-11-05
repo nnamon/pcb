@@ -1,0 +1,32 @@
+# Review 9's probes, kept as regression tests for its closed findings. Report: docs/reviews/09_review8_confirmation.md
+# Format: tests/cases/steps.toml. expect_pass.py turns a probe's PASS and FAIL lines into an exit status.
+
+[[step]]
+id = "review9_zone"
+name = "review 9: zone gate cases"
+run = ["tests/regressions/r09/zone_gate_cases.py", "{pcb}", "{work}"]
+covers = ["zone", "gate"]
+
+[[step]]
+id = "review9_join_probes"
+name = "review 9: join probes"
+run = ["tests/regressions/r09/expect_pass.py", "tests/regressions/r09/join_probes.py", "{pcb}", "{work}"]
+covers = ["edit"]
+
+[[step]]
+id = "review9_diff_misses"
+name = "review 9: diff misses"
+run = ["tests/regressions/r09/expect_pass.py", "tests/regressions/r09/diff_misses.py", "{pcb}", "{work}"]
+covers = ["diff"]
+
+[[step]]
+id = "review9_route_branches"
+name = "review 9: route branches"
+run = ["tests/regressions/r09/expect_pass.py", "tests/regressions/r09/route_branches.py", "{pcb}", "{work}"]
+covers = ["route"]
+
+[[step]]
+id = "review9_prewire_probes"
+name = "review 9: prewire probes"
+run = ["tests/regressions/r09/expect_pass.py", "tests/regressions/r09/prewire_probes.py", "{pcb}", "{work}"]
+covers = ["route"]

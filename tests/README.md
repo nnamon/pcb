@@ -2,32 +2,29 @@
 
 `cargo xtask test` runs everything from a clean checkout. Run it in the pinned image (`ci/Dockerfile`) before every push that touches `tools/pcb`; there is no CI test run, so this local run is the check. It needs `PCB_FREEROUTING_JAR`, or `--fast`, which skips the Freerouting runs and the mutation suites. The summary is written to `target/xtask/summary.json`.
 
+- `cargo xtask test --list` prints, for each command, the steps that cover it.
+- `cargo xtask test --only WORD` runs the unit tests, `pcb doctor` and the steps whose id, folder or `covers` is WORD: `--only zone`, `--only r18`, `--only m4_cases`. A fixture runs under its own name, or all of them under `fixtures`.
+
+## Layout
+
 | Folder | What it holds |
 | --- | --- |
-| `cases/` | Edge cases with the outcome each must have. `import_cases.py` (43 circuit-JSON cases, five of them M3: a part's internal connection, a router's net name, silkscreen), `orient_cases.py` (8 footprints at every rotation), `route_cases.py` (18 runs on synthetic boards), `edit_cases.py` (27: each operation, each refusal, duplicates, floating new copper, a zoned board run twice, the gate's verdict), `diff_cases.py` (9, on the boards `edit_cases.py` writes, plus a git revision), `contract_cases.py` (output contract, codes, doctor, `init` and `status`, and the contract checker's own sensitivity), `adapter_cases.py` (the KiCad adapter's DRC reading), `release_cases.py` (`pcb check` findings and waivers, `pcb gate` refusals and staleness, `pcb release` refusals and files, on `lib/zone_board.py`), `zone_cases.py` (`pcb zone` on `lib/zone_board.py`: each feature, refusals, the DRC allowance, determinism, a second run, a changed stitching pitch) |
-| `oracles/` | Independent checks of a command's result, reading boards with pcbnew or `lib/kisexp.py`, never pcb's own parser: `verify_import.py`, `verify_route.py`, `verify_zones.py`, `verify_edit.py` (the output differs from the input by exactly what the operations ask) |
+| `cases/` | Edge cases, each with the outcome it must have, listed in `cases/steps.toml`. `import_cases.py` (43 circuit-JSON cases), `orient_cases.py` (8 footprints at every rotation), `route_cases.py` (18 runs on synthetic boards), `edit_cases.py` (27: each operation, each refusal, duplicates, floating new copper, a zoned board run twice, the gate's verdict), `diff_cases.py` (9, on the boards `edit_cases.py` writes, plus a git revision), `contract_cases.py` (output contract, codes, doctor, `init` and `status`, and the contract checker's own sensitivity), `adapter_cases.py` (the KiCad adapter's DRC reading), `zone_cases.py` (`pcb zone` on `lib/zone_board.py`: each feature, refusals, the DRC allowance, determinism, a second run), `release_cases.py` (`pcb check` findings and waivers, `pcb gate` refusals and staleness, `pcb release` refusals and files), `m4_cases.py` (on copies of `fixtures/paddle_keyer_m4`: parts, sync, place and drawing) |
+| `fixtures/<name>/` | Real boards. Each holds a `fixture.toml` with every board fact the checks need, so no shared check names a part. `[[route]]` cases run `pcb route` on the imported board with an expected outcome and `still_open` nets; `[zones]` runs `pcb zone` twice with the fixture's `pcb.toml` (same bytes both times) and the result goes to verify_zones; `[[edit]]` cases run `pcb edit`; `[release]` runs the release flow and compares it with the files that were ordered; `[flow]` runs a project from its netlist to the release (M4) |
+| `oracles/` | Independent checks of a command's result, reading boards with pcbnew or `lib/kisexp.py`, never pcb's own parser: `verify_import`, `verify_route`, `verify_zones`, `verify_edit`, `verify_release`, `verify_sync` (the board against its netlist and JLCPCB's footprints), `verify_drawing` (the drawing against the board and the CPL), `verify_against_v1` (holes, paste and mask against paddle-keyer v1.0.0's Gerbers) |
 | `mutations/` | For each oracle, deliberately damaged results it must fail on, plus the undamaged one it must pass |
-| `fixtures/<name>/` | Real boards. Each holds a `fixture.toml` with every board fact the checks need, so no shared check names a part. Its `[[route]]` cases run `pcb route` on the imported board, each with an expected outcome, `still_open` nets and optionally `attempt_used`; a fixture with `[zones]` has a `pcb.toml` that `pcb zone` runs with, twice, and the result goes to verify_zones; its `[[edit]]` cases run `pcb edit`, each with an outcome, an error code or DRC regressions that must be reported, and `verify_edit` on every written result |
-| `review8/` | Review 8's probe scripts, kept as cases: edit, diff, init and status, route (`--prewire` with `--rip`, `--width`), `verify_edit`'s mutations, and `move_footprint` against pcbnew's own move |
-| `review9/` | Review 9's cases: the gate's fill carry-back on zones with and without uuids and in footprints (`zone_gate_cases.py`), the join rule, diff misses, the router's choice between runs driven by a stand-in java (`fake/`), and prewire with `--rip`. `expect_pass.py` turns their PASS and FAIL lines into an exit status |
-| `review10/` | Review 10's probes (zone pairing without uuids and in copied footprints, joins through stale or empty fills, diff on KiCad re-saves and copper graphics, multi-segment prewire stubs), with their verdicts in `check.py` |
-| `review11/` | Review 11's probes (the gate's markers on never-filled, hand-written and copied zones; prewire stubs anchored in a never-filled zone or joined at a bend; diff misses and KiCad re-saves of hand-written text), with their verdicts in `check.py` |
-| `review12/` | Review 12's probes (markers against colliding ids, shared uuids, groups and pasted footprints; copper text and graphics changes and re-saves; two prewire stubs at one pad), with their verdicts in `check.py` |
-| `review13/` | Review 13's probes of `pcb zone` (stitching, features, net ties, refusals, the fill flag, the badge), with their verdicts in `check.py` |
-| `review14/` | Review 14's probes confirming review 13's closures (fills against refills, overrides, stitching around custom pads and rule areas, ties, refusals, the badge), with their verdicts in `check.py` |
-| `cases/m4_cases.py` | Milestone M4's cases on copies of `fixtures/paddle_keyer_m4`: parts (stock, Economic, missing, stale, the known offsets), sync (pin names, the XC6206 trap, missing pins and footprints, renets, removals, locks), place (locks, sides, off-board, plated pads, keep-outs, ripping) and drawing |
-| `oracles/verify_sync.py`, `oracles/verify_drawing.py` | M4's oracles: a synced and placed board against its netlist and JLCPCB's footprints; the placement drawing against the board and the CPL |
-| `review15/` | Review 15's probes of milestone M3 (check, gates, release and its read-back, compare-gerbers, paste, art, the import's additions, the badge), with their verdicts in `check.py` |
-| `review16/` | Review 16's probes confirming review 15's closures (the paddle keyer through check, gate and release with stale inputs, read-back limits, compare-gerbers, import, the badge), with their verdicts in `check.py` |
-| `review17/` | Review 17's probes confirming review 16's closures (stale records, the two DRC runs, release fills, compare-gerbers, the gate hash, import silkscreen), with their verdicts in `check.py` |
-| `review18/` | Review 18's probes of milestone M4 (pin numbers and names, EasyEDA conversion, sync, parts, place, the release against v1.0.0), with their verdicts in `check.py`; they run the M4 flow themselves (Freerouting) |
-| `review19/` | Review 19's probes confirming reviews 17 and 18 (stale output, fab fills, pin numbers and names, slots, two-pad turns, re-sync, DNP flags, the v1.0.0 oracle), with their verdicts in `check.py`; some run the M4 flow (Freerouting) |
-| `review20/` | Review 20's probes confirming review 19 (off-centre slots, polarity, DNP flags, re-sync copper, stale comparison), with their verdicts in `check.py`; some run the M4 flow (Freerouting) |
+| `regressions/rNN/` | Review NN's probes, kept as regression tests for its closed findings, each folder with its `steps.toml`. `regressions/README.md` indexes them by review, report and command |
 | `lib/` | Builders for synthetic inputs, and the output-contract checker |
 
-Rules:
+## Order
+
+Unit tests, the release build, `pcb doctor`, the edge cases, the fixtures, then the regression tests. Reviews 18 to 20 use the `paddle_keyer_m4` fixture's finished flow (`{flow:paddle_keyer_m4}` in their `steps.toml`) instead of routing it again; run alone, they route it themselves.
+
+## Rules
 
 - **No shared check names a board.** Board facts (hole names, back-side parts, keep-outs, nets, expected fills, allowed DRC kinds) live in that board's `fixture.toml`.
 - **Oracles come from someone else.** Each oracle is written or reviewed by an independent reviewer against the spec. A reviewer's oracle and mutations join the suite.
 - **A check without a mutation does not count.** Each oracle check needs a mutation in `mutations/` that it catches.
+- **Reviewers' probes stay theirs.** A probe in `regressions/` is changed only where the tool's behaviour or the test environment moved, and each change carries a comment starting "designer's edit" that says why.
 - **New fixture:** copy the board's inputs into `fixtures/<name>/`, write its `fixture.toml`, and run the suite. `xtask` picks up every folder that has a `fixture.toml`.
+- **New case or review:** add a `[[step]]` to `cases/steps.toml`, or a `regressions/rNN/` folder with its own `steps.toml`; `xtask` reads every `regressions/*/steps.toml`.

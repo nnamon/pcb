@@ -1,0 +1,8 @@
+# Review 14's probes, kept as regression tests for its closed findings. Report: docs/reviews/14_review13_confirmation.md
+# Format: tests/cases/steps.toml.
+
+[[step]]
+id = "review14"
+name = "review 14: zone confirmation probes"
+run = ["tests/regressions/r14/check.py", "{pcb}", "{work}"]
+covers = ["zone"]
