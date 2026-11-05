@@ -151,6 +151,18 @@ Every command:
 - **One door to KiCad:** every KiCad call goes through `src/kicad.rs`.
 - **Pinned tools:** `pcb doctor` checks the versions and the KiCad behaviours pcb works around.
 
+### Test method (owner, 5 Nov 2026)
+
+Reviews 8 to 20 left a suite per review: each with its own builders, library and runner, and each confirmation review re-checking the last. The run grew to about 50 minutes, two-thirds of it review probes re-building boards that the cases and fixtures already build. The method from here:
+
+1. **A finding is a case, not a folder.** Each command has one case table, `tests/cases/<command>.toml`: the input (a builder with parameters, or a fixture product), the command, the outcome and codes it must give, and `source` (for example "review 15, finding 7"). A reviewer delivers new findings as rows in that format against the shared builders, so the reviewer still writes the input and the verdict. Their probe scripts are evidence and stay with the report in `docs/reviews/`; they do not run in the suite. A confirmation review re-runs the finding's case and adds a row only for a new finding.
+2. **Each fixture's products are built once per run.** The imported, zoned, routed and released boards are made once; cases, oracles and mutations read them. Synthetic boards come from the shared builders in `tests/lib/`, cached by their parameters.
+3. **Every step is cached by its inputs.** A step's key is the hash of its script, its input files and the `pcb` binary; a mutation suite tests an oracle, so its key holds the oracle, not the binary. A step whose key passed before is not run again.
+4. **Independent steps run in parallel.**
+5. **Two tiers.** `cargo xtask test` after each change; `cargo xtask test --full` (no cache) before a milestone gate or a release.
+
+`tests/regressions/` is being moved into the case tables one command at a time; each of its verdicts is marked covered (by a named case), ported (a new row) or evidence (it tested a review's premise, not pcb), in `tests/regressions/AUDIT.md`.
+
 ## Project file and explicit edits (milestone M1)
 
 The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1); `zone` (M2); `paste`, `art`, `check`, `gate`, `release`, `compare-gerbers` (M3, in progress).

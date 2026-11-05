@@ -7,6 +7,9 @@
 //! tests/regressions/*/steps.toml. `--fast` skips everything that runs Freerouting and the mutation suites. `--only`
 //! runs the steps whose id, folder or `covers` is WORD (a fixture by its name, or all with `fixtures`); `--list`
 //! prints what covers each command. Freerouting comes from PCB_FREEROUTING_JAR. Exit status 1 if any step fails.
+//!
+//! A step that passed is not run again while its key is unchanged (DESIGN.md, "Test method"): the keys live in
+//! target/xtask-cache and the work folders persist. `--full` clears both and runs everything.
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -32,6 +35,79 @@ struct Suite {
     passed: std::collections::HashSet<String>,
     /// fixture name to its project folder, for each fixture flow that ran to the end, for `{flow:<name>}`
     flows: std::collections::HashMap<String, String>,
+    /// target/xtask-cache: one file per step that passed, holding the key it passed with
+    cache: PathBuf,
+    /// this run's key for each scripted step, so a step's key can include the keys of the steps it needs
+    keys: std::collections::HashMap<String, String>,
+    /// the hash of the release binary
+    pcb_key: String,
+}
+
+/// The SHA-256 of files and folders (every file below, in path order) and extra strings.
+fn key_of(root: &Path, paths: &[PathBuf], extra: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+    fn walk(p: &Path, out: &mut Vec<PathBuf>) {
+        if p.is_dir() {
+            let mut es: Vec<_> = std::fs::read_dir(p).into_iter().flatten().filter_map(|e| e.ok()).map(|e| e.path()).filter(|q| q.file_name().is_some_and(|n| n != "__pycache__")).collect();
+            es.sort();
+            for e in es {
+                walk(&e, out);
+            }
+        } else if p.is_file() {
+            out.push(p.to_path_buf());
+        }
+    }
+    let mut files = vec![];
+    for p in paths {
+        walk(p, &mut files);
+    }
+    let mut h = Sha256::new();
+    for f in files {
+        h.update(f.strip_prefix(root).unwrap_or(&f).to_string_lossy().as_bytes());
+        h.update(std::fs::read(&f).unwrap_or_default());
+    }
+    for e in extra {
+        h.update(e.as_bytes());
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+impl Suite {
+    /// True when `name` passed before with this key; the step is then recorded as cached and not run.
+    fn cached(&mut self, name: &str, key: &str) -> bool {
+        let f = self.cache.join(slug(name));
+        if std::fs::read_to_string(&f).is_ok_and(|k| k == key) {
+            eprintln!("-- {name}: cached");
+            self.steps.push(Step { name: format!("{name} (cached)"), ok: true, seconds: 0.0, detail: String::new() });
+            return true;
+        }
+        false
+    }
+
+    fn remember(&self, name: &str, key: &str) {
+        let _ = std::fs::write(self.cache.join(slug(name)), key);
+    }
+
+    /// A mutation suite, whose result depends only on its files: the script, the oracles and its inputs (every
+    /// argument but the last, which is its work folder). It tests an oracle, not pcb, so it is not re-run while the
+    /// files it damages and the oracle are unchanged.
+    fn py_cached(&mut self, name: &str, script: &str, args: &[&str]) -> bool {
+        let mut paths = vec![self.root.join(script), self.root.join("tests/oracles"), self.root.join("tests/lib")];
+        paths.extend(args[..args.len().saturating_sub(1)].iter().map(PathBuf::from).filter(|p| p.exists()));
+        let key = key_of(&self.root, &paths, &[]);
+        if self.cached(name, &key) {
+            return true;
+        }
+        let ok = self.py(name, script, args);
+        if ok {
+            self.remember(name, &key);
+        }
+        ok
+    }
+}
+
+fn slug(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
 }
 
 fn tail(s: &str, n: usize) -> String {
@@ -82,7 +158,7 @@ impl Suite {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: cargo xtask test [--fast] [--only WORD] [--list]";
+    let usage = "usage: cargo xtask test [--fast] [--full] [--only WORD] [--list]";
     if args.first().map(|s| s.as_str()) != Some("test") {
         bail!(usage);
     }
@@ -99,10 +175,18 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let work = root.join("target").join("xtask");
-    let _ = std::fs::remove_dir_all(&work);
+    let cache = root.join("target").join("xtask-cache");
+    // work folders persist between runs, so a cached step's output is still there for the steps after it; --full
+    // starts clean
+    let full = args.iter().any(|a| a == "--full");
+    if full {
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&cache);
+    }
     std::fs::create_dir_all(&work)?;
+    std::fs::create_dir_all(&cache)?;
     let jar = std::env::var("PCB_FREEROUTING_JAR").ok().map(PathBuf::from).filter(|p| p.exists());
-    let mut s = Suite { root: root.clone(), work: work.clone(), pcb: root.join("target/release/pcb"), jar, fast, steps: vec![], passed: Default::default(), flows: Default::default() };
+    let mut s = Suite { root: root.clone(), work: work.clone(), pcb: root.join("target/release/pcb"), jar, fast, steps: vec![], passed: Default::default(), flows: Default::default(), cache, keys: Default::default(), pcb_key: String::new() };
     let t0 = Instant::now();
 
     // unit tests and the release binary every later step uses
@@ -111,6 +195,7 @@ fn main() -> Result<()> {
         return finish(&s, t0);
     }
     let pcb = s.pcb.to_string_lossy().to_string();
+    s.pcb_key = key_of(&root, &[s.pcb.clone()], &[]);
     let jar = s.jar.as_ref().map(|p| p.to_string_lossy().to_string());
     if !s.fast && jar.is_none() {
         s.steps.push(Step { name: "freerouting jar".into(), ok: false, seconds: 0.0, detail: "PCB_FREEROUTING_JAR must name the Freerouting 2.5.0 jar (or use --fast)".into() });
@@ -138,9 +223,25 @@ fn main() -> Result<()> {
         if only.as_deref().is_some_and(|o| o != "fixtures" && o != fname) {
             continue;
         }
+        // the whole fixture is skipped while the binary, the fixture, the shared checks and this runner are unchanged
+        let paths = [dir.clone(), root.join("tests/oracles"), root.join("tests/mutations"), root.join("tests/lib"), root.join("xtask/src/main.rs")];
+        let key = key_of(&root, &paths, &[&s.pcb_key, jar.as_deref().unwrap_or(""), if s.fast { "fast" } else { "" }]);
+        let label = format!("fixture {fname}");
+        let project = work.join(&fname).join("project");
+        if s.cached(&label, &key) {
+            if project.join("release").exists() {
+                s.flows.insert(fname.clone(), project.to_string_lossy().to_string());
+            }
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(work.join(&fname));
+        let before = s.steps.iter().filter(|x| !x.ok).count();
         // a fixture that cannot even be read is a failed step, and the summary is still written
         if let Err(e) = fixture(&mut s, &dir, &pcb, jar.as_deref()) {
             s.steps.push(Step { name: format!("fixture {}", dir.display()), ok: false, seconds: 0.0, detail: format!("{e:#}") });
+        }
+        if s.steps.iter().filter(|x| !x.ok).count() == before && !s.fast {
+            s.remember(&label, &key);
         }
     }
     run_specs(&mut s, &regressions, &pcb, jar.as_deref(), only.as_deref());
@@ -216,9 +317,29 @@ fn run_specs(s: &mut Suite, specs: &[Spec], pcb: &str, jar: Option<&str>, only: 
         let args: Vec<String> = sp.run.iter().map(|a| fill(a).unwrap_or_default()).collect();
         // an env value naming a flow that did not run is left out: the probes then run that flow themselves
         let env: Vec<(String, String)> = sp.env.iter().filter_map(|(k, v)| fill(v).map(|v| (k.clone(), v))).collect();
+        // the key: the step's scripts (a regression folder whole, since its probes share a library), the shared
+        // test files, the binary, the Freerouting jar, and the keys of the steps whose work it reads
+        let mut paths: Vec<PathBuf> = sp.run.iter().map(|a| s.root.join(a)).filter(|p| p.is_file()).collect();
+        if sp.group.starts_with('r') && sp.group[1..].chars().all(|c| c.is_ascii_digit()) {
+            paths.push(s.root.join("tests/regressions").join(&sp.group));
+        }
+        paths.extend(["tests/lib", "tests/oracles", "tests/mutations", "tests/fixtures"].map(|p| s.root.join(p)));
+        let deps: Vec<String> = sp.run.iter().chain(sp.env.iter().map(|(_, v)| v)).flat_map(|a| a.match_indices("{work:").map(|(i, _)| a[i + 6..].split('}').next().unwrap_or("").to_string()).collect::<Vec<_>>()).chain(sp.after.clone()).map(|d| s.keys.get(&d).cloned().unwrap_or_default()).collect();
+        let mut extra: Vec<&str> = vec![&s.pcb_key, jar.unwrap_or("")];
+        extra.extend(sp.run.iter().map(|x| x.as_str()));
+        extra.extend(sp.env.iter().flat_map(|(k, v)| [k.as_str(), v.as_str()]));
+        extra.extend(deps.iter().map(|x| x.as_str()));
+        let key = key_of(&s.root, &paths, &extra);
+        s.keys.insert(sp.id.clone(), key.clone());
+        if s.cached(&sp.name, &key) {
+            s.passed.insert(sp.id.clone());
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(s.w(&sp.id));
         let a: Vec<&str> = args.iter().map(|x| x.as_str()).collect();
         if s.run_env(&sp.name, "python3", &a, &env) {
             s.passed.insert(sp.id.clone());
+            s.remember(&sp.name, &key);
         }
     }
 }
@@ -260,7 +381,7 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
     if s.fast {
         s.skip(&format!("{name}: import mutations"), "--fast");
     } else {
-        s.py(&format!("{name}: import mutations"), "tests/mutations/import_mutations.py", &[&cj, &board, &ftoml, &w("imut")]);
+        s.py_cached(&format!("{name}: import mutations"), "tests/mutations/import_mutations.py", &[&cj, &board, &ftoml, &w("imut")]);
     }
 
     // route cases
@@ -324,7 +445,7 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             s.py(&format!("{label}: verify_route"), "tests/oracles/verify_route.py", &[&board, &out, &region, &targets, &allowed]);
             if !mutated && !targets.is_empty() && v["data"]["added_segments"].as_u64().unwrap_or(0) > 0 {
                 mutated = true;
-                s.py(&format!("{label}: route mutations"), "tests/mutations/route_mutations.py", &[&board, &out, &region, &targets, &allowed, &w("rmut")]);
+                s.py_cached(&format!("{label}: route mutations"), "tests/mutations/route_mutations.py", &[&board, &out, &region, &targets, &allowed, &w("rmut")]);
             }
         }
     }
@@ -417,7 +538,7 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             if s.fast {
                 s.skip(&format!("{name}: zone mutations"), "--fast");
             } else {
-                s.py(&format!("{name}: zone mutations"), "tests/mutations/zone_mutations.py", &[&base, &zoned, &ftoml, &w("zmut")]);
+                s.py_cached(&format!("{name}: zone mutations"), "tests/mutations/zone_mutations.py", &[&base, &zoned, &ftoml, &w("zmut")]);
             }
         }
     }
@@ -459,7 +580,7 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             let zip = format!("{out}/{pn}_v{pv}_gerbers.zip");
             s.run(&format!("{name}: compare-gerbers with the ordered files"), pcb, &["--json", "compare-gerbers", &zip, &f("golden_gerbers"), "--explain", &f("explain"), "--board", &format!("{rdir}/board.kicad_pcb"), "--work", &w("compare_w")]);
             s.py(&format!("{name}: verify_release"), "tests/oracles/verify_release.py", &[&out, &f("golden_bom"), &f("golden_cpl"), pn, pv]);
-            s.py(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&w("release_w/gerbers"), &format!("{rdir}/board.kicad_pcb"), &w("vmut")]);
+            s.py_cached(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&w("release_w/gerbers"), &format!("{rdir}/board.kicad_pcb"), &w("vmut")]);
         }
     }
     Ok(())
@@ -509,7 +630,7 @@ fn flow(s: &mut Suite, dir: &Path, fx: &toml::Value, name: &str, pcb: &str, jar:
     let rel = format!("{ps}/release");
     s.py(&format!("{name}: verify_release against v1.0.0's BOM and CPL"), "tests/oracles/verify_release.py", &[&rel, &g("golden_bom"), &g("golden_cpl"), pn, pv]);
     s.py(&format!("{name}: holes, paste and mask against v1.0.0's Gerbers"), "tests/oracles/verify_against_v1.py", &[&format!("{rel}/{pn}_v{pv}_gerbers.zip"), &dir.join("../paddle_keyer_v1/golden/paddle-keyer_v1.0.0_gerbers.zip").to_string_lossy()]);
-    s.py(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&wd.join(format!("w{}/gerbers", 9)).to_string_lossy(), &board, &wd.join("vmut").to_string_lossy()]);
+    s.py_cached(&format!("{name}: release read-back mutations"), "tests/mutations/verify_mutations.py", &[&wd.join(format!("w{}/gerbers", 9)).to_string_lossy(), &board, &wd.join("vmut").to_string_lossy()]);
     s.py(&format!("{name}: verify_drawing"), "tests/oracles/verify_drawing.py", &[&format!("{ps}/drawings"), &board, &format!("{rel}/{pn}_v{pv}_CPL.csv")]);
     Ok(())
 }
