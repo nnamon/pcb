@@ -13,7 +13,8 @@ The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M
 - `pcb check` and `pcb release`: stale-input records, circuit and placement drift, two DRC runs (own rules and fab rules), parts re-check.
 - Gate run: paddle-keyer from netlist to order with no per-board code; the CPL matches the one v1.0.0 was ordered with. Reviews 18 to 20.
 - `pcb --version`.
-- Tests: the steps are data (`tests/cases/steps.toml`, `tests/regressions/*/steps.toml`), not a list in xtask; the review probes moved to `tests/regressions/rNN/` with an index by command; `cargo xtask test --only` and `--list`; reviews 18 to 20 reuse the M4 fixture's flow instead of routing it three more times.
+- `pcb check` (and every DRC copy): a reused `--work` folder no longer hides findings. Files left by an earlier run beside the copy (`.kicad_prl`, a project or rules file the board does not have, the old report) are removed first.
+- Tests: the steps are data (`tests/cases/steps.toml`), not a list in xtask, and a step whose inputs have not changed is not run again (`--full` runs everything). `cargo xtask test --only` and `--list`. The review probes of reviews 8 to 20 (13 folders, about 770 verdicts) are gone from the suite: each verdict was marked covered, ported to its command's case file, or evidence, in `docs/reviews/audit/`.
 
 ## 0.3.0 (4 Nov 2026): M3, check and release
 

@@ -4,6 +4,7 @@
 #   covers  the pcb commands or parts of pcb it tests (`cargo xtask test --only <word>`, `--list`)
 #   needs   "freerouting": skipped with --fast or without PCB_FREEROUTING_JAR
 #   after   runs only if that step passed
+#   after_fixtures = true: runs after the fixtures, for a step that reads a fixture's flow ({flow:<name>} in env)
 #
 # Arguments may use {pcb} (the release binary), {jar} (Freerouting), {work} and {work:<id>}.
 
@@ -61,13 +62,15 @@ covers = ["zone"]
 id = "release_cases"
 name = "check, gate and release cases"
 run = ["tests/cases/release_cases.py", "{pcb}", "{work}"]
-covers = ["check", "gate", "release"]
+covers = ["check", "gate", "release", "compare-gerbers", "paste", "art"]
 
 [[step]]
 id = "m4_cases"
 name = "M4 cases: parts, sync, place, drawing"
 run = ["tests/cases/m4_cases.py", "{pcb}", "{work}"]
-covers = ["parts", "sync", "place", "drawing"]
+covers = ["parts", "sync", "place", "drawing", "footprint", "release"]
+after_fixtures = true
+env = { PCB_M4_PROJECT = "{flow:paddle_keyer_m4}" }
 
 [[step]]
 id = "route_cases"

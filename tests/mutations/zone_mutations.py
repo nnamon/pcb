@@ -35,6 +35,39 @@ st_net = Z.get("stitch", {}).get("net", "")
 solid_pad = tuple(Z["solid_override_pad"].split(".", 1)) if Z.get("solid_override_pad") else ("", "")
 fx = repr
 
+# review 14, oracle_j: the stitching vias (the stitch net's vias the base lacks, by position), the floor, the first
+# keep-out, and helpers to move the first stitching via
+ST_PRE = f"""
+from shapely.geometry import Polygon, box
+base_b = pcbnew.LoadBoard({base!r})
+st_net = {fx(st_net)}
+old = {{(v.GetPosition().x, v.GetPosition().y) for v in base_b.GetTracks() if v.GetClass() == 'PCB_VIA' and v.GetNetname() == st_net}}
+stitch = [v for v in b.GetTracks() if v.GetClass() == 'PCB_VIA' and v.GetNetname() == st_net and (v.GetPosition().x, v.GetPosition().y) not in old]
+floor = {Z.get('stitch', {}).get('min_new_vias', 0)!r}
+k = {(Z.get('keepouts') or [{}])[0]!r}
+r0 = stitch[0].GetWidth(pcbnew.F_Cu) / 2e6
+def edge_spot(pred):
+    # the rightmost F.Cu copper point of the first pad matching pred, at its mid height, then 0.05 mm of overlap
+    for f in b.GetFootprints():
+        for p in f.Pads():
+            ls = p.GetLayerSet()
+            if not ls.Contains(pcbnew.F_Cu) or not pred(p, not ls.Contains(pcbnew.B_Cu)):
+                continue
+            ps = pcbnew.SHAPE_POLY_SET()
+            p.TransformShapeToPolygon(ps, pcbnew.F_Cu, 0, pcbnew.FromMM(0.002), pcbnew.ERROR_INSIDE)
+            g = Polygon([(ps.Outline(0).CPoint(i).x / 1e6, ps.Outline(0).CPoint(i).y / 1e6) for i in range(ps.Outline(0).PointCount())]).buffer(0)
+            minx, miny, maxx, maxy = g.bounds
+            cy = (miny + maxy) / 2
+            line = g.intersection(box(minx - 1, cy - 1e-4, maxx + 1, cy + 1e-4))
+            if not line.is_empty:
+                return line.bounds[2] + r0 - 0.05, cy
+    raise SystemExit("no pad for the edge mutation")
+def move_to(xy):
+    stitch[0].SetPosition(pcbnew.VECTOR2I(int(round(xy[0] * 1e6)), int(round(xy[1] * 1e6))))
+"""
+# control for oracle_j: as many stitching vias removed as leaves exactly the floor; check J must still pass
+ST_CONTROL = ST_PRE + "for v in stitch[:len(stitch) - floor]:\n    b.Remove(v)\n"
+
 # name -> (pcbnew code with `b` the loaded board, refill after?)
 MUT = {
     "tie_copper_moved": (f"""
@@ -153,6 +186,16 @@ else:
     pd = next(p for f in b.GetFootprints() for p in f.Pads() if p.GetNetname() == {fx(plane)} and p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH)
 pd.SetLocalZoneConnection(pcbnew.ZONE_CONNECTION_FULL)
 """, True),
+    # source: review 14, oracle_j: check J against damage beyond removing every via or centring one on a pad: one via
+    # below the floor, a via overlapping a pad's edge by 0.05 mm (GND SMD, GND through-hole, another net's pad), a via
+    # inside a keep-out, and one just outside a grown keep-out's edge by less than its radius. Not refilled, as the
+    # review ran them (the edits are to vias only)
+    "stitch_below_floor": (ST_PRE + "for v in stitch[:len(stitch) - floor + 1]:\n    b.Remove(v)\n", False),
+    "stitch_edge_gnd_smd": (ST_PRE + "move_to(edge_spot(lambda p, smd: p.GetNetname() == st_net and smd))\n", False),
+    "stitch_edge_gnd_tht": (ST_PRE + "move_to(edge_spot(lambda p, smd: p.GetNetname() == st_net and not smd))\n", False),
+    "stitch_edge_other_net": (ST_PRE + "move_to(edge_spot(lambda p, smd: p.GetNetname() not in (st_net, '')))\n", False),
+    "stitch_in_keepout": (ST_PRE + "move_to(((k['rect'][0] + k['rect'][2]) / 2, (k['rect'][1] + k['rect'][3]) / 2))\n", False),
+    "stitch_keepout_edge": (ST_PRE + "move_to((k['rect'][2] + k.get('grow', 0) + r0 - 0.05, (k['rect'][1] + k['rect'][3]) / 2))\n", False),
     "stale_fill_short": (f"""
 z = next(z for z in b.Zones() if not z.GetIsRuleArea() and z.GetNetname() == {fx(plane)} and z.IsOnLayer(pcbnew.B_Cu))
 bb = z.GetBoundingBox()
@@ -173,11 +216,16 @@ b.Add(t)
 TARGET = {"tie_copper_moved": "A", "tie_track_dropped": "A", "tie_pad_wrong_net": "A", "tie_wrong_group": "A",
           "keepout_removed": "B", "plane_wrong_net": "C", "plane_solid_to_holes": "D", "plane_clearance_small": "E",
           "islands_kept": "F", "power_fill_lost": "H", "outer_pours_lost": "H", "thin_spokes": "D", "stale_fill_short": "G",
-          "allowed_kind_exceeded": "I", "stitch_removed": "J", "stitch_on_pad": "J", "plated_pad_solid": "D"}
+          "allowed_kind_exceeded": "I", "stitch_removed": "J", "stitch_on_pad": "J",
+          "stitch_below_floor": "J", "stitch_edge_gnd_smd": "J", "stitch_edge_gnd_tht": "J", "stitch_edge_other_net": "J", "stitch_in_keepout": "J",
+          "stitch_keepout_edge": "J", "plated_pad_solid": "D"}
 NEEDS = {k: bool(Z.get("net_tie")) for k in TARGET if k.startswith("tie_")}
 NEEDS["allowed_kind_exceeded"] = bool(Z.get("net_tie")) and bool(Z.get("drc_allowed"))
 NEEDS["keepout_removed"] = bool(Z.get("keepouts"))
 NEEDS["stitch_removed"] = NEEDS["stitch_on_pad"] = bool(Z.get("stitch"))
+for _k in ("stitch_below_floor", "stitch_edge_gnd_smd", "stitch_edge_gnd_tht", "stitch_edge_other_net"):
+    NEEDS[_k] = bool(Z.get("stitch"))
+NEEDS["stitch_in_keepout"] = NEEDS["stitch_keepout_edge"] = bool(Z.get("stitch")) and bool(Z.get("keepouts"))
 
 
 def verify(path):
@@ -224,5 +272,16 @@ for name, (code, refill) in MUT.items():
     ok = v.returncode != 0 and TARGET[name] in fired
     results[name + " caught"] = ok
     print(f"{'ok  ' if ok else 'FAIL'} {name} caught by {TARGET[name]} (fired: {''.join(fired)})")
+# source: review 14, oracle_j: the control, exactly the floor of stitching vias left, must pass
+if Z.get("stitch"):
+    out = os.path.join(work, "stitch_keep_floor.kicad_pcb")
+    if os.path.exists(pro):
+        shutil.copy(pro, os.path.splitext(out)[0] + ".kicad_pro")
+    r = subprocess.run([sys.executable, "-c", f"import pcbnew\nb = pcbnew.LoadBoard({zoned!r})\n{ST_CONTROL}\nb.Save({out!r})\n"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"stitch_keep_floor: {r.stderr[-1500:]}")
+    v = verify(out)
+    results["stitch_keep_floor passes"] = v.returncode == 0
+    print(f"{'ok  ' if v.returncode == 0 else 'FAIL'} stitch_keep_floor passes {first_fail(v) if v.returncode else ''}")
 print(f"{'ok  ' if results['unmutated passes'] else 'FAIL'} unmutated passes")
 sys.exit(0 if all(results.values()) else 1)

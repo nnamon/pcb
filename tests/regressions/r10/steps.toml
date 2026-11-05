@@ -1,8 +1,0 @@
-# Review 10's probes, kept as regression tests for its closed findings. Report: docs/reviews/10_review9_confirmation.md
-# Format: tests/cases/steps.toml.
-
-[[step]]
-id = "review10"
-name = "review 10: gate, join, diff and prewire cases"
-run = ["tests/regressions/r10/check.py", "{pcb}", "{work}"]
-covers = ["gate", "edit", "diff", "route"]

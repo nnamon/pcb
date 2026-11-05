@@ -161,7 +161,7 @@ Reviews 8 to 20 left a suite per review: each with its own builders, library and
 4. **Independent steps run in parallel.**
 5. **Two tiers.** `cargo xtask test` after each change; `cargo xtask test --full` (no cache) before a milestone gate or a release.
 
-`tests/regressions/` is being moved into the case files one command at a time; each of its verdicts is marked covered (by a named case), ported (a new row) or evidence (it tested a review's premise, not pcb), in `tests/regressions/AUDIT.md`.
+Reviews 8 to 20's probe folders were audited on 5 Nov 2026 and removed: each verdict is marked covered (by a named case), ported (a case in its command's file) or evidence (it tested a review's premise, not pcb), in `docs/reviews/audit/`. The probes are in git history at e17bfac (`tests/regressions/`).
 
 ## Project file and explicit edits (milestone M1)
 

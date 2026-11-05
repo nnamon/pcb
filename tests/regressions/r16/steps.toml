@@ -1,8 +1,0 @@
-# Review 16's probes, kept as regression tests for its closed findings. Report: docs/reviews/16_m3_confirmation.md
-# Format: tests/cases/steps.toml.
-
-[[step]]
-id = "review16"
-name = "review 16: M3 confirmation probes"
-run = ["tests/regressions/r16/check.py", "{pcb}", "{work}"]
-covers = ["check", "gate", "release", "compare-gerbers", "import"]

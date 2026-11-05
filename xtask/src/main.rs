@@ -3,8 +3,8 @@
 //!
 //! Order (proposal, "Testing"): unit tests; `pcb doctor`; the edge cases listed in tests/cases/steps.toml; each
 //! fixture in tests/fixtures (a folder with a fixture.toml) through its import, route, edit, zone, release or M4 flow,
-//! each result checked by its independent oracle and each oracle by its mutation suite; then the regression tests in
-//! tests/regressions/*/steps.toml. `--fast` skips everything that runs Freerouting and the mutation suites. `--only`
+//! each result checked by its independent oracle and each oracle by its mutation suite; then the cases marked
+//! `after_fixtures`, which read a fixture's flow. `--fast` skips everything that runs Freerouting and the mutation suites. `--only`
 //! runs the steps whose id, folder or `covers` is WORD (a fixture by its name, or all with `fixtures`); `--list`
 //! prints what covers each command. Freerouting comes from PCB_FREEROUTING_JAR. Exit status 1 if any step fails.
 //!
@@ -168,10 +168,9 @@ fn main() -> Result<()> {
         None => None,
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().context("xtask sits in tools/pcb")?.to_path_buf();
-    let regressions = load_regressions(&root)?;
     if args.iter().any(|a| a == "--list") {
         let cases = load_specs(&root.join("tests/cases/steps.toml"))?;
-        list(&cases.iter().chain(regressions.iter()).collect::<Vec<_>>());
+        list(&cases.iter().collect::<Vec<_>>());
         return Ok(());
     }
     let work = root.join("target").join("xtask");
@@ -212,8 +211,8 @@ fn main() -> Result<()> {
     if !s.run("pcb doctor", &pcb, &dargs) {
         return finish(&s, t0);
     }
-    // the edge cases, then the fixtures, then the regression tests (some share a fixture's flow, so they come last)
-    let cases = load_specs(&root.join("tests/cases/steps.toml"))?;
+    // the edge cases, then the fixtures, then the cases that read a fixture's flow
+    let (late, cases): (Vec<Spec>, Vec<Spec>) = load_specs(&root.join("tests/cases/steps.toml"))?.into_iter().partition(|sp| sp.late);
     run_specs(&mut s, &cases, &pcb, jar.as_deref(), only.as_deref());
     let fx_dir = root.join("tests/fixtures");
     let mut fixtures: Vec<_> = std::fs::read_dir(&fx_dir)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("fixture.toml").exists()).collect();
@@ -244,7 +243,7 @@ fn main() -> Result<()> {
             s.remember(&label, &key);
         }
     }
-    run_specs(&mut s, &regressions, &pcb, jar.as_deref(), only.as_deref());
+    run_specs(&mut s, &late, &pcb, jar.as_deref(), only.as_deref());
     finish(&s, t0)
 }
 
@@ -258,6 +257,8 @@ struct Spec {
     after: Option<String>,
     env: Vec<(String, String)>,
     group: String,
+    /// runs after the fixtures, because it reads a fixture's flow
+    late: bool,
 }
 
 fn load_specs(path: &Path) -> Result<Vec<Spec>> {
@@ -269,18 +270,7 @@ fn load_specs(path: &Path) -> Result<Vec<Spec>> {
         let get = |k: &str| t.get(k).and_then(|x| x.as_str()).map(String::from);
         let id = get("id").with_context(|| format!("{}: a step without an id", path.display()))?;
         let env = t.get("env").and_then(|x| x.as_table()).into_iter().flatten().map(|(k, x)| (k.clone(), x.as_str().unwrap_or_default().to_string())).collect();
-        out.push(Spec { name: get("name").unwrap_or_else(|| id.clone()), run: strs(t, "run"), covers: strs(t, "covers"), needs: strs(t, "needs"), after: get("after"), env, group: group.clone(), id });
-    }
-    Ok(out)
-}
-
-/// Every `tests/regressions/*/steps.toml`, in folder order.
-fn load_regressions(root: &Path) -> Result<Vec<Spec>> {
-    let mut dirs: Vec<_> = std::fs::read_dir(root.join("tests/regressions"))?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("steps.toml").exists()).collect();
-    dirs.sort();
-    let mut out = vec![];
-    for d in dirs {
-        out.extend(load_specs(&d.join("steps.toml"))?);
+        out.push(Spec { name: get("name").unwrap_or_else(|| id.clone()), run: strs(t, "run"), covers: strs(t, "covers"), needs: strs(t, "needs"), after: get("after"), env, group: group.clone(), late: t.get("after_fixtures").and_then(|x| x.as_bool()).unwrap_or(false), id });
     }
     Ok(out)
 }
@@ -317,12 +307,9 @@ fn run_specs(s: &mut Suite, specs: &[Spec], pcb: &str, jar: Option<&str>, only: 
         let args: Vec<String> = sp.run.iter().map(|a| fill(a).unwrap_or_default()).collect();
         // an env value naming a flow that did not run is left out: the probes then run that flow themselves
         let env: Vec<(String, String)> = sp.env.iter().filter_map(|(k, v)| fill(v).map(|v| (k.clone(), v))).collect();
-        // the key: the step's scripts (a regression folder whole, since its probes share a library), the shared
+        // the key: the step's scripts, the shared
         // test files, the binary, the Freerouting jar, and the keys of the steps whose work it reads
         let mut paths: Vec<PathBuf> = sp.run.iter().map(|a| s.root.join(a)).filter(|p| p.is_file()).collect();
-        if sp.group.starts_with('r') && sp.group[1..].chars().all(|c| c.is_ascii_digit()) {
-            paths.push(s.root.join("tests/regressions").join(&sp.group));
-        }
         paths.extend(["tests/lib", "tests/oracles", "tests/mutations", "tests/fixtures"].map(|p| s.root.join(p)));
         let deps: Vec<String> = sp.run.iter().chain(sp.env.iter().map(|(_, v)| v)).flat_map(|a| a.match_indices("{work:").map(|(i, _)| a[i + 6..].split('}').next().unwrap_or("").to_string()).collect::<Vec<_>>()).chain(sp.after.clone()).map(|d| s.keys.get(&d).cloned().unwrap_or_default()).collect();
         let mut extra: Vec<&str> = vec![&s.pcb_key, jar.unwrap_or("")];
