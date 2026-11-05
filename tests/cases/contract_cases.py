@@ -119,6 +119,91 @@ for f in os.listdir(src):
 used |= {"usage", "refused", "io"}
 documented = set(re.findall(r"^\| `([a-z-]+)` \|", open(os.path.join(here, "..", "..", "docs", "codes.md")).read(), re.M))
 results["codes documented"] = "ok" if used <= documented else f"undocumented: {sorted(used - documented)}"
+
+# ---- Review 8 (M1): pcb init and pcb status, moved from tests/regressions@e17bfac/r08/project_probes.py; see
+# docs/reviews/audit/AUDIT_m1.md. Each run must also pass the output contract.
+mw = os.path.join(work, "m1")
+shutil.rmtree(mw, ignore_errors=True)
+os.makedirs(mw)
+
+
+def m1_run(*args, cwd=None):
+    r = subprocess.run([os.path.abspath(pcb), "--json", *args], capture_output=True, text=True, cwd=cwd)
+    d, problems = check(r.stdout, r.returncode)
+    if problems:
+        raise AssertionError(f"{args}: output contract: {problems}")
+    return d
+
+
+def m1_synth(path, variant="base"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    subprocess.run([sys.executable, os.path.join(here, "..", "lib", "synth_board.py"), variant, path], check=True, capture_output=True)
+
+
+def m1_case(name, fn):
+    try:
+        results[name] = "ok" if fn() else "unexpected result"
+    except AssertionError as e:
+        results[name] = str(e)[:300]
+
+
+J = lambda *p: os.path.join(mw, *p)
+
+
+def m1_relative():  # source: review 8, init_board_path_relative_to_pcb_toml
+    m1_synth(J("p1", "boards", "b.kicad_pcb"))
+    os.makedirs(J("p1", "proj"))
+    m1_run("init", "boards/b.kicad_pcb", "-o", "proj/pcb.toml", cwd=J("p1"))
+    return m1_run("status", "--project", J("p1", "proj"), "--no-drc")["outcome"] == "done"
+
+
+def m1_odd_name():  # source: review 8, init_output_passes_status_odd_name
+    m1_synth(J("p2", "b.kicad_pcb"))
+    shutil.move(J("p2", "b.kicad_pcb"), J("p2", "b.kicad_pcb.v2"))
+    d = m1_run("init", J("p2", "b.kicad_pcb.v2"))
+    return not (d["outcome"] == "done" and m1_run("status", "--project", J("p2"), "--no-drc")["outcome"] == "refused")
+
+
+def m1_empty_name():  # source: review 8, init_output_passes_status_empty_name
+    m1_synth(J("p3", "b.kicad_pcb"))
+    d = m1_run("init", J("p3", "b.kicad_pcb"), "--name", "")
+    return not (d["outcome"] == "done" and m1_run("status", "--project", J("p3"), "--no-drc")["outcome"] == "refused")
+
+
+def m1_mixed():  # source: review 8, init_counts_mixed_copper_layer
+    m1_synth(J("p4", "b.kicad_pcb"), "four")
+    t = open(J("p4", "b.kicad_pcb")).read().replace('(4 "In1.Cu" signal)', '(4 "In1.Cu" mixed)', 1)
+    open(J("p4", "b.kicad_pcb"), "w").write(t)
+    return m1_run("init", J("p4", "b.kicad_pcb"))["data"].get("layers") == 4
+
+
+m1_case("m1_init_board_path_relative_to_pcb_toml", m1_relative)
+m1_case("m1_init_output_passes_status_odd_name", m1_odd_name)
+m1_case("m1_init_output_passes_status_empty_name", m1_empty_name)
+m1_case("m1_init_counts_mixed_copper_layer", m1_mixed)
+# VERSION one folder up and TAGS.tsv at the top: a mismatch warned, the tag found, a tag differing by a prefix not
+m1_synth(J("repo", "proj", "design", "b.kicad_pcb"))
+m1_run("init", J("repo", "proj", "design", "b.kicad_pcb"), "--name", "proj")
+open(J("repo", "proj", "VERSION"), "w").write("0.2.0\n")
+open(J("repo", "TAGS.tsv"), "w").write("tag\tcommit\tmessage\nproj-v0.1.0\tabc\tx\n")
+_s = m1_run("status", "--project", J("repo", "proj", "design"), "--no-drc")
+m1_case("m1_version_mismatch_warned", lambda: "version-mismatch" in [w["code"] for w in _s["warnings"]])  # source: review 8, version_mismatch_warned
+m1_case("m1_tag_found", lambda: _s["data"]["tag"]["recorded"] is True)  # source: review 8, tag_found
+open(J("repo", "TAGS.tsv"), "w").write("xproj-v0.1.0\tabc\tx\nproj-v0.1.0-rc\tabc\tx\n")
+m1_case("m1_tag_prefix_not_counted", lambda: m1_run("status", "--project", J("repo", "proj", "design"), "--no-drc")["data"]["tag"]["recorded"] is False)  # source: review 8, tag_prefix_not_counted
+# problems inside the file: an impossible date, a negative keep-out growth, a missing board, a float schema
+if not os.path.exists(J("p3", "pcb.toml")):
+    m1_run("init", J("p3", "b.kicad_pcb"), "--name", "p3")
+_base = open(J("p3", "pcb.toml")).read().replace('name = ""', 'name = "p3"')
+open(J("p3", "pcb.toml"), "w").write(_base.replace("[decisions]", "[decisions]\nx = { text = \"t\", date = \"2026-13-45\" }", 1) + '\n[[keepout]]\nname = "k"\nrect = [0, 0, 10, 10]\ngrow_mm = -5\nlayers = "all"\n')
+_s = m1_run("status", "--project", J("p3"), "--no-drc")
+m1_case("m1_impossible_date_is_a_problem", lambda: any("decisions.x" in p for p in _s["data"].get("problems", [])))  # source: review 8, impossible_date_is_a_problem
+m1_case("m1_negative_grow_is_a_problem", lambda: any("grow" in p for p in _s["data"].get("problems", [])))  # source: review 8, negative_grow_is_a_problem
+open(J("p3", "pcb.toml"), "w").write(_base.replace('board = "b.kicad_pcb"', 'board = "gone.kicad_pcb"'))
+m1_case("m1_missing_board_reported_as_config", lambda: m1_run("status", "--project", J("p3"), "--no-drc")["outcome"] == "refused")  # source: review 8, missing_board_reported_as_config
+open(J("p3", "pcb.toml"), "w").write(_base.replace("schema = 1", "schema = 1.0"))
+m1_case("m1_schema_float_message", lambda: "no schema key" not in m1_run("status", "--project", J("p3"), "--no-drc").get("error", {}).get("message", ""))  # source: review 8, schema_float_message
+# ---- end of review 8 ----
 bad = {k: v for k, v in results.items() if v != "ok"}
 print(json.dumps({"ok": not bad, "cases": len(results), "failed": bad}, indent=1))
 sys.exit(0 if not bad else 1)

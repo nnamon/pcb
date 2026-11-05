@@ -26,10 +26,17 @@ pub fn helper(work: &Path, args: &[&str]) -> Result<serde_json::Value> {
 /// board, so KiCad checks that board by the same rules (review 6, K4: the rules file was left behind). A file that
 /// is already the destination is left alone.
 pub fn copy_rules(from_board: &Path, to_board: &Path) -> Result<()> {
-    for ext in ["kicad_pro", "kicad_dru"] {
+    // a file the source board does not have is removed beside the copy, so nothing from an earlier run in the same
+    // folder is read with it (a reused --work folder gave a check with no findings: audit of review 17)
+    for ext in ["kicad_pro", "kicad_dru", "kicad_prl"] {
         let (a, b) = (from_board.with_extension(ext), to_board.with_extension(ext));
-        if a.exists() && std::fs::canonicalize(&a).ok() != std::fs::canonicalize(&b).ok() {
+        if std::fs::canonicalize(&a).ok().is_some_and(|x| std::fs::canonicalize(&b).ok() == Some(x)) {
+            continue;
+        }
+        if a.exists() {
             std::fs::copy(&a, &b)?;
+        } else {
+            let _ = std::fs::remove_file(&b);
         }
     }
     Ok(())
@@ -92,6 +99,7 @@ pub fn drc_counts(work: &Path, board: &str, name: &str) -> Result<BTreeMap<Strin
 /// As `drc_counts`; with `keep_fills`, KiCad judges the fills the file holds instead of filling again.
 pub fn drc_counts_with(work: &Path, board: &str, name: &str, keep_fills: bool) -> Result<BTreeMap<String, usize>> {
     let rpt = work.join(format!("{name}.json"));
+    let _ = std::fs::remove_file(&rpt);
     let mut args = vec!["drc", board, rpt.to_str().unwrap()];
     if keep_fills {
         args.push("keep-fills");

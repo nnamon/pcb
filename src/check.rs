@@ -158,6 +158,12 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for (tag, fab_only) in [("own", false), ("fab", true)] {
         let copy = work.join(format!("check_{tag}.kicad_pcb"));
+        // a reused --work folder holds the last run's copy and the files KiCad wrote beside it (.kicad_prl, the
+        // project, the report); with them a second check came back done with no findings (audit of review 17)
+        for ext in ["kicad_pcb", "kicad_pro", "kicad_prl", "kicad_dru"] {
+            let _ = std::fs::remove_file(copy.with_extension(ext));
+        }
+        let _ = std::fs::remove_file(work.join(format!("check_drc_{tag}.json")));
         std::fs::copy(&board_path, &copy)?;
         crate::kicad::copy_rules(&board_path, &copy)?;
         let dru = copy.with_extension("kicad_dru");

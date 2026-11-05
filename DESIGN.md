@@ -145,11 +145,23 @@ Every command:
 
 ## Testing and contract (milestone M0)
 
-- **The suite:** `cargo xtask test` (see `tests/README.md`), run by CI in the pinned image (`ci/Dockerfile`, published to GHCR by `.github/workflows/pcb-ci-image.yml`; tested by `pcb-test.yml`).
+- **The suite:** `cargo xtask test` (see `tests/README.md`), run locally in the pinned image (`ci/Dockerfile`, published to GHCR by `.github/workflows/pcb-ci-image.yml`) before every push. The CI test workflow was deleted on 5 Nov 2026 (owner): it repeated the local run and spent paid Actions minutes.
 - **Output contract:** every command keeps it (`src/contract.rs`, `schemas/`, `docs/codes.md`).
 - **One write path for edits:** every command that changes an existing board writes through `src/gate.rs` (DRC before and after; a worse result goes to `.rejected`). Commands that make a new file have nothing to compare against and write directly: `import-tscircuit` (checked by `verify_import`) and `render` (review 5, 15).
 - **One door to KiCad:** every KiCad call goes through `src/kicad.rs`.
 - **Pinned tools:** `pcb doctor` checks the versions and the KiCad behaviours pcb works around.
+
+### Test method (owner, 5 Nov 2026)
+
+Reviews 8 to 20 left a suite per review: each with its own builders, library and runner, and each confirmation review re-checking the last. The run grew to about 50 minutes, two-thirds of it review probes re-building boards that the cases and fixtures already build. The method from here:
+
+1. **A finding is a case, not a folder.** Each command has one case file, `tests/cases/<command>_cases.py`: each case names its input (a builder in `tests/lib/` with parameters, or a fixture product), the command, the outcome and codes it must give, and its `source` (for example "review 15, finding 7"). A reviewer delivers new findings as cases in that file against the shared builders, so the reviewer still writes the input and the verdict. Their probe scripts are evidence and stay with the report in `docs/reviews/`; they do not run in the suite. A confirmation review re-runs the finding's case and adds a row only for a new finding.
+2. **Each fixture's products are built once per run.** The imported, zoned, routed and released boards are made once; cases, oracles and mutations read them. Synthetic boards come from the shared builders in `tests/lib/`, cached by their parameters.
+3. **Every step is cached by its inputs.** A step's key is the hash of its script, its input files and the `pcb` binary; a mutation suite tests an oracle, so its key holds the oracle, not the binary. A step whose key passed before is not run again.
+4. **Independent steps run in parallel.**
+5. **Two tiers.** `cargo xtask test` after each change; `cargo xtask test --full` (no cache) before a milestone gate or a release.
+
+Reviews 8 to 20's probe folders were audited on 5 Nov 2026 and removed: each verdict is marked covered (by a named case), ported (a case in its command's file) or evidence (it tested a review's premise, not pcb), in `docs/reviews/audit/`. The probes are in git history at e17bfac (`tests/regressions/`).
 
 ## Project file and explicit edits (milestone M1)
 
@@ -226,7 +238,7 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 
 ## Zones (milestone M2)
 
-`pcb zone [--project DIR] [-o OUT] [--work DIR]` (`src/zone.rs`) builds every zone `pcb.toml` asks for and writes the result through the write gate. It replaces `phase0/spike3.py`; the badge fixture's `pcb.toml` gives the same zones, and `verify_zones.py` passes on the result.
+`pcb zone [--project DIR] [-o OUT] [--work DIR]` (`src/zone.rs`) builds every zone `pcb.toml` asks for and writes the result through the write gate. It replaces the spike 3 script (`phase0/spike3.py`, removed; in git history at 1afa4bb); the badge fixture's `pcb.toml` gives the same zones, and `verify_zones.py` passes on the result.
 
 In order:
 1. **Earlier work goes.** Zones whose name starts `pcb:` and stitching vias whose uuid still matches their net and place are removed. A zone or via the owner made, or a stitching via moved by hand, has no such name or uuid and stays.
@@ -297,6 +309,8 @@ Refuses a designator rename onto a reference the board has, or two onto one (`co
 - JLCPCB BOM (grouped by LCSC code, value and footprint) and CPL (centre of the outline as origin, y up, with `[parts.<LCSC>]` rotation and centre offsets), from parts with an LCSC code that are not excluded, not hand fitted and on a machine side; designators follow `[assembly] designators`;
 - the files read back as the fab will read them, in that frame: copper connectivity rebuilt from the Gerbers and plated holes alone, each board pad found in its island (a net in two groups is open; a group with two nets is a short, unless they are one net-tie footprint's), and DFM against GUIDELINES.md's JLCPCB table: no copper narrower than 0.15 mm anywhere (what an opening removes: a narrow track joined to wide copper too), 0.15 mm between nets, 0.3 mm to every ring of the outline (cut-outs too), no copper off the board, 0.5 mm between holes of different copper (slots as stadiums), silkscreen no narrower than 0.15 mm and off exposed copper, no copper within 0.1 mm of an unplated hole. Narrow features are found by an opening of 0.1495 mm in place of 0.15 mm; necks shorter than about their width are below its reach, and KiCad DRC's track width covers tracks (review 16, 32). A finding a `[[waiver]]` (check `dfm`, item "<rule> <layer>") does not cover makes the outcome rejected, and the folder moves aside to `<out>.rejected` (or `.rejected.2` and on, so an earlier one is kept; review 16, 35) so it cannot pass for an order (P14, P30). Release warns `version-not-on-board` when no `[[text]]` prints the version. `tests/mutations/verify_mutations.py` shows each rule fires;
 - `CHECKSUMS.txt`.
+
+The read-back also measures inner copper of another net against each plated hole: under 0.3 mm from a component hole or 0.2 mm from a via is `inner_hole`, JLCPCB's multilayer limit. No waiver covers it (owner, 5 Nov 2026; review 17, finding 40): it is outside what JLCPCB will make.
 
 KiCad stamps a creation date in each Gerber, so two releases of one board differ in those lines only.
 
@@ -405,7 +419,7 @@ The routing is Freerouting's and differs from v1.0.0's; pcb check finds the DRC 
   - **CI image** (`ci/Dockerfile`, image 7). Ubuntu packages come from the live archive and KiCad is pinned by version; every package version in an image is listed in `/opt/pcb-ci/packages.txt`, and a published tag is never overwritten. Image 6 read Ubuntu's snapshot service instead, which served GitHub's runners at about 270 kB/s: the build took 32 minutes, against about 4, and Actions is billed by the minute. Layers are cached in GitHub's Actions cache. The test workflow skips pushes that change only Markdown or only `ci/`; the "tests after a new image" trigger (`workflow_run`) fires only from the default branch, so on a branch run `pcb tests` by hand after an image build. A local image build adds this workspace's proxy CA, so certificate problems show only on GitHub.
   - **Checked against 7.0.11.** The old CI image (KiCad 7.0.11) run on the last KiCad 7 commit gives the same 34 power fills per net and layer as KiCad 10. Fill areas differ between runs on either version, because the prototype's overlapping fills share one priority (review 4, Z11).
 
-  Phase 0 (`phase0/probe.py`, KiCad 7.0.11, kept as it ran) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
+  Phase 0 (`phase0/probe.py`, KiCad 7.0.11, removed; in git history at bd895cc) showed all three working, with locked tracks exported as `(type fix)`, which Freerouting keeps. KiCad 7's `ImportSpecctraSES` imports only into the GUI's open board, so `pcb` writes the session's wires and vias into the board file itself. The probe does the same in Python and confirms the units: `(resolution um N)` and y negated.
 
   `pcb` runs a fixed helper script (`src/kicad_helper.py`, embedded in the binary) with python3 and reads its JSON; the agent never calls KiCad directly.
 
@@ -463,7 +477,7 @@ After review 3, on the spike 3 board (GND planes and pours), ripping GND and USB
 
 ## Spike 3: KiCad zones and the coil as a net tie (30 Oct 2026)
 
-Prototype: `phase0/spike3.py` (pcbnew), then `kicad_helper.py fill` in a fresh process. Checked by `tests/oracles/verify_zones.py`, whose sensitivity is shown by `tests/mutations/zone_mutations.py`.
+Prototype: `phase0/spike3.py` (pcbnew; removed, in git history at 1afa4bb), then `kicad_helper.py fill` in a fresh process. Checked by `tests/oracles/verify_zones.py`, whose sensitivity is shown by `tests/mutations/zone_mutations.py`.
 
 - **NFC coil:** the 49 spiral segments became copper inside L601, a net tie for pads 1 and 3. The two coil vias became L601 pads 3 and 4, and the bottom bridge and top link stay NFC_AC1 tracks. The coil copper is unchanged (same ends and widths). KiCad DRC's 4 coil clearance errors and 2 mask bridges are gone.
 - **Zones:** keep-out rule areas over the coil (plus 3.5 mm) and the Lyra antenna; solid GND planes on In1 and In2 (0.35 mm clearance, thermal reliefs on plated GND holes); 34 power fills grown from each power net's copper (35 in the first run, before later import changes); GND pours on both outer layers. Copper areas differ from the old scripts' pours by up to −47 % (BAT_RAW top) and +71 % (VBAT bottom); the top GND pour is 21 % smaller (review 4, Z3). The bottom-layer exclusion under the power stage is missing (Z4).

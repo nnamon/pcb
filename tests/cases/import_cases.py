@@ -228,6 +228,91 @@ def m3_silkscreen():
     c.add({"type":"pcb_silkscreen_path","pcb_silkscreen_path_id":"sp2","layer":"bottom","route":[{"x":0,"y":10},{"x":5,"y":10}],"stroke_width":0.2}); return c
 
 
+# reviews 15 to 17 (M3), moved from tests/regressions@e17bfac/r15, r16, r17 (audit: docs/reviews/audit/AUDIT_m3.md)
+def two(layer_b="top"):
+    # review 16's pair: R1 on top, R2 on layer_b, 0.6 mm pads
+    c = C()
+    sa, pa = c.comp("R1", -5, 0, 0, "top", resistance=1000)
+    s1, p1 = c.port(sa, pa, "pin1", 1, -5.5, 0); c.pad(pa, p1, -5.5, 0, width=0.6, height=0.6)
+    s2, p2 = c.port(sa, pa, "pin2", 2, -4.5, 0); c.pad(pa, p2, -4.5, 0, width=0.6, height=0.6)
+    sb, pb = c.comp("R2", 5, 0, 0, layer_b, resistance=1000)
+    s3, p3 = c.port(sb, pb, "pin1", 1, 4.5, 0); c.pad(pb, p3, 4.5, 0, layer=layer_b, width=0.6, height=0.6)
+    s4, p4 = c.port(sb, pb, "pin2", 2, 5.5, 0); c.pad(pb, p4, 5.5, 0, layer=layer_b, width=0.6, height=0.6)
+    for e in c.d:
+        if e.get("type") == "pcb_port" and e["pcb_port_id"] in (p3, p4):
+            e["layers"] = [layer_b]
+    return c, dict(s1=s1, s2=s2, s3=s3, s4=s4, pa=pa, pb=pb)
+@case
+def m3_foreign_net_into_pad_corner():
+    # source: review 16, rename_into_pad: a foreign name from A's port to 0.25 mm inside B's pad, off its axis
+    c, i = two(); c.strace([i["s2"]], [c.net("A")]); c.strace([i["s3"]], [c.net("B")])
+    c.add({"type": "pcb_trace", "pcb_trace_id": "t1", "net_name": "Net-(R1", "route": [wire(-4.5, 0), wire(0, 0.2), wire(4.25, 0.2)]}); return c
+@case
+def m3_foreign_net_end_other_side():
+    # source: review 16, rename_other_side: the same end over B's pad on the bottom is not a landing, so renamed to A
+    c, i = two("bottom"); c.strace([i["s2"]], [c.net("A")]); c.strace([i["s3"]], [c.net("B")])
+    c.add({"type": "pcb_trace", "pcb_trace_id": "t1", "net_name": "Net-(R1", "route": [wire(-4.5, 0), wire(0, 0.2), wire(4.25, 0.2)]}); return c
+@case
+def m3_internal_connection_numbered():
+    # source: review 16, internal_one_net: R2's two numbered ports joined inside the part, one source net to R2.1
+    c, i = two(); c.strace([i["s2"], i["s3"]], [c.net("N")])
+    c.add({"type": "source_component_internal_connection", "source_component_internal_connection_id": "ic1", "source_component_id": None, "source_port_ids": [i["s3"], i["s4"]]}); return c
+@case
+def m3_internal_connection_two_nets():
+    # source: review 16, internal_two_nets: an internal connection between ports of two source nets is a short
+    c, i = two(); c.strace([i["s3"]], [c.net("P")]); c.strace([i["s4"]], [c.net("Q")])
+    c.add({"type": "source_component_internal_connection", "source_component_internal_connection_id": "ic1", "source_component_id": None, "source_port_ids": [i["s3"], i["s4"]]}); return c
+@case
+def m3_silk_bottom_turned():
+    # source: review 15, bottom_silk: a bottom part turned 90 degrees with bottom silkscreen (verify_import places it)
+    c = C()
+    sa, pa = c.comp("U9", 3, 2, 90, "bottom")
+    sp1, pp1 = c.port(sa, pa, "pin1", 1, 3, 1); c.pad(pa, pp1, 3, 1, layer="bottom", width=0.6, height=0.4)
+    sp2, pp2 = c.port(sa, pa, "pin2", 2, 3, 3); c.pad(pa, pp2, 3, 3, layer="bottom", width=0.6, height=0.4)
+    c.strace([sp1], [c.net("N1")]); c.strace([sp2], [c.net("N2")])
+    c.add({"type": "pcb_silkscreen_path", "pcb_silkscreen_path_id": "s1", "pcb_component_id": pa, "layer": "bottom", "route": [{"x": 2, "y": 0.5}, {"x": 4.5, "y": 0.5}, {"x": 4.5, "y": 3.5}], "stroke_width": 0.15}); return c
+@case
+def m3_silk_turned_kinds():
+    # source: review 16, silk_kinds: a silkscreen path on a part turned 90 degrees, with a line and a 0.254 mm rect
+    c = C()
+    sa, pa = c.comp("U9", 3, 2, 90, "top")
+    sp1, pp1 = c.port(sa, pa, "pin1", 1, 3, 1); c.pad(pa, pp1, 3, 1, width=0.6, height=0.4)
+    sp2, pp2 = c.port(sa, pa, "pin2", 2, 3, 3); c.pad(pa, pp2, 3, 3, width=0.6, height=0.4)
+    c.strace([sp1], [c.net("N1")]); c.strace([sp2], [c.net("N2")])
+    c.add({"type": "pcb_silkscreen_path", "pcb_silkscreen_path_id": "s1", "pcb_component_id": pa, "layer": "top", "route": [{"x": 2, "y": 0.5}, {"x": 4.5, "y": 0.5}, {"x": 4.5, "y": 3.5}], "stroke_width": 0.15})
+    c.add({"type": "pcb_silkscreen_line", "pcb_silkscreen_line_id": "l1", "pcb_component_id": pa, "layer": "top", "x1": -5, "y1": -5, "x2": 5, "y2": -5, "stroke_width": 0.2})
+    c.add({"type": "pcb_silkscreen_rect", "pcb_silkscreen_rect_id": "r1", "pcb_component_id": pa, "layer": "top", "center": {"x": -8, "y": 0}, "width": 3, "height": 2, "stroke_width": 0.254, "is_filled": False}); return c
+@case
+def m3_silk_line_rect():
+    # source: review 17, silk_line_rect: silkscreen lines and rectangles on a turned part, a bottom part and the board
+    c = C()
+    sa, pa = c.comp("U9", 3, 2, 90, "top")
+    s1, p1 = c.port(sa, pa, "pin1", 1, 3, 1); c.pad(pa, p1, 3, 1, width=0.6, height=0.4)
+    s2, p2 = c.port(sa, pa, "pin2", 2, 3, 3); c.pad(pa, p2, 3, 3, width=0.6, height=0.4)
+    sb, pb = c.comp("U8", -6, 8, 0, "bottom")
+    s3, p3 = c.port(sb, pb, "pin1", 1, -7, 8); c.pad(pb, p3, -7, 8, layer="bottom", width=0.6, height=0.4)
+    s4, p4 = c.port(sb, pb, "pin2", 2, -5, 8); c.pad(pb, p4, -5, 8, layer="bottom", width=0.6, height=0.4)
+    for e in c.d:
+        if e.get("type") == "pcb_port" and e["pcb_port_id"] in (p3, p4):
+            e["layers"] = ["bottom"]
+    c.strace([s1], [c.net("N1")]); c.strace([s2], [c.net("N2")]); c.strace([s3], [c.net("N3")]); c.strace([s4], [c.net("N4")])
+    def line(name, comp, layer, x1, y1, x2, y2, w):
+        e = {"type": "pcb_silkscreen_line", "pcb_silkscreen_line_id": name, "layer": layer, "x1": x1, "y1": y1, "x2": x2, "y2": y2, "stroke_width": w}
+        if comp: e["pcb_component_id"] = comp
+        c.add(e)
+    def rect(name, comp, layer, cx, cy, w, h, sw, filled=False):
+        e = {"type": "pcb_silkscreen_rect", "pcb_silkscreen_rect_id": name, "layer": layer, "center": {"x": cx, "y": cy}, "width": w, "height": h, "stroke_width": sw, "is_filled": filled}
+        if comp: e["pcb_component_id"] = comp
+        c.add(e)
+    line("top_line", pa, "top", -5, -5, 5, -5, 0.2)
+    rect("top_rect", pa, "top", -8, 0, 3, 2, 0.254)
+    line("bot_line", pb, "bottom", -8, 9, -4, 9, 0.2)
+    rect("bot_rect", pb, "bottom", -6, 10.5, 2, 1, 0.18)
+    line("board_line", None, "top", 10, -10, 15, -10, 0.3)
+    rect("board_rect", None, "bottom", 12, 10, 4, 2, 0.2)
+    rect("filled", pa, "top", -12, -8, 1, 1, 0.1, filled=True); return c
+
+
 # case -> (outcome, words the refusal must contain)
 EXPECT = {
     's2_port_to_port': ('done', None),
@@ -275,12 +360,23 @@ EXPECT = {
     'm3_silkscreen': ('done', None),
     'm3_foreign_net_into_other_pad': ('refused', 'a short'),
     'm3_foreign_net_pad_other_side': ('done', None),
+    'm3_foreign_net_into_pad_corner': ('refused', None),
+    'm3_foreign_net_end_other_side': ('done', None),
+    'm3_internal_connection_numbered': ('done', None),
+    'm3_internal_connection_two_nets': ('refused', None),
+    'm3_silk_bottom_turned': ('done', None),
+    'm3_silk_turned_kinds': ('done', None),
+    'm3_silk_line_rect': ('done', None),
 }
 # what a done case's board must also hold, as (text that must appear, count)
 HOLDS = {
     'm3_internal_connection': [('(pad "1" thru_hole', 2), ('(net "G")', 2)],
     'm3_foreign_net_name': [('(net "A")', 5), ('Net-(R1', 0)],
     'm3_silkscreen': [('(type solid)) (layer "F.SilkS")', 2), ('(fp_circle', 1), ('(layer "B.SilkS")', 1)],
+    # every track renamed to A (review 16: track nets ["A"]); B only on R2's pad
+    'm3_foreign_net_end_other_side': [('(net "A")', 3), ('(net "B")', 1), ('Net-(R1', 0)],
+    # R1.2, R2.1 and R2.2 on N (review 16: R2.1 and R2.2 both N)
+    'm3_internal_connection_numbered': [('(net "N")', 3)],
 }
 WARNS = {'m3_foreign_net_name': 'net-renamed'}
 
