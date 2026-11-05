@@ -160,7 +160,7 @@ impl ttf_parser::OutlineBuilder for Pen {
 }
 
 /// A text entry as polygons in board coordinates: glyphs by their advance widths (no kerning), scaled to the cap
-/// height, the bounding box's middle at the origin, grown, turned, mirrored for the bottom side, then placed.
+/// height, the bounding box's middle (or, anchored left, the ink's left edge on the baseline) at the origin, grown, turned, mirrored for the bottom side, then placed.
 fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64), version: &str) -> Result<Vec<Polygon<f64>>> {
     use geo::{Buffer, Rotate, Translate};
     let what = format!("text {:?}", t.name);
@@ -190,7 +190,8 @@ fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64), v
     let k = t.cap_mm / cap;
     let mut shape: MultiPolygon<f64> = shape.map_coords(|c| Coord { x: c.x * k, y: c.y * k });
     let Some(bb) = shape.bounding_rect() else { return Ok(vec![]) };
-    shape = shape.translate(-(bb.min().x + bb.max().x) / 2.0, -(bb.min().y + bb.max().y) / 2.0);
+    // centre: the bounding box's middle on `at`; left: the ink's left edge on `at`, the baseline (font y 0) through it
+    shape = if t.anchor.as_deref() == Some("left") { shape.translate(-bb.min().x, 0.0) } else { shape.translate(-(bb.min().x + bb.max().x) / 2.0, -(bb.min().y + bb.max().y) / 2.0) };
     if t.grow_mm > 0.0 {
         shape = shape.buffer(t.grow_mm);
     }
