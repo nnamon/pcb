@@ -188,7 +188,7 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 | `[[drc_allow]]` | `kind` (a KiCad DRC type), `nets`, `max`, `why` | M2 zone; the gate's allowance |
 | `[[paste]]` | `pad` (`REF.PAD`), `windows`, `size_mm`, `web_mm`, `pin_in_paste` | M3 paste |
 | `[[art]]` | `name`, `file` (GeoJSON), `key`, `frame` (`centre`, `board`), `layers`, `net` | M3 art |
-| `[[text]]` | `name`, `text`, `font`, `cap_mm`, `at`, `frame`, `rot_deg`, `layer`, `grow_mm`, `net` | M3 art |
+| `[[text]]` | `name`, `text`, `font`, `cap_mm`, `at`, `anchor` (`centre`, `left`), `frame`, `rot_deg`, `layer`, `grow_mm`, `net` | M3 art; `anchor` 0.4.1 |
 | `[parts.<LCSC>]` | `rotation_offset_deg`, `cpl_offset_mm`, `source` | M3 release (M4 parts solves them) |
 | `[[waiver]]` | `check`, `item`, `max`, `why` | M3 check, gate |
 | `[bringup]` | `ammeter_break` (nets), `test_points` (reference to what it measures) | M3 bring-up sheet |
@@ -291,7 +291,7 @@ The footprint records the pads' own layers in a hidden property `pcb:paste`, and
 
 ### `pcb art`
 
-`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`; `{version}` in the text is the project's version), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at`, grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
+`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`; `{version}` in the text is the project's version), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at` (or, with `anchor = "left"`, the ink's left edge and the baseline on `at`, so labels in a column line up whatever their letters), grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
 
 ### `pcb check`
 
