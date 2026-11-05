@@ -176,7 +176,9 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
         counts.entry(item).or_default().push(format!("{} at {}", f["detail"].as_str().unwrap_or(""), f["at"]));
     }
     for (item, list) in counts {
-        let waived = p.waiver.iter().any(|w| w.check == "dfm" && w.item == item && list.len() <= w.max.unwrap_or(1));
+        // inner copper too close to a hole is outside what JLCPCB will make: no waiver covers it (owner, 5 Nov 2026;
+        // review 17, 40)
+        let waived = !item.starts_with("inner_hole ") && p.waiver.iter().any(|w| w.check == "dfm" && w.item == item && list.len() <= w.max.unwrap_or(1));
         if !waived {
             rep.problems.extend(list.iter().map(|d| format!("dfm {item}: {d}")));
         }

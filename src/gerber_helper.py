@@ -387,7 +387,7 @@ def compare(a_src, b_src, explain_path=None, board=None, align=False):
 
 
 # DFM limits from GUIDELINES.md's JLCPCB table (mm)
-DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15, npth_copper=0.1)
+DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15, npth_copper=0.1, inner_hole_comp=0.3, inner_hole_via=0.2)
 # a feature counts as narrow when an opening this much under half the limit removes it: rounding in the plot. Copper
 # 0.0005 (review 16, 32: 0.005 let 0.14 mm through); silkscreen 0.005, as the art grown for print on the ordered
 # paddle-keyer has pieces of 0.14 to 0.15 mm, which printed
@@ -546,6 +546,23 @@ def verify(folder, board_path):
             if shapes[k].intersects(near):
                 gap = shapes[k].distance(hs[i])
                 findings.append({"rule": "npth_copper", "layer": k, "at": [round(h[0], 3), round(h[1], 3)], "detail": f"copper {gap:.3f} mm from an unplated hole of {h[2]:.3f} mm"})
+    # inner copper of another net beside a plated hole: JLCPCB's multilayer limit, 0.3 mm from a component hole and
+    # 0.2 mm from a via (GUIDELINES.md; review 17, 40). A hole at a plated pad of the board is a component hole
+    pth = [(pcbnew.ToMM(p.GetPosition().x) - cx, cy - pcbnew.ToMM(p.GetPosition().y)) for f in b.GetFootprints() for p in f.Pads() if p.GetDrillSize().x > 0]
+    inner_cu = [k for k in cu if k.startswith("In")]
+    for i, h in enumerate(hl):
+        if not h[3] or not inner_cu:
+            continue
+        comp = any(abs(h[0] - px) < 0.02 and abs(h[1] - py) < 0.02 for px, py in pth)
+        lim = DFM["inner_hole_comp"] if comp else DFM["inner_hole_via"]
+        for jj in tree.query(hs[i].buffer(lim)):
+            j = int(jj)
+            k, q = islands[j]
+            if k not in inner_cu or (hg[i] is not None and find(j) == hg[i]) or q.intersects(Point(h[0], h[1])):
+                continue
+            gap = q.distance(hs[i])
+            if gap < lim - 1e-3:
+                findings.append({"rule": "inner_hole", "layer": k, "at": [round(h[0], 3), round(h[1], 3)], "detail": f"{sorted(net_of.get(find(j), {'?'}))} copper {gap:.3f} mm from a {'component hole' if comp else 'via'} of {h[2]:.3f} mm (limit {lim} mm)"})
     for side in ("F", "B"):
         sk, mk, ck = f"{side}.Silk", f"{side}.Mask", f"{side}.Cu"
         if sk in lay:

@@ -13,6 +13,7 @@ The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M
 - `pcb check` and `pcb release`: stale-input records, circuit and placement drift, two DRC runs (own rules and fab rules), parts re-check.
 - Gate run: paddle-keyer from netlist to order with no per-board code; the CPL matches the one v1.0.0 was ordered with. Reviews 18 to 20.
 - `pcb --version`.
+- `pcb release`: the read-back refuses inner copper of another net under 0.3 mm from a component hole or 0.2 mm from a via (`inner_hole`), and no waiver covers it (review 17, finding 40).
 - `pcb check` (and every DRC copy): a reused `--work` folder no longer hides findings. Files left by an earlier run beside the copy (`.kicad_prl`, a project or rules file the board does not have, the old report) are removed first.
 - Tests: the steps are data (`tests/cases/steps.toml`), not a list in xtask, and a step whose inputs have not changed is not run again (`--full` runs everything). `cargo xtask test --only` and `--list`. The review probes of reviews 8 to 20 (13 folders, about 770 verdicts) are gone from the suite: each verdict was marked covered, ported to its command's case file, or evidence, in `docs/reviews/audit/`.
 

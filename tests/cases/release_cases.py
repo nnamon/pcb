@@ -1011,19 +1011,12 @@ zone("GND", pcbnew.In1_Cu, 1, 1, 39, 29, clearance=0.2)
          f"same findings both times ({[r['outcome'] for r in runs]} {fs})", *runs)
 
     # source: review 17, inner_hole_clearance, with the intended input: every pcb check finding waived.
-    # owner decision pending: review 17, finding 40. This records today's behaviour: the release goes out and the
-    # read-back does not stop In1 copper under 0.3 mm from another net's hole. To flip it, assert the reviewer's
-    # verdict instead: not (release done and gap < 0.3 mm).
+    # source: review 17, inner_hole_clearance (finding 40), with every finding waived as the reviewer meant. Owner,
+    # 5 Nov 2026: inner copper under JLCPCB's limit from a hole cannot be waived, so the read-back refuses the release
     d, t = case("inner_hole_waived", inner, waive=True, layers=4, fill=True)
-    gap = None
-    if t["written"]:
-        from shapely.geometry import Point
-        z = P.unzip(os.path.join(t["written"], "s_v0.1.0_gerbers.zip"), W("inner_waived_z"))
-        f = P.find(z, r"In1_Cu")
-        if f:
-            gap = round(P.gshape(f).distance(Point(0, 0).buffer(0.4, 64)), 3)
-    want("r17 inner_hole_clearance waived (today's behaviour)", out_(t["release"], "done") and gap is not None and gap < 0.3 - 1e-3,
-         f"released with In1 copper {gap} mm from the hole ({P.slim(t['release'])})", t["release"])
+    hits = [f for f in t["dfm"] if f[0] == "inner_hole" and f[1] == "In1.Cu"]
+    want("r17 inner_hole_clearance waived: refused", not out_(t["release"], "done") and bool(hits),
+         f"the release is refused for In1 copper too close to the hole ({P.slim(t['release'])})", t["release"])
 
     # source: review 17, slack_widths: 0.15, 0.149, 0.145 mm tracks; 0.14 and 0.13 mm silkscreen lines
     wd = ""
