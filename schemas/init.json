@@ -1,0 +1,56 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:init",
+ "title": "pcb init output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/init/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "name",
+     "board",
+     "layers",
+     "fab",
+     "nets"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "board": {
+      "type": "string"
+     },
+     "layers": {
+      "type": "integer"
+     },
+     "fab": {
+      "type": "string"
+     },
+     "nets": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,14 @@
+{
+  "fetched": "2026-11-04",
+  "part": {
+    "componentBrandEn": "ST(Semtech)",
+    "componentCode": "C81598",
+    "componentLibraryType": "base",
+    "componentModelEn": "1N4148W",
+    "componentProductType": 0,
+    "componentSpecificationEn": "SOD-123",
+    "describe": "150mA 1A 1V@50mA 1uA@75V 400mW 4ns 75V Independent SOD-123 Switching Diodes ROHS",
+    "preferredComponentFlag": false,
+    "stockCount": 3687825
+  }
+}

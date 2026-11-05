@@ -1,0 +1,95 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:sync",
+ "title": "pcb sync output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/sync/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "written",
+     "created_board",
+     "added",
+     "replaced",
+     "removed",
+     "renetted",
+     "ripped_nets",
+     "ripped_segments",
+     "ripped_vias",
+     "nets",
+     "pins_checked"
+    ],
+    "properties": {
+     "written": {
+      "type": "string"
+     },
+     "created_board": {
+      "type": "boolean"
+     },
+     "added": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "replaced": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "removed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "renetted": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "ripped_nets": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "ripped_segments": {
+      "type": "integer"
+     },
+     "ripped_vias": {
+      "type": "integer"
+     },
+     "nets": {
+      "type": "integer"
+     },
+     "pins_checked": {
+      "type": "integer"
+     }
+    }
+   }
+  }
+ }
+}

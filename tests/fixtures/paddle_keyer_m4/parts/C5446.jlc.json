@@ -1,0 +1,14 @@
+{
+  "fetched": "2026-11-04",
+  "part": {
+    "componentBrandEn": "Torex Semicon",
+    "componentCode": "C5446",
+    "componentLibraryType": "base",
+    "componentModelEn": "XC6206P332MR-G",
+    "componentProductType": 0,
+    "componentSpecificationEn": "SOT-23-3L",
+    "describe": "-40℃~+85℃@(Ta) 1 1uA 200mA 3.3V 6V Fixed Over Current Protection Positive SOT-23-3L Voltage Regulators - Linear, Low Drop Out (LDO) Regulators ROHS",
+    "preferredComponentFlag": false,
+    "stockCount": 500172
+  }
+}

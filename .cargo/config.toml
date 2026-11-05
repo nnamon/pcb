@@ -1,0 +1,3 @@
+[alias]
+# cargo xtask test [--fast]: the whole test suite (tests/README.md)
+xtask = "run --quiet --release --package xtask --"

@@ -1,0 +1,114 @@
+# pcb zone settings for the badge fixture, the same zones spike 3 (phase0/spike3.py) built by hand: the M2 gate is
+# that verify_zones passes on what pcb zone makes from this. The suite copies it beside the imported board.
+schema = 1
+
+[project]
+name = "badge_r36a"
+version = "0.5.0"
+board = "board.kicad_pcb"
+layers = 4
+fab = "jlcpcb-4layer-1.6mm"
+
+# pours stay out of the NFC coil (plus 3.5 mm) and the Lyra antenna, on every copper layer
+[[keepout]]
+name = "coil"
+rect = [27, 98, 57.3, 123]
+grow_mm = 3.5
+layers = "all"
+forbid = ["pour"]
+
+[[keepout]]
+name = "antenna"
+rect = [166, 45, 180, 73]
+layers = "all"
+forbid = ["pour"]
+
+# solid GND planes inside, GND pours outside below the power fills
+[[zone]]
+net = "GND"
+layers = ["In1.Cu", "In2.Cu"]
+clearance_mm = 0.35
+thermal = { gap_mm = 0.35, spoke_mm = 0.5 }
+
+[[zone]]
+net = "GND"
+layers = ["F.Cu", "B.Cu"]
+clearance_mm = 0.25
+priority = 1
+thermal = { gap_mm = 0.3, spoke_mm = 0.5 }
+
+[fill]
+clearance_mm = 0.25
+min_width_mm = 0.3
+priority = 2
+
+# Where two fills meet, the higher fill_priority keeps the copper. Every pair that overlaps has its own priority, so
+# KiCad's zone order never decides (pcb zone warns fill-overlap otherwise). The order gives the fill areas the fixture
+# expects: BAT_F over BAT_RAW, the battery and USB nets over the rest, and the boost switch node SW_BOOST under its
+# neighbours.
+[nets.LYRA_5V]
+fill_grow_mm = 1.0
+fill_priority = 3
+[nets.LYRA_5V_D]
+fill_grow_mm = 1.0
+fill_priority = 4
+[nets.SW_BOOST]
+fill_grow_mm = 1.0
+fill_priority = 5
+[nets.V5]
+fill_grow_mm = 1.0
+fill_priority = 6
+[nets.V5_LED_SW]
+fill_grow_mm = 1.0
+fill_priority = 7
+[nets.V5_LYRA]
+fill_grow_mm = 1.0
+fill_priority = 8
+[nets.VBAT]
+fill_grow_mm = 2.5
+fill_priority = 9
+[nets.VBOOST]
+fill_grow_mm = 1.0
+fill_priority = 10
+[nets.VBUS_F]
+fill_grow_mm = 1.0
+fill_priority = 11
+[nets.VBUS]
+fill_grow_mm = 1.0
+fill_priority = 12
+[nets.V5_LED]
+fill_grow_mm = 1.0
+fill_priority = 13
+[nets.BAT_RAW]
+fill_grow_mm = 2.0
+fill_priority = 14
+[nets.BAT_F]
+fill_grow_mm = 2.5
+fill_priority = 15
+
+# the NFC coil, drawn as tracks on its own net, becomes copper inside L601: a net tie joining pads 1 and 3
+[[net_tie]]
+footprint = "L601"
+pads = ["1", "3"]
+absorb_net = "NFC_COIL"
+absorb_vias_net = "NFC_AC1"
+
+# GND stitching between the pours and planes, on a 5 mm grid wherever every layer has GND
+[[stitch]]
+net = "GND"
+pitch_mm = 5
+size_mm = 0.6
+drill_mm = 0.3
+margin_mm = 0.3
+
+[[drc_allow]]
+kind = "starved_thermal"
+nets = ["GND"]
+max = 2
+why = "J102 pad 4 and J701 pad 2: one top-layer spoke each (review 4, Z9; review 7, C5). Both are plated holes that keep their reliefs on the GND planes. Turning J102 pad 4's spokes 45° or narrowing its gap still gives one spoke, and joining it solid removes the plane reliefs; open: badge design after M4"
+
+[[drc_allow]]
+kind = "clearance"
+nets = ["<no net>", "NFC_AC1"]
+max = 2
+why = "coil turn 0.075 mm from the inner via, now L601 pad 3 (review 4, Z6); open: badge design after M4"

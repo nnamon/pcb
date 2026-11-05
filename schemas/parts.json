@@ -1,0 +1,156 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:parts",
+ "title": "pcb parts output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/parts/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "parts",
+     "solved",
+     "findings",
+     "fetched"
+    ],
+    "properties": {
+     "parts": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "lcsc",
+        "refs",
+        "need"
+       ],
+       "properties": {
+        "lcsc": {
+         "type": "string"
+        },
+        "refs": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        "need": {
+         "type": "integer"
+        },
+        "stock": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "library": {
+         "enum": [
+          "Basic",
+          "Extended",
+          null
+         ]
+        },
+        "product_type": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "fetched": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "mpn": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       }
+      }
+     },
+     "solved": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "reference",
+        "lcsc",
+        "rotation_offset_deg",
+        "cpl_offset_mm",
+        "residual_mm",
+        "by_number"
+       ],
+       "properties": {
+        "reference": {
+         "type": "string"
+        },
+        "lcsc": {
+         "type": "string"
+        },
+        "rotation_offset_deg": {
+         "type": "number"
+        },
+        "cpl_offset_mm": {
+         "type": "array",
+         "items": {
+          "type": "number"
+         },
+         "minItems": 2,
+         "maxItems": 2
+        },
+        "residual_mm": {
+         "type": "number"
+        },
+        "by_number": {
+         "type": "boolean"
+        }
+       }
+      }
+     },
+     "findings": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "item",
+        "message"
+       ],
+       "properties": {
+        "item": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "fetched": {
+      "type": "integer"
+     }
+    }
+   }
+  }
+ }
+}

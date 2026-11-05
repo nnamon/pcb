@@ -1,0 +1,14 @@
+{
+  "fetched": "2026-11-04",
+  "part": {
+    "componentBrandEn": "Alpha & Omega Semicon",
+    "componentCode": "C20917",
+    "componentLibraryType": "base",
+    "componentModelEn": "AO3400A",
+    "componentProductType": 0,
+    "componentSpecificationEn": "SOT-23",
+    "describe": "-55℃~+150℃ 1 N-channel 1.45V 1.4W 30V 48mΩ@2.5V 5.7A 50pF 630pF 75pF 7nC@10V N-Channel SOT-23 MOSFETs ROHS",
+    "preferredComponentFlag": false,
+    "stockCount": 943509
+  }
+}

@@ -1,0 +1,144 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:gate",
+ "title": "pcb gate output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/gate/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "inputs",
+     "files",
+     "gates",
+     "check",
+     "passed"
+    ],
+    "properties": {
+     "inputs": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "gates": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name",
+        "version",
+        "passed",
+        "fresh",
+        "why"
+       ]
+      }
+     },
+     "check": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "type": "object",
+        "required": [
+         "fab",
+         "findings",
+         "unwaived",
+         "unused_waivers"
+        ],
+        "properties": {
+         "fab": {
+          "type": "string"
+         },
+         "findings": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "required": [
+            "check",
+            "item",
+            "count",
+            "message",
+            "waived"
+           ],
+           "additionalProperties": false,
+           "properties": {
+            "check": {
+             "enum": [
+              "drc",
+              "width-current",
+              "side",
+              "paste",
+              "testpoint",
+              "silk",
+              "ring",
+              "stale"
+             ]
+            },
+            "item": {
+             "type": "string"
+            },
+            "count": {
+             "type": "integer",
+             "minimum": 1
+            },
+            "message": {
+             "type": "string"
+            },
+            "waived": {
+             "type": [
+              "string",
+              "null"
+             ]
+            }
+           }
+          }
+         },
+         "unwaived": {
+          "type": "integer"
+         },
+         "unused_waivers": {
+          "type": "array",
+          "items": {
+           "type": "string"
+          }
+         }
+        }
+       }
+      ]
+     },
+     "passed": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   }
+  }
+ }
+}

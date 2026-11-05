@@ -1,0 +1,14 @@
+{
+  "fetched": "2026-11-04",
+  "part": {
+    "componentBrandEn": "YXC Crystal Oscillators",
+    "componentCode": "C9002",
+    "componentLibraryType": "base",
+    "componentModelEn": "X322512MSB4SI",
+    "componentProductType": 0,
+    "componentSpecificationEn": "SMD3225-4P",
+    "describe": "-40℃~+85℃ 12MHz 20pF 80Ω Crystal Oscillator ±10ppm ±20ppm SMD3225-4P Crystals ROHS",
+    "preferredComponentFlag": false,
+    "stockCount": 279696
+  }
+}

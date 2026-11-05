@@ -1,0 +1,33 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:info",
+ "title": "pcb info output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/info/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "properties": {}
+   }
+  }
+ }
+}

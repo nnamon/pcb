@@ -1,0 +1,109 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:place",
+ "title": "pcb place output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/place/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "enum": [
+     "done",
+     "rejected"
+    ]
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "written",
+     "moved",
+     "unchanged",
+     "locked",
+     "ripped_segments",
+     "ripped_vias",
+     "ripped_nets",
+     "unplaced",
+     "drc_total_before",
+     "drc_total_after",
+     "fixed",
+     "regressions",
+     "allowed"
+    ],
+    "properties": {
+     "written": {
+      "type": "string"
+     },
+     "moved": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "unchanged": {
+      "type": "integer"
+     },
+     "locked": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "ripped_segments": {
+      "type": "integer"
+     },
+     "ripped_vias": {
+      "type": "integer"
+     },
+     "ripped_nets": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "unplaced": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "drc_total_before": {
+      "type": "integer"
+     },
+     "drc_total_after": {
+      "type": "integer"
+     },
+     "fixed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "regressions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "allowed": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

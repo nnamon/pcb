@@ -1,0 +1,176 @@
+"""Sensitivity test for tests/verify_route.py: each mutation damages a copy of a routed board in one way, and
+the check must fail on every one. The unmutated pair must pass.
+
+Usage: python3 route_mutations.py original.kicad_pcb routed.kicad_pcb x0,y0,x1,y1 TARGET_NETS ALLOWED_NETS workdir
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+orig, routed, region, targets, allowed, work = sys.argv[1:7]
+os.makedirs(work, exist_ok=True)
+src = open(routed).read()
+r = [float(v) for v in region.split(",")]
+here = os.path.dirname(os.path.abspath(__file__))
+# net name -> how an item names it; KiCad 10 names nets on each item and has no net table
+nets = {n: f'"{n}"' for n in dict.fromkeys(re.findall(r'\(net "([^"]*)"\)', src))}
+target = targets.split(",")[0]
+
+
+def seg_lines(t):
+    return [m for m in re.finditer(r"^  \(segment \(start ([-\d.]+) ([-\d.]+)\) \(end ([-\d.]+) ([-\d.]+)\)[^\n]*\n", t, re.M)]
+
+
+def outside(m):
+    xs = [float(m.group(i)) for i in (1, 3)]
+    ys = [float(m.group(i)) for i in (2, 4)]
+    return all(x < r[0] - 1 or x > r[2] + 1 for x in xs) or all(y < r[1] - 1 or y > r[3] + 1 for y in ys)
+
+
+def add(t, line):
+    i = t.rstrip().rindex(")")
+    return t[:i] + line + t[i:]
+
+
+def m_move_outside(t):
+    m = next(m for m in seg_lines(t) if outside(m))
+    line = m.group(0).replace(f"(start {m.group(1)} ", f"(start {float(m.group(1)) + 0.01:g} ", 1)
+    return t[:m.start()] + line + t[m.end():]
+
+
+def m_add_outside(t):
+    return add(t, f'  (segment (start {r[2] + 5} {r[3] + 5}) (end {r[2] + 6} {r[3] + 5}) (width 0.15) (layer "F.Cu") (net {nets[target]}))\n')
+
+
+def m_drop_new(t):
+    # the last segment on the target net: new copper is appended at the end
+    ms = [m for m in seg_lines(t) if f"(net {nets[target]})" in m.group(0)]
+    m = ms[-1]
+    return t[:m.start()] + t[m.end():]
+
+
+def m_footprint(t):
+    return t.replace('(property "Value" "', '(property "Value" "X', 1) if '(property "Value" "' in t else t.replace('(fp_text value "', '(fp_text value "X', 1)
+
+
+def m_other_net_inside(t):
+    cx, cy = (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
+    other = next(n for n in nets if n and n not in allowed.split(",") and n not in targets.split(","))
+    return add(t, f'  (segment (start {cx} {cy}) (end {cx + 0.2} {cy}) (width 0.15) (layer "B.Cu") (net {nets[other]}))\n')
+
+
+def m_drop_outside_via(t):
+    for m in re.finditer(r"^  \(via \(at ([-\d.]+) ([-\d.]+)\)[^\n]*\n", t, re.M):
+        x, y = float(m.group(1)), float(m.group(2))
+        if not (r[0] - 1 <= x <= r[2] + 1 and r[1] - 1 <= y <= r[3] + 1):
+            return t[:m.start()] + t[m.end():]
+    raise SystemExit("no via outside the region")
+
+
+def m_one_stub_inside(t):
+    # review 6, K7: a single free stub on the target net; the count per net may not move, the added-track test must
+    x, y = r[0] + 0.5, r[1] + 0.5
+    return add(t, f'  (segment (start {x} {y}) (end {x + 0.3} {y}) (width 0.15) (layer "B.Cu") (net {nets[target]}))\n')
+
+
+def m_dangling_inside(t):
+    # a stub from a target-net pad... simplest: a short free segment on the target net, inside the region
+    # two free stubs on the target net, inside the region: the route may have fixed one dangling end of that net,
+    # so one stub alone could leave the count where it was
+    x, y = r[0] + 0.5, r[1] + 0.5
+    stub = lambda yy: f'  (segment (start {x} {yy}) (end {x + 0.3} {yy}) (width 0.15) (layer "B.Cu") (net {nets[target]}))\n'
+    return add(t, stub(y) + stub(y + 0.6))
+
+
+def m_clearance(t):
+    # a long target-net track across the middle of the region on the top layer
+    return add(t, f'  (segment (start {r[0] + 0.5} {(r[1] + r[3]) / 2}) (end {r[2] - 0.5} {(r[1] + r[3]) / 2}) (width 0.15) (layer "F.Cu") (net {nets[target]}))\n')
+
+
+def m_split_outside(t):
+    # split an outside track in two: the pieces rebuild it but the cut is outside the region
+    m = next(m for m in seg_lines(t) if outside(m) and "(uuid" not in m.group(0))
+    a = (float(m.group(1)), float(m.group(2)))
+    c = (float(m.group(3)), float(m.group(4)))
+    mid = ((a[0] + c[0]) / 2, (a[1] + c[1]) / 2)
+    line = m.group(0)
+    p1 = line.replace(f"(end {m.group(3)} {m.group(4)})", f"(end {mid[0]:g} {mid[1]:g})")
+    p2 = line.replace(f"(start {m.group(1)} {m.group(2)})", f"(start {mid[0]:g} {mid[1]:g})")
+    return t[:m.start()] + p1 + p2 + t[m.end():]
+
+
+def added_lines(t):
+    o = set(open(orig).read().split("\n"))
+    return [ln for ln in t.split("\n") if ln.strip().startswith("(segment") and ln not in o]
+
+
+def m_narrow_new(t):
+    ln = added_lines(t)[0]
+    w = re.search(r"\(width ([\d.]+)\)", ln).group(1)
+    return t.replace(ln, ln.replace(f"(width {w})", f"(width {float(w) - 0.05:g})"), 1)
+
+
+def m_shared_id(t):
+    a, b = added_lines(t)[:2]
+    t = t.replace(a, a[:-1] + ' (uuid "00000000-0000-0000-0000-00000000beef"))', 1)
+    return t.replace(b, b[:-1] + ' (uuid "00000000-0000-0000-0000-00000000beef"))', 1)
+
+
+def m_unlock(t):
+    # the original gets a locked track inside the region that the routed board has unlocked
+    for m in seg_lines(t):
+        xs, ys = [float(m.group(i)) for i in (1, 3)], [float(m.group(i)) for i in (2, 4)]
+        if all(r[0] < x < r[2] for x in xs) and all(r[1] < y < r[3] for y in ys) and m.group(0) in open(orig).read():
+            line = m.group(0)
+            return ("ORIG", open(orig).read().replace(line, line.replace("(segment ", "(segment (locked yes) ", 1), 1), t)
+    raise SystemExit("no track inside the region")
+
+
+def m_drc_swap(t):
+    # review 3, 10: the original has one clearance violation between two nets, the result one between two others;
+    # a DRC compared by kind alone sees no change
+    o = open(orig).read()
+    xs = [r[2] + 20, r[2] + 30]
+    named = [n for n in nets if n][:4]
+    clash = lambda x, a, b: (f'  (segment (start {x} {r[3] + 20}) (end {x + 3} {r[3] + 20}) (width 0.2) (layer "B.Cu") (net {nets[a]}))\n'
+                             f'  (segment (start {x + 1} {r[3] + 19}) (end {x + 1} {r[3] + 21}) (width 0.2) (layer "B.Cu") (net {nets[b]}))\n')
+    return ("ORIG", add(o, clash(xs[0], named[0], named[1])), add(t, clash(xs[1], named[2], named[3])))
+
+
+# mutation -> the check it targets, which must be among those that fire (review 5, 6)
+MUT = {m_narrow_new: "I", m_shared_id: "H", m_unlock: "G", m_move_outside: "B", m_add_outside: "C", m_drop_new: "D",
+       m_footprint: "A", m_other_net_inside: "C", m_drop_outside_via: "B", m_dangling_inside: "E", m_one_stub_inside: "E", m_clearance: "F",
+       m_split_outside: "B", m_drc_swap: "F"}
+
+
+def verify(board, o=None):
+    return subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_route.py"), o or orig, board, region, targets, allowed], capture_output=True, text=True)
+
+
+results = {"unmutated passes": verify(routed).returncode == 0}
+pro = os.path.splitext(routed)[0] + ".kicad_pro"
+for f, check_id in MUT.items():
+    out = f(src)
+    o_path = None
+    if isinstance(out, tuple):
+        _, o_text, out = out
+        o_path = os.path.join(work, f.__name__ + "_orig.kicad_pcb")
+        open(o_path, "w").write(o_text)
+        shutil.copy(os.path.splitext(orig)[0] + ".kicad_pro", os.path.splitext(o_path)[0] + ".kicad_pro")
+        assert o_text != open(orig).read(), f"{f.__name__} changed nothing"
+    else:
+        assert out != src, f"{f.__name__} changed nothing"
+    p = os.path.join(work, f.__name__ + ".kicad_pcb")
+    open(p, "w").write(out)
+    if os.path.exists(pro):
+        shutil.copy(pro, os.path.splitext(p)[0] + ".kicad_pro")
+    v = verify(p, o_path)
+    caught = v.returncode != 0
+    fired = sorted({m.group(1) for m in re.finditer(r'^\s*"([A-I]): ', v.stdout, re.M)})
+    ok = caught and check_id in fired
+    results[f.__name__ + " caught"] = ok
+    print(f"{'ok  ' if ok else 'FAIL'} {f.__name__} caught by {check_id} (fired: {''.join(fired)})")
+print(f"{'ok  ' if results['unmutated passes'] else 'FAIL'} unmutated passes")
+sys.exit(0 if all(results.values()) else 1)
