@@ -395,7 +395,8 @@ pub fn run(l: &Loaded, kind: &str, status: &str, rev: &str, out_dir: &str) -> Re
 
     // ---- sheet 1: top view
     let mut s1 = Sheet::default();
-    frame(&mut s1, l, "top side, placement proposal", 1, sheets, &scale, status, rev);
+    let subtitle = if status == "PROPOSAL" { "top side, placement proposal" } else { "top side, placement" };
+    frame(&mut s1, l, subtitle, 1, sheets, &scale, status, rev);
     let outline = |sh: &mut Sheet, v: &View| {
         for sgm in &b.outline {
             let a = v.p(sgm.x0, sgm.y0);
@@ -526,13 +527,20 @@ pub fn run(l: &Loaded, kind: &str, status: &str, rev: &str, out_dir: &str) -> Re
     }
     // notes
     let mut notes: Vec<String> = vec![
-        format!("{status}. PLACEMENT FOR GATE 1 REVIEW; PARTS AND VALUES MAY STILL CHANGE."),
+        match status {
+            "RELEASED" => format!("{status}. PLACEMENT AS RELEASED; THE ORDER FILES ARE THE REFERENCE."),
+            "REVIEWED" => format!("{status}. PLACEMENT REVIEWED AT GATE 1; PARTS AND VALUES MAY STILL CHANGE."),
+            _ => format!("{status}. PLACEMENT FOR GATE 1 REVIEW; PARTS AND VALUES MAY STILL CHANGE."),
+        },
         "DIMENSIONS IN MM FROM DATUM A, LOWER-LEFT CORNER OF THE TOP VIEW. EVERY PART'S X, Y AND ROTATION: SHEET 3. ROTATION IS COUNTER-CLOCKWISE.".into(),
         format!(
             "BOARD: {} LAYERS, {:.2} THICK, {}.",
             b.copper_layers.len(),
             d.and_then(|d| d.thickness_mm).unwrap_or(1.6),
-            d.and_then(|d| d.finish.clone()).unwrap_or_else(|| "HASL, GREEN MASK, WHITE SILKSCREEN".into()).to_uppercase()
+            d.and_then(|d| d.finish.clone())
+                .or_else(|| p.finish.as_ref().map(|f| f.note()))
+                .unwrap_or_else(|| "HASL, GREEN MASK, WHITE SILKSCREEN".into())
+                .to_uppercase()
         ),
     ];
     let sides = p.assembly.as_ref().map(|a| a.machine_sides.join(" AND ")).filter(|s| !s.is_empty()).unwrap_or_else(|| "top".into());

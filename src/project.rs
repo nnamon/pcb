@@ -93,6 +93,16 @@ pub struct Finish {
 }
 
 impl Finish {
+    /// The finish in words for a drawing note, e.g. "ENIG, black mask, white silkscreen".
+    pub fn note(&self) -> String {
+        let copper = match self.copper.as_str() {
+            "hasl" => "HASL",
+            "hasl-lead-free" => "lead-free HASL",
+            _ => "ENIG",
+        };
+        format!("{copper}, {} mask, {} silkscreen", self.mask, self.silk)
+    }
+
     /// The order form's words for this finish (JLCPCB: PCB Color, Silkscreen, Surface Finish).
     pub fn order_options(&self) -> String {
         let cap = |w: &str| {
@@ -212,6 +222,10 @@ pub struct PasteRule {
     /// Paste over a plated pad (pin in paste): an opening the shape of the pad.
     #[serde(default)]
     pub pin_in_paste: bool,
+    /// No paste on the pad: for a pad nothing is placed on (a test pad, a part fitted by hand), which would otherwise
+    /// get a solder bump.
+    #[serde(default)]
+    pub no_paste: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -724,7 +738,7 @@ pub fn check(p: &Project) -> Vec<String> {
         if !r.pad.contains('.') || !paste_pads.insert(r.pad.clone()) {
             e.push(format!("paste {:?}: pad is REF.PAD, once", r.pad));
         }
-        match (r.windows, r.pin_in_paste) {
+        match (r.windows, r.pin_in_paste || r.no_paste) {
             (Some([c, rw]), false) => {
                 if c == 0 || rw == 0 || c * rw > 64 {
                     e.push(format!("paste {}: windows needs 1 to 64 windows", r.pad));
@@ -737,8 +751,11 @@ pub fn check(p: &Project) -> Vec<String> {
                 if r.size_mm.is_some() || r.web_mm.is_some() {
                     e.push(format!("paste {}: size_mm and web_mm go with windows", r.pad));
                 }
+                if r.pin_in_paste && r.no_paste {
+                    e.push(format!("paste {}: give one of windows, pin_in_paste = true or no_paste = true", r.pad));
+                }
             }
-            _ => e.push(format!("paste {}: give windows or pin_in_paste = true, not both", r.pad)),
+            _ => e.push(format!("paste {}: give one of windows, pin_in_paste = true or no_paste = true", r.pad)),
         }
     }
     let mut art_names = std::collections::BTreeSet::new();

@@ -2,6 +2,12 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.4.3 (6 Nov 2026)
+
+- `[[paste]] no_paste = true`: a pad loses its paste, for test pads and hand-fitted parts, which JLCPCB would otherwise print and reflow into solder bumps (Gate 2 fab finding on the badge carrier).
+- `pcb parts`: a pad drawn as a polygon is matched by the middle of its copper on both sides, not by its anchor. The badge's U107 (C236673, SOT-89) had the same copper as JLCPCB's footprint but its tab pad anchored 0.81 mm away, so it failed at 0.54 mm and the solved CPL offset was wrong ([0.815, 0] for [0.545, 0]).
+- `pcb drawing placement`: the board note takes the finish from `[finish]` (it said HASL and green mask on a black ENIG board), and the first note and subtitle follow `--status` (a RELEASED sheet said "for Gate 1 review").
+
 ## 0.4.2 (6 Nov 2026)
 
 - `[finish]` in pcb.toml: mask colour, silkscreen colour and copper finish, checked against what JLCPCB offers and prints.

@@ -262,8 +262,17 @@ pub fn footprint(raw: &Value, name: &str) -> Result<(String, Vec<EPad>)> {
                     other => bail!("{name}: pad {number} shape {other} at {rot} degrees is not handled"),
                 };
                 pads_out.push_str(&pad);
-                // where KiCad will put the pad: at its hole
-                let (ex, ey) = hole_shift.map(|(dx, dy)| (r6(x + dx), r6(y + dy))).unwrap_or((x, y));
+                // where the pad is for matching: a pad drawn as a polygon by the middle of its copper, since its anchor
+                // is wherever the drawing put it (C236673's tab pad is anchored 0.81 mm off the board footprint's,
+                // with the same copper); any other at its hole, where KiCad puts it
+                let custom = matches!(shape, "RECT" | "POLYGON") && !(shape == "RECT" && quarter);
+                let (ex, ey) = if custom {
+                    let (x0, x1) = pts.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p.0), a.1.max(p.0)));
+                    let (y0, y1) = pts.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p.1), a.1.max(p.1)));
+                    (r6((x0 + x1) / 2.0), r6((y0 + y1) / 2.0))
+                } else {
+                    hole_shift.map(|(dx, dy)| (r6(x + dx), r6(y + dy))).unwrap_or((x, y))
+                };
                 epads.push(EPad { number, x: ex, y: ey });
             }
             "HOLE" => {
@@ -353,6 +362,15 @@ mod tests {
         let (t, p) = footprint(&c, "T").unwrap();
         assert!(t.contains("(pad \"1\" smd rect (at 2.54 0 0) (size 1.016 0.508)"), "{t}");
         assert_eq!(p[0].number, "1");
+    }
+
+    #[test]
+    fn polygon_pad_matches_by_its_copper() {
+        // a tab pad anchored off the middle of its outline: matched by the outline's middle (C236673, 6 Nov 2026)
+        let c = comp(&["PAD~POLYGON~3990~3000~4~2~1~~2~0~3970 2996 3990 2996 3990 3004 3970 3004~0~gge1~0~~Y~0"], &[]);
+        let (t, p) = footprint(&c, "T").unwrap();
+        assert!(t.contains("custom (at -2.54 0 0)"), "{t}");
+        assert!((p[0].x - -5.08).abs() < 1e-6 && p[0].y.abs() < 1e-6, "{:?}", (p[0].x, p[0].y));
     }
 
     #[test]

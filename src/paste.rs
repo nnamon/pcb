@@ -4,6 +4,7 @@
 //! - `windows`: the pad loses its own paste opening, and the footprint gains paste-only aperture pads, a grid of
 //!   `size_mm` squares `web_mm` apart, centred on the pad (an exposed pad that would float on a full sheet of paste).
 //! - `pin_in_paste`: a plated pad gains the paste layer of its side, so its opening is the pad's own shape.
+//! - `no_paste`: the pad loses its paste layer (a test pad, or a part fitted by hand: nothing is placed, so no bump).
 //!
 //! A footprint a run changes keeps the pads' own layers in a hidden property, `pcb:paste` (`NUM=LAYER,LAYER;...`),
 //! and its aperture pads carry ids derived from their names, so a later run restores the footprint before applying
@@ -134,6 +135,9 @@ fn run_inner(l: &Loaded, out_path: &str, work: &Path, dry: bool) -> Result<(Repo
                 keep.insert(num.clone(), original.clone());
                 if r.pin_in_paste && !desired.iter().any(|x| x == paste) {
                     desired.push(paste.to_string());
+                }
+                if r.no_paste {
+                    desired.retain(|x| x != paste);
                 }
                 if let (Some([c, rw]), Some(s), Some(w)) = (r.windows, r.size_mm, r.web_mm) {
                     desired.retain(|x| x != "F.Paste");
