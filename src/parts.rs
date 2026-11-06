@@ -172,8 +172,16 @@ fn board_pads(b: &Board, reference: &str) -> Vec<(String, f64, f64)> {
         .iter()
         .filter(|q| q.kind != "np_thru_hole" && q.layers.iter().any(|x| x.ends_with(".Cu")))
         .map(|q| {
+            // a custom pad by the middle of its copper, as JLCPCB's polygon pads are (crate::easyeda::footprint)
+            let (px, py) = match q.prims {
+                Some((x0, y0, x1, y1)) => {
+                    let (ox, oy) = crate::board::rotate((x0 + x1) / 2.0, (y0 + y1) / 2.0, q.rot);
+                    (q.x + ox, q.y + oy)
+                }
+                None => (q.x, q.y),
+            };
             // undo the footprint's turn: board (y down) to the footprint's own frame, then y up
-            let (dx, dy) = (q.x - f.x, q.y - f.y);
+            let (dx, dy) = (px - f.x, py - f.y);
             let a = f.rot.to_radians();
             // rotate() turns local to board as (x cos + y sin, -x sin + y cos); its inverse
             let lx = dx * a.cos() - dy * a.sin();

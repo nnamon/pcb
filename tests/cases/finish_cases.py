@@ -1,5 +1,5 @@
 """Cases for pcb.toml [finish]: its checks, `pcb render --look` in its colours, and the order options `pcb release`
-prints. The board is the synthetic one of tests/lib/zone_board.py.
+prints; and [[paste]] no_paste. The board is the synthetic one of tests/lib/zone_board.py.
 
 Usage: python3 finish_cases.py pcb-binary workdir
 """
@@ -155,6 +155,40 @@ for name, extra, want in [("release_finish", finish("black", "white", "enig"), "
     warned = any(w["code"] == "finish-unset" for w in v.get("warnings", []))
     expect(name, v.get("outcome") in ("done", "rejected") and data.get("order_options") == want and warned == (want is None),
            f"order options {data.get('order_options')!r}, finish-unset warned {warned} ({v.get('outcome')} {v.get('error')})")
+
+# 4. [[paste]] no_paste (0.4.3): the pad loses its paste, dropping the rule gives it back, and it takes nothing else
+d = build("no_paste", finish("black", "white", "enig") + '\n[[paste]]\npad = "G1.1"\nno_paste = true\n')
+board = os.path.join(d, "board.kicad_pcb")
+
+
+def g1_paste():
+    # the layers of G1's pad 1
+    t = open(board).read()
+    i = t.find('(pad "1"', t.find('(property "Reference" "G1"'))
+    j = t.find("(layers", i)
+    return "F.Paste" in t[j:t.find(")", j)]
+
+
+before = g1_paste()
+v = run("no_paste", "paste", "--project", d, "--work", os.path.join(d, "pw"))
+expect("no_paste", before and v.get("outcome") == "done" and not g1_paste(), f"G1.1 loses its paste ({v.get('outcome')} {v.get('error')})")
+open(os.path.join(d, "pcb.toml"), "w").write(BASE + SILK + finish("black", "white", "enig"))
+v = run("no_paste", "paste", "--project", d, "--work", os.path.join(d, "pw2"))
+expect("no_paste", v.get("outcome") == "done" and g1_paste(), f"dropping the rule restores it ({v.get('outcome')} {v.get('error')})")
+d = build("no_paste_windows", '\n[[paste]]\npad = "G1.1"\nno_paste = true\nwindows = [2, 2]\nsize_mm = 0.3\nweb_mm = 0.2\n')
+v = run("no_paste_windows", "paste", "--project", d, "--work", os.path.join(d, "pw"))
+expect("no_paste_windows", v.get("outcome") == "refused" and (v.get("error") or {}).get("code") == "config", f"refused config ({v.get('outcome')} {v.get('error')})")
+
+# 5. pcb drawing placement (0.4.3): the board note follows [finish], the first note follows --status
+for name, extra, status, want in (
+    ("drawing_finish", finish("black", "white", "enig"), "RELEASED", ("ENIG, BLACK MASK, WHITE SILKSCREEN", "PLACEMENT AS RELEASED")),
+    ("drawing_default", "", "PROPOSAL", ("HASL, GREEN MASK, WHITE SILKSCREEN", "PLACEMENT FOR GATE 1 REVIEW")),
+):
+    d = build(name, extra)
+    out = os.path.join(d, "drw")
+    v = run(name, "drawing", "placement", "--project", d, "--status", status, "-o", out)
+    svg = "".join(open(os.path.join(out, f)).read() for f in os.listdir(out) if f.endswith("sheet1.svg")) if os.path.isdir(out) else ""
+    expect(name, v.get("outcome") == "done" and all(w in svg for w in want), f"sheet 1 says {want} ({v.get('outcome')} {v.get('error')})")
 
 print(f"\n{len(fails)} failures")
 for f in fails:

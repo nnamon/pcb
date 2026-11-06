@@ -87,6 +87,6 @@ needs = ["freerouting"]
 
 [[step]]
 id = "finish_cases"
-name = "finish: config, render --look, release order options"
+name = "finish: config, render --look, release order options; paste no_paste"
 run = ["tests/cases/finish_cases.py", "{pcb}", "{work}"]
-covers = ["finish", "render", "release"]
+covers = ["finish", "render", "release", "paste"]
