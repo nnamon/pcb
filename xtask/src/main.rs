@@ -281,7 +281,22 @@ fn selected(sp: &Spec, only: Option<&str>) -> bool {
 }
 
 fn run_specs(s: &mut Suite, specs: &[Spec], pcb: &str, jar: Option<&str>, only: Option<&str>) {
-    for sp in specs.iter().filter(|sp| selected(sp, only)) {
+    // a selected step brings the steps it needs (`after`, `{work:<id>}`), so `--only diff` still runs the edit cases
+    // diff reads instead of skipping as if it passed
+    let mut want: std::collections::HashSet<String> = specs.iter().filter(|sp| selected(sp, only)).map(|sp| sp.id.clone()).collect();
+    loop {
+        let more: Vec<String> = specs
+            .iter()
+            .filter(|sp| want.contains(&sp.id))
+            .flat_map(|sp| sp.after.iter().cloned().chain(sp.run.iter().flat_map(|a| a.match_indices("{work:").map(|(i, _)| a[i + 6..].split('}').next().unwrap_or("").to_string()).collect::<Vec<_>>())))
+            .filter(|d| !want.contains(d))
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        want.extend(more);
+    }
+    for sp in specs.iter().filter(|sp| want.contains(&sp.id)) {
         if sp.needs.iter().any(|n| n == "freerouting") && (s.fast || jar.is_none()) {
             s.skip(&sp.name, "--fast");
             continue;

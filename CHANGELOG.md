@@ -2,6 +2,11 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.4.1 (5 Nov 2026)
+
+- `pcb edit`: `set_pad`, `silk_widen`, `silk_clear`, `silk_remove`, `add_slot` and `add_hole`, for the pad, silkscreen and outline changes the badge carrier needed pcbnew scripts for. Cases in `tests/cases/footprint_cases.py`.
+- `[[text]] anchor = "left"`: the ink's left edge and the baseline on `at`. Centring each label on its own ink moved a word with an underscore up and its first letter sideways, so a column of labels looked ragged.
+
 ## 0.4.0 (5 Nov 2026): M4, netlist and placement
 
 - `pcb parts`: JLCPCB stock, Economic eligibility and library type for every part, from a cache in `parts/`, refreshed with `--live`.

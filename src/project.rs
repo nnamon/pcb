@@ -143,8 +143,13 @@ pub struct TextArt {
     pub font: String,
     /// Capital height (mm), from the font's own cap height.
     pub cap_mm: f64,
-    /// Where the middle of the text's bounding box goes, in `frame`.
+    /// Where the text goes, in `frame`: the middle of its bounding box, or with `anchor = "left"` the left edge of its
+    /// ink on the baseline.
     pub at: [f64; 2],
+    /// "centre" (the default) or "left": left-anchored labels on one baseline line up whatever their letters, where
+    /// centring each on its ink moves a word with a descender (an underscore) up and its first letter sideways.
+    #[serde(default)]
+    pub anchor: Option<String>,
     /// "centre" or "board", as for `[[art]]`.
     pub frame: String,
     /// Turn (degrees, anticlockwise as read on its own side).
@@ -732,6 +737,9 @@ pub fn check(p: &Project) -> Vec<String> {
         }
         if !matches!(t.frame.as_str(), "centre" | "board") {
             e.push(format!("text {:?}: frame is centre or board", t.name));
+        }
+        if !matches!(t.anchor.as_deref(), None | Some("centre") | Some("left")) {
+            e.push(format!("text {:?}: anchor is centre or left", t.name));
         }
         if !matches!(t.layer.as_str(), "F.SilkS" | "B.SilkS" | "F.Mask" | "B.Mask" | "F.Cu" | "B.Cu") {
             e.push(format!("text {:?}: layer {} is not F.SilkS, B.SilkS, F.Mask, B.Mask, F.Cu or B.Cu", t.name, t.layer));

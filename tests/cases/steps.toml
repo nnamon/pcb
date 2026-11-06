@@ -53,6 +53,12 @@ covers = ["diff"]
 after = "edit_cases"
 
 [[step]]
+id = "footprint_cases"
+name = "footprint and outline edit cases"
+run = ["tests/cases/footprint_cases.py", "{pcb}", "{work}"]
+covers = ["edit"]
+
+[[step]]
 id = "zone_cases"
 name = "zone cases"
 run = ["tests/cases/zone_cases.py", "{pcb}", "{work}"]

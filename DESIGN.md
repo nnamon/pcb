@@ -188,7 +188,7 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 | `[[drc_allow]]` | `kind` (a KiCad DRC type), `nets`, `max`, `why` | M2 zone; the gate's allowance |
 | `[[paste]]` | `pad` (`REF.PAD`), `windows`, `size_mm`, `web_mm`, `pin_in_paste` | M3 paste |
 | `[[art]]` | `name`, `file` (GeoJSON), `key`, `frame` (`centre`, `board`), `layers`, `net` | M3 art |
-| `[[text]]` | `name`, `text`, `font`, `cap_mm`, `at`, `frame`, `rot_deg`, `layer`, `grow_mm`, `net` | M3 art |
+| `[[text]]` | `name`, `text`, `font`, `cap_mm`, `at`, `anchor` (`centre`, `left`), `frame`, `rot_deg`, `layer`, `grow_mm`, `net` | M3 art; `anchor` 0.4.1 |
 | `[parts.<LCSC>]` | `rotation_offset_deg`, `cpl_offset_mm`, `source` | M3 release (M4 parts solves them) |
 | `[[waiver]]` | `check`, `item`, `max`, `why` | M3 check, gate |
 | `[bringup]` | `ammeter_break` (nets), `test_points` (reference to what it measures) | M3 bring-up sheet |
@@ -208,6 +208,14 @@ The commands table above is the plan. Built so far: `roundtrip`, `info`, `import
 | `delete` | `what` (`via`, `track`), `net`, then `uuid`, or `at` for a via, or `layer`, `start`, `end` for a track; `unlock`, `all` | Exactly that item. With a uuid and a position both given, they must name the same item (`edit-mismatch`); a field that does not apply (`at` for a track, `layer` for a via) is refused (`edit-op`). When a position names several (a duplicate track), the edit is refused unless `all` is set, which deletes every one; boards imported from tscircuit have no uuids to tell duplicates apart |
 | `set_width` | `net`, `layer`, `start`, `end`, `from`, `to`, `unlock` | The track with those ends, now `from` mm wide |
 | `move_footprint` | `ref`, `from`, `to`, `unlock` | The footprint now at `from`; its pads, graphics and own zones (rule areas, which KiCad stores in board coordinates) move with it, rotation and side kept. Tracks do not move, so the gate sees any that no longer reach a pad |
+| `set_pad` | `ref`, `pad`, `at`, `to`, `size`, `drill`, `unlock` | The pad of that number now centred at `at` (board coordinates): moved to `to`, resized to `size` (its own frame), its round drill set to `drill`; at least one change. Tracks do not move |
+| `silk_widen` | `min`, `refs` | Every footprint silkscreen line, arc, circle, rectangle and polygon outline under `min` mm becomes `min` wide; a circle whose hole would then be under `min` (a pin-1 mark) is filled |
+| `silk_clear` | `pads`, `edge`, `refs` | Footprint silkscreen lines cut back from every pad and hole on their side (`pads` plus half the line) and from the board's bounding edge (`edge` plus half the line); only what crosses goes, pieces under 0.2 mm are dropped. Arcs, circles, rectangles and polygons are not cut; each that crosses is named in the report |
+| `silk_remove` | `refs` | The footprints' own silkscreen shapes, for a board whose legend comes from `[[art]]`; text fields stay |
+| `add_slot` | `from`, `to`, `width` | A milled slot on Edge.Cuts, `width` wide with round ends, between the two centres |
+| `add_hole` | `ref`, `at`, `drill` | A non-plated drilled hole: a hole footprint named `ref` (a new reference), not placed and not in the BOM |
+
+The footprint operations exist because silkscreen and pad fixes on the badge carrier had to be pcbnew scripts (5 Nov 2026). Silkscreen is judged by the gate like copper: widening lines that then touch pads or each other is rejected, so clear first and widen after. Cases: `tests/cases/footprint_cases.py`, read back with pcbnew.
 
 - Positions match within 5 µm. Unknown fields are refused, so a typo cannot pass as an omitted option. New points must lie on the board (`edit-op`).
 - A locked item is refused (`edit-locked`) unless the operation says `unlock`. The item stays locked after the change.
@@ -283,7 +291,7 @@ The footprint records the pads' own layers in a hidden property `pcb:paste`, and
 
 ### `pcb art`
 
-`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`; `{version}` in the text is the project's version), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at`, grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
+`[[art]]` entries are GeoJSON polygons (`file`, `key` for one geometry of an object, `frame` "centre" or "board") on silkscreen, mask or copper (with `net`); exposed copper art is copper plus a mask opening. `[[text]]` entries are text in a TrueType font (`font`, `cap_mm`, `at`, `rot_deg`, `layer`, `grow_mm`; `{version}` in the text is the project's version), drawn by pcb as polygons: glyphs by advance width, the bounding box centred on `at` (or, with `anchor = "left"`, the ink's left edge and the baseline on `at`, so labels in a column line up whatever their letters), grown, turned, and mirrored on the bottom so it reads from below. No font has to be installed where KiCad runs. KiCad's polygons have no holes, so a polygon with holes is cut into strips through each hole. Each entry's shapes sit in a group `pcb:art:<name>`, which a later run removes first.
 
 ### `pcb check`
 
