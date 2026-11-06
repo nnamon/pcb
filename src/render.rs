@@ -168,3 +168,104 @@ pub fn png(b: &Board, o: &Opts, out: &str) -> Result<()> {
     std::fs::write(out, png).with_context(|| format!("writing {out}"))?;
     Ok(())
 }
+
+/// The board as it will look made, by KiCad's raytracer (`kicad-cli pcb render`): a copy with a stackup in the
+/// project's `[finish]` colours, so the picture follows the order and not KiCad's default green. KiCad's own "Black"
+/// mask is translucent and turns brown over copper, and HASL renders as white as silkscreen, so the colours here are
+/// pcb's: the masks as a fab's look under light, matte black nearly opaque.
+pub struct Look {
+    pub side: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+fn mask_rgba(mask: &str) -> &'static str {
+    match mask {
+        "green" => "#1A5C2DD9",
+        "purple" => "#4B2A6BD9",
+        "red" => "#9E1B1BD9",
+        "yellow" => "#C9A800D9",
+        "blue" => "#173C8CD9",
+        "white" => "#F2F2F2F5",
+        _ => "#0C0C0CFA",
+    }
+}
+
+/// The stackup block for `layers` copper layers in the finish's colours (JLCPCB's 1.6 mm build; thicknesses only
+/// shape the render's board edge).
+pub fn stackup(f: &crate::project::Finish, layers: u32) -> String {
+    let silk = if f.silk == "black" { "#101010" } else { "#F5F5F5" };
+    let mask = mask_rgba(&f.mask);
+    let finish = match f.copper.as_str() {
+        "hasl" => "HAL SnPb",
+        "hasl-lead-free" => "HAL lead-free",
+        _ => "ENIG",
+    };
+    let mut copper = vec!["F.Cu".to_string()];
+    for i in 1..layers.saturating_sub(1) {
+        copper.push(format!("In{i}.Cu"));
+    }
+    copper.push("B.Cu".to_string());
+    let gaps = copper.len() - 1;
+    let dielectric = 1.5 / gaps as f64;
+    let mut s = format!("(stackup\n\t\t\t(layer \"F.SilkS\" (type \"Top Silk Screen\") (color \"{silk}\"))\n\t\t\t(layer \"F.Mask\" (type \"Top Solder Mask\") (color \"{mask}\") (thickness 0.01))\n");
+    for (i, c) in copper.iter().enumerate() {
+        s += &format!("\t\t\t(layer \"{c}\" (type \"copper\") (thickness 0.035))\n");
+        if i < gaps {
+            let kind = if gaps > 1 && i % 2 == 0 { "prepreg" } else { "core" };
+            s += &format!("\t\t\t(layer \"dielectric {}\" (type \"{kind}\") (color \"FR4 natural\") (thickness {dielectric:.4}) (material \"FR4\") (epsilon_r 4.5) (loss_tangent 0.02))\n", i + 1);
+        }
+    }
+    s += &format!("\t\t\t(layer \"B.Mask\" (type \"Bottom Solder Mask\") (color \"{mask}\") (thickness 0.01))\n\t\t\t(layer \"B.SilkS\" (type \"Bottom Silk Screen\") (color \"{silk}\"))\n\t\t\t(copper_finish \"{finish}\")\n\t\t\t(dielectric_constraints no)\n\t\t)");
+    s
+}
+
+/// The board text with its stackup replaced by (or given) `stack`, inside `(setup`.
+pub fn with_stackup(text: &str, stack: &str) -> Result<String> {
+    let mut t = text.to_string();
+    if let Some(i) = t.find("(stackup") {
+        let mut depth = 0i32;
+        let mut end = None;
+        for (j, c) in t[i..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + j + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.ok_or_else(|| crate::contract::refused("refused", "the board's stackup block is not closed".to_string()))?;
+        t.replace_range(i..end, "");
+    }
+    let at = t.find("(setup").ok_or_else(|| crate::contract::refused("refused", "the board has no setup block".to_string()))? + "(setup".len();
+    t.insert_str(at, &format!("\n\t\t{stack}"));
+    Ok(t)
+}
+
+pub fn look(board: &str, f: &crate::project::Finish, layers: u32, o: &Look, work: &std::path::Path, out: &str) -> Result<()> {
+    if o.side != "top" && o.side != "bottom" {
+        return Err(crate::contract::refused("usage", format!("--side is top or bottom, not {}", o.side)));
+    }
+    if o.width == 0 || o.height == 0 || (o.width as u64) * (o.height as u64) > 64_000_000 {
+        return Err(crate::contract::refused("image-too-large", format!("{} x {} pixels; keep each side above 0 and the image under 64 megapixels", o.width, o.height)));
+    }
+    let text = std::fs::read_to_string(board).map_err(|e| crate::contract::failed("io", format!("reading {board}: {e}")))?;
+    std::fs::create_dir_all(work).map_err(|e| crate::contract::failed("io", format!("creating {}: {e}", work.display())))?;
+    let copy = work.join("look.kicad_pcb");
+    std::fs::write(&copy, with_stackup(&text, &stackup(f, layers))?).map_err(|e| crate::contract::failed("io", format!("writing {}: {e}", copy.display())))?;
+    let (w, h) = (o.width.to_string(), o.height.to_string());
+    let r = std::process::Command::new("kicad-cli")
+        .args(["pcb", "render", "--side", &o.side, "--width", &w, "--height", &h, "--quality", "high", "--background", "opaque", "--use-board-stackup-colors", "-o", out])
+        .arg(&copy)
+        .output()
+        .map_err(|e| crate::contract::failed("kicad", format!("running kicad-cli: {e}")))?;
+    if !r.status.success() || !std::path::Path::new(out).exists() {
+        return Err(crate::contract::failed("kicad", format!("kicad-cli pcb render: {}", String::from_utf8_lossy(&r.stderr))));
+    }
+    Ok(())
+}

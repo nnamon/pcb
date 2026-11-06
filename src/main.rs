@@ -330,7 +330,8 @@ enum Cmd {
         #[arg(short, long)]
         out: String,
     },
-    /// PNG of the board or a region, nets labelled.
+    /// PNG of the board or a region, nets labelled; with --look, the board as it will look made, in pcb.toml's
+    /// [finish] colours (KiCad's raytracer).
     Render {
         board: String,
         /// x0,y0,x1,y1 in mm (KiCad coordinates).
@@ -344,6 +345,22 @@ enum Cmd {
         scale: f64,
         #[arg(long)]
         no_labels: bool,
+        /// The board as it will look made: mask, silkscreen and copper finish from pcb.toml's [finish].
+        #[arg(long)]
+        look: bool,
+        /// With --look: pcb.toml, or the folder holding it.
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// With --look: top or bottom (the bottom as seen from below).
+        #[arg(long, default_value = "top")]
+        side: String,
+        /// With --look: image width and height in pixels.
+        #[arg(long, default_value_t = 2000)]
+        width: u32,
+        #[arg(long, default_value_t = 2000)]
+        height: u32,
+        #[arg(long, default_value = "pcb_work/render")]
+        work: String,
         #[arg(long, short)]
         out: String,
     },
@@ -705,6 +722,9 @@ fn run(cli: Cli) -> Result<Reply> {
             for f in &r.files {
                 h += &format!("\n  {}  {}", f.sha256, f.name);
             }
+            if let Some(o) = &r.order_options {
+                h += &format!("\n  order with: {o}");
+            }
             for x in &r.problems {
                 h += &format!("\n  FAIL {x}");
             }
@@ -840,7 +860,28 @@ fn run(cli: Cli) -> Result<Reply> {
             let written = r.written.clone();
             Ok(Reply { outcome: if rejected { Outcome::Rejected } else { Outcome::Done }, error: None, written: Some(written), warnings: vec![], human, data: serde_json::to_value(&r)? })
         }
-        Cmd::Render { board, region, highlight, scale, no_labels, out } => {
+        Cmd::Render { board, region, highlight, scale, no_labels, look, project: proj, side, width, height, work, out } => {
+            if look {
+                if region.is_some() || !highlight.is_empty() || no_labels {
+                    return Err(contract::refused("usage", "--look draws the whole board as made; --region, --highlight and --no-labels belong to the plain render".to_string()));
+                }
+                let l = project::load(&project::locate(&proj))?;
+                let problems = project::check(&l.project);
+                if !problems.is_empty() {
+                    return Err(contract::refused("config", problems.join("; ")));
+                }
+                let mut warnings = vec![];
+                let finish = match &l.project.finish {
+                    Some(f) => f.clone(),
+                    None => {
+                        warnings.push(contract::warn("finish-unset", "pcb.toml has no [finish]; rendered green mask, white silkscreen, lead-free HASL".to_string()));
+                        project::Finish { mask: "green".into(), silk: "white".into(), copper: "hasl-lead-free".into() }
+                    }
+                };
+                render::look(&board, &finish, l.project.project.layers, &render::Look { side: side.clone(), width, height }, std::path::Path::new(&work), &out)?;
+                let human = format!("wrote {out}: {side}, {}", finish.order_options());
+                return Ok(Reply { outcome: Outcome::Done, error: None, written: Some(out.clone()), warnings, human, data: json!({ "side": side, "finish": finish, "order_options": finish.order_options() }) });
+            }
             let b = Board::load(&board)?;
             let o = render::Opts {
                 region: region.as_deref().map(parse_region).transpose()?,

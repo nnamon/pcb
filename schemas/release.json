@@ -108,6 +108,13 @@
      },
      "parts_checked": {
       "type": "boolean"
+     },
+     "order_options": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The order form's options for pcb.toml [finish] (PCB Color, Silkscreen, Surface Finish); null without a [finish]"
      }
     }
    }

@@ -122,7 +122,7 @@ Every command:
 | `pcb route` | Region-locked Freerouting run, with prewires |
 | `pcb zone`, `pcb fill` | Pours and planes as KiCad zones; fills them |
 | `pcb check [--place\|--route\|--fab\|--all]` | Runs the checks; one report |
-| `pcb render [--region]` | PNG of a region with nets labelled, for an agent to look at |
+| `pcb render [--region]` | PNG of a region with nets labelled, for an agent to look at; `--look`: the board as it will look made, in `[finish]` colours |
 | `pcb release` | Order pack, docs, bench outputs, checksums |
 | `pcb order-check` | Check 21: stock and price of every line today |
 
@@ -321,6 +321,14 @@ Refuses a designator rename onto a reference the board has, or two onto one (`co
 The read-back also measures inner copper of another net against each plated hole: under 0.3 mm from a component hole or 0.2 mm from a via is `inner_hole`, JLCPCB's multilayer limit. No waiver covers it (owner, 5 Nov 2026; review 17, finding 40): it is outside what JLCPCB will make.
 
 KiCad stamps a creation date in each Gerber, so two releases of one board differ in those lines only.
+
+The summary ends with the order options for `[finish]` ("order with: PCB Color Black, Silkscreen White, Surface Finish ENIG"; `data.order_options`), so the mask colour, silkscreen and copper finish come from pcb.toml and not from memory or a README. With no `[finish]`, release warns `finish-unset`.
+
+### `[finish]` and `pcb render --look`
+
+`[finish]` records the order's finish: `mask` (green, purple, red, yellow, blue, white, black), `silk` (white, or black on a white mask, as JLCPCB prints) and `copper` (hasl, hasl-lead-free, enig). Other names, or a pairing the fab does not print, are refused (`config`).
+
+`pcb render BOARD --look [--side top|bottom] [--width] [--height]` renders the board with KiCad's raytracer on a copy whose stackup carries those colours (any stackup the board has is replaced on the copy; the board is not touched). The colours are pcb's, not KiCad's presets: KiCad's "Black" mask is translucent and renders brown over copper, and HASL renders about as white as silkscreen. Mask is drawn as the fab's looks under light (matte black nearly opaque, so copper under it all but disappears, as it does on the board), and ENIG as gold, so exposed copper art reads apart from silkscreen. `--region`, `--highlight` and `--no-labels` belong to the plain render and are refused with `--look` (`usage`). Without `[finish]` it renders green, white, lead-free HASL and warns `finish-unset`. Cases in `tests/cases/finish_cases.py`.
 
 ### `pcb compare-gerbers A B [--explain FILE] [--board BOARD]`
 

@@ -1,0 +1,149 @@
+2026-11-06 12:15:32.015 INFO   Freerouting v2.5.0 (build-date: 2026-10-05)
+2026-11-06 12:15:32.018 DEBUG  [startup] user-data path : pcb_work/doctor/layer_probe.freerouting-user  (source: CLI argument --user_data_path)
+2026-11-06 12:15:32.018 DEBUG  [startup] log file       : /home/claude/wt-pcb/tools/pcb/pcb_work/doctor/pcb_work/doctor/layer_probe.freerouting-user/freerouting.log
+2026-11-06 12:15:32.020 DEBUG  No freerouting.json found at 'pcb_work/doctor/layer_probe.freerouting-user/freerouting.json' — will create one with default settings.
+2026-11-06 12:15:32.081 DEBUG  Default settings saved to 'pcb_work/doctor/layer_probe.freerouting-user/freerouting.json'.
+2026-11-06 12:15:32.309 INFO   Hardware: 2 CPU cores, 435 CPU score, 1536 MB RAM
+2026-11-06 12:15:32.309 DEBUG  UTC Time: 2026-11-06T04:15:32.082124001Z
+2026-11-06 12:15:32.315 WARN   GUI is disabled and you don't have a console available, so the only feedback from Freerouting is in the log.
+2026-11-06 12:15:32.315 DEBUG  GUI Language: en_US
+2026-11-06 12:15:32.315 DEBUG  Host: N/A
+2026-11-06 12:15:32.319 INFO   Configured network proxy: 127.0.0.1:39937
+2026-11-06 12:15:32.322 DEBUG  Analytics are disabled
+2026-11-06 12:15:33.459 DEBUG  Loaded router settings from: pcb_work/doctor/layer_probe.freerouting-user/freerouting.json
+2026-11-06 12:15:33.459 DEBUG  Applied CLI router setting: router.autorouter.max_passes = 3
+2026-11-06 12:15:33.462 DEBUG  Applied CLI router setting: router.fanout.enabled = false
+2026-11-06 12:15:33.462 DEBUG  Applied CLI router setting: router.automatic_neckdown = false
+2026-11-06 12:15:33.462 DEBUG  Applied CLI router setting: router.plane_nets = 
+2026-11-06 12:15:33.462 DEBUG  Applied CLI router setting: router.layers.routable = true,false
+2026-11-06 12:15:33.462 DEBUG  Applied CLI router setting: router.autorouter.enabled = true (implicit from -de/-do batch mode)
+2026-11-06 12:15:33.463 DEBUG  No router settings found in environment variables
+2026-11-06 12:15:33.553 DEBUG  Set DEFAULT clearance (all layers): 2000 (0.05 mm) from DSN value 200.0
+2026-11-06 12:15:33.559 DEBUG  Set clearance (all layers): smd_smd = 500 (0.0125 mm), classes [2,2]
+2026-11-06 12:15:33.560 DEBUG  Set default trace width (all layers): DSN=200.0 → board=2000 (0.05 mm)
+2026-11-06 12:15:33.572 DEBUG  Loaded router settings from DSN file: layer_probe.dsn (2 layers)
+2026-11-06 12:15:33.574 DEBUG  Merging settings from 5 sources:
+2026-11-06 12:15:33.574 DEBUG    - Default Settings (priority 0): base settings
+2026-11-06 12:15:33.577 DEBUG    - freerouting.json (priority 10): 0 fields changed
+2026-11-06 12:15:33.577 DEBUG    - DSN file: layer_probe.dsn (priority 20): 5 fields changed
+2026-11-06 12:15:33.577 DEBUG    - Environment Variables (priority 55): 0 fields changed
+2026-11-06 12:15:33.578 DEBUG    - CLI Arguments (priority 60): 6 fields changed
+2026-11-06 12:15:33.578 DEBUG  Settings merged successfully from 5 source(s)
+2026-11-06 12:15:33.736 INFO   [5140DE\6AF0ED] Loading board file 'layer_probe.dsn'...
+2026-11-06 12:15:33.753 DEBUG  Set DEFAULT clearance (all layers): 2000 (0.05 mm) from DSN value 200.0
+2026-11-06 12:15:33.753 DEBUG  Set clearance (all layers): smd_smd = 500 (0.0125 mm), classes [2,2]
+2026-11-06 12:15:33.753 DEBUG  Set default trace width (all layers): DSN=200.0 → board=2000 (0.05 mm)
+2026-11-06 12:15:33.765 DEBUG  applyBoardSpecificOptimizations changed parameters:
+  Layer 0: bendCost: null -> 0.0; preferredDirectionHorizontal: null -> true; undesiredDirectionTraceCost: 1.0 -> 2.5;
+  Layer 1: bendCost: null -> 0.0; preferredDirectionHorizontal: null -> false; undesiredDirectionTraceCost: 1.0 -> 1.7000000000000002;
+2026-11-06 12:15:33.768 DEBUG  Applied copper-to-edge clearance override: 250.0 um (2500 board units).
+2026-11-06 12:15:33.768 DEBUG  Applied plane_as_obstacle override: false
+2026-11-06 12:15:33.769 DEBUG  Applied clearance tolerance: 1.0 um.
+2026-11-06 12:15:33.792 DEBUG  Set DEFAULT clearance (all layers): 2000 (0.05 mm) from DSN value 200.0
+2026-11-06 12:15:33.792 DEBUG  Set clearance (all layers): smd_smd = 500 (0.0125 mm), classes [2,2]
+2026-11-06 12:15:33.792 DEBUG  Set default trace width (all layers): DSN=200.0 → board=2000 (0.05 mm)
+2026-11-06 12:15:33.793 DEBUG  Loaded router settings from DSN file: layer_probe.dsn (2 layers)
+2026-11-06 12:15:33.793 DEBUG  Merging settings from 6 sources:
+2026-11-06 12:15:33.794 DEBUG    - Default Settings (priority 0): base settings
+2026-11-06 12:15:33.794 DEBUG    - freerouting.json (priority 10): 0 fields changed
+2026-11-06 12:15:33.794 DEBUG    - DSN file: layer_probe.dsn (priority 20): 5 fields changed
+2026-11-06 12:15:33.794 DEBUG    - Environment Variables (priority 55): 0 fields changed
+2026-11-06 12:15:33.794 DEBUG    - CLI Arguments (priority 60): 6 fields changed
+2026-11-06 12:15:33.794 DEBUG    - API Settings (priority 70): 45 fields changed
+2026-11-06 12:15:33.794 DEBUG  Settings merged successfully from 6 source(s)
+2026-11-06 12:15:33.802 INFO   [5140DE\6AF0ED] Job '5140DE\6AF0ED' started at 2026-11-06T04:15:33.802135876Z.
+2026-11-06 12:15:33.818 WARN   Design Warning: Board has 1 pre-existing clearance violation(s) in the loaded design (before routing):
+  - 1 unfixable violation(s) (cannot be resolved by Freerouting):
+      * 1 fixed trace/via clearance violations:
+          - FixedTrace#5 [net B] <-> BoardOutline
+  - 0 potentially fixable violations
+Notice: Freerouting does not modify component placement, board outlines, or fixed items.
+Resolving these 1 unfixable violation(s) is the responsibility of the board author in their EDA tool (e.g. KiCad).
+2026-11-06 12:15:33.939 INFO   [5140DE\6AF0ED] Pipeline thread limits: autorouter pass is single-threaded, optimizer.max_threads=1.
+2026-11-06 12:15:33.975 DEBUG  [5140DE\6AF0ED] Checking fanout pre-pass. settings.fanout.enabled=false, smdPins=3
+2026-11-06 12:15:33.997 INFO   [5140DE\6AF0ED] Auto-routing stage started on board 'f33d3dcace13f641522470aead87b228' with baseline score 0.00 for 1 unrouted item.
+2026-11-06 12:15:34.021 DEBUG  Queuing item for routing: PolylineTrace on net 'B' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.021 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.021 DEBUG  Queuing item for routing: Pin on net 'B' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.021 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.024 DEBUG  [5140DE\6AF0ED] Pass #1: 1 incompletes across 4 items to route
+2026-11-06 12:15:34.024 DEBUG  [5140DE\6AF0ED]   Net 'A' has 1 incomplete(s)
+2026-11-06 12:15:34.033 DEBUG  FloatLine: one or both endpoints are null (degenerate line segment)
+2026-11-06 12:15:34.050 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.054 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.115 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.115 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.128 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.149 DEBUG  [5140DE\6AF0ED] Autorouter Failed to route connection between pin of component #1 and pin of component #3, because no connection was found between their nets.
+2026-11-06 12:15:34.150 DEBUG  [5140DE\6AF0ED] Pass #1: Failed to route Pin on net 'A' (3 items remaining, 1 failures). State: FAILED
+2026-11-06 12:15:34.150 DEBUG  FloatLine: one or both endpoints are null (degenerate line segment)
+2026-11-06 12:15:34.151 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.165 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.165 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.166 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.190 DEBUG  [5140DE\6AF0ED] Autorouter Failed to route connection between pin of component #3 and pin of component #1, because no connection was found between their nets.
+2026-11-06 12:15:34.190 DEBUG  [5140DE\6AF0ED] Pass #1: Failed to route Pin on net 'A' (1 items remaining, 1 failures). State: FAILED
+2026-11-06 12:15:34.193 INFO   [5140DE\6AF0ED] Auto-routing pass #1 on board 'f33d3dcace13f641522470aead87b228' was completed in 0.17 seconds with score 0.00 (1 unrouted and 1 violation).
+2026-11-06 12:15:34.194 DEBUG  Queuing item for routing: PolylineTrace on net 'B' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.194 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.194 DEBUG  Queuing item for routing: Pin on net 'B' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.194 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.196 DEBUG  [5140DE\6AF0ED] Pass #2: 1 incompletes across 4 items to route
+2026-11-06 12:15:34.196 DEBUG  [5140DE\6AF0ED]   Net 'A' has 1 incomplete(s)
+2026-11-06 12:15:34.198 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.199 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.200 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.218 DEBUG  [5140DE\6AF0ED] Autorouter Failed to route connection between pin of component #3 and pin of component #1, because no connection was found between their nets.
+2026-11-06 12:15:34.219 DEBUG  [5140DE\6AF0ED] Pass #2: Failed to route Pin on net 'A' (4 items remaining, 2 failures). State: FAILED
+2026-11-06 12:15:34.219 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.219 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.220 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.225 DEBUG  [5140DE\6AF0ED] Autorouter Failed to route connection between pin of component #1 and pin of component #3, because no connection was found between their nets.
+2026-11-06 12:15:34.225 DEBUG  [5140DE\6AF0ED] Pass #2: Failed to route Pin on net 'A' (3 items remaining, 2 failures). State: FAILED
+2026-11-06 12:15:34.225 DEBUG  FloatLine: one or both endpoints are null (degenerate line segment)
+2026-11-06 12:15:34.225 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.230 DEBUG  FloatLine: one or both endpoints are null (degenerate line segment)
+2026-11-06 12:15:34.267 DEBUG  GitHub release check response: GitHub access to this repository is not enabled for this session. Use add_repo to request access. If add_repo answers that read access is already available and you need GitHub API or write access, call add_repo again with access:"push" to attach the repository with credentials.
+2026-11-06 12:15:34.274 DEBUG  PolylineTrace.normalize: max normalization depth (16) reached for trace #48 on net 2 — stopping recursion, trace kept as-is.
+2026-11-06 12:15:34.281 INFO   [5140DE\6AF0ED] Auto-routing pass #2 on board 'f33d3dcace13f641522470aead87b228' was completed in 0.09 seconds with score 0.00 (1 unrouted and 1 violation).
+2026-11-06 12:15:34.285 DEBUG  Queuing item for routing: PolylineTrace on net 'B' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.285 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.285 DEBUG  Queuing item for routing: Pin on net 'B' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.285 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:34.285 DEBUG  [5140DE\6AF0ED] Pass #3: 1 incompletes across 4 items to route
+2026-11-06 12:15:34.285 DEBUG  [5140DE\6AF0ED]   Net 'A' has 1 incomplete(s)
+2026-11-06 12:15:34.287 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.287 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.288 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.310 DEBUG  [5140DE\6AF0ED] Autorouter Failed to route connection between pin of component #3 and pin of component #1, because no connection was found between their nets.
+2026-11-06 12:15:34.310 DEBUG  [5140DE\6AF0ED] Pass #3: Failed to route Pin on net 'A' (4 items remaining, 3 failures). State: FAILED
+2026-11-06 12:15:34.311 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.311 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.312 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.319 DEBUG  [5140DE\6AF0ED] Autorouter Failed to route connection between pin of component #1 and pin of component #3, because no connection was found between their nets.
+2026-11-06 12:15:34.319 DEBUG  [5140DE\6AF0ED] Pass #3: Failed to route Pin on net 'A' (3 items remaining, 3 failures). State: FAILED
+2026-11-06 12:15:34.319 DEBUG  FloatLine: one or both endpoints are null (degenerate line segment)
+2026-11-06 12:15:34.319 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:34.327 DEBUG  FloatLine: one or both endpoints are null (degenerate line segment)
+2026-11-06 12:15:34.353 DEBUG  PolylineTrace.normalize: max normalization depth (16) reached for trace #88 on net 2 — stopping recursion, trace kept as-is.
+2026-11-06 12:15:34.355 INFO   [5140DE\6AF0ED] Auto-routing pass #3 on board 'f33d3dcace13f641522470aead87b228' was completed in 0.07 seconds with score 0.00 (1 unrouted and 1 violation).
+2026-11-06 12:15:34.362 DEBUG  === Performance Profile ===
+2026-11-06 12:15:34.362 DEBUG  === Routing Parameters ===
+2026-11-06 12:15:34.362 DEBUG    Via Costs: 50, Plane Via Costs: 5
+2026-11-06 12:15:34.362 DEBUG    Layer Costs (Preferred / Against):
+2026-11-06 12:15:34.362 DEBUG      Layer 1: 1.0 / 2.5
+2026-11-06 12:15:34.362 DEBUG      Layer 2: 1.0 / 1.7
+2026-11-06 12:15:34.362 DEBUG  
+2026-11-06 12:15:34.363 DEBUG    autoroute_item                          :      292 ms total,       12 calls,     24 ms avg
+2026-11-06 12:15:34.363 DEBUG  
+2026-11-06 12:15:34.363 DEBUG  === Pass History ===
+2026-11-06 12:15:34.363 DEBUG    Pass 1  :    1 unrouted items,     0.17 s,   100 ripup cost
+2026-11-06 12:15:34.363 DEBUG    Pass 2  :    1 unrouted items,     0.09 s,   200 ripup cost
+2026-11-06 12:15:34.363 DEBUG    Pass 3  :    1 unrouted items,     0.07 s,   300 ripup cost
+2026-11-06 12:15:34.363 DEBUG  ===========================
+2026-11-06 12:15:34.365 INFO   [5140DE\6AF0ED] Auto-routing stage completed: started with 1 unrouted nets, completed in 0.41 seconds, final score: 0.00 (1 unrouted and 1 violation), using 0.00 total CPU seconds, 0.00 GB total allocated, and 0.0 MB peak heap usage.
+2026-11-06 12:15:34.367 DEBUG  [5140DE\6AF0ED] Before optimization: Via count: 0, trace length: 190000
+2026-11-06 12:15:34.368 INFO   [5140DE\6AF0ED] Skipping optimization stage: the board has 1 unrouted connection(s) (optimizer only runs on completely routed boards).
+2026-11-06 12:15:34.371 INFO   [5140DE\6AF0ED] Job '5140DE\6AF0ED' finished with state: COMPLETED (elapsed: 0.57 seconds, finished at UTC: 2026-11-06T04:15:34.370789173Z).
+2026-11-06 12:15:34.389 INFO   Saving output file '/home/claude/wt-pcb/tools/pcb/pcb_work/doctor/layer_probe.ses' (SES)...
+2026-11-06 12:15:34.390 INFO   Successfully saved output file '/home/claude/wt-pcb/tools/pcb/pcb_work/doctor/layer_probe.ses' (620 bytes).

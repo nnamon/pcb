@@ -24,7 +24,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `tools-mismatch` | refused | `pcb doctor` found a tool version or behaviour other than the pinned one | Install the pinned versions (tools/pcb/ci/Dockerfile) or re-test pcb on the new ones |
 | `rejected-onto-input` | refused | A rejected result's file name is the input board | Choose another `--out` |
 | `output-in-work` | refused | The output is pcb's own work file | Choose another `--out` |
-| `image-too-large` | refused | The render would exceed 200 million pixels | Lower `--scale` or render a region |
+| `image-too-large` | refused | The render would exceed 200 million pixels (64 million with `--look`) | Lower `--scale`, `--width` or `--height`, or render a region |
 | `gerber-set` | refused | `compare-gerbers` cannot compare: a set has no board outline, or an explanation names a zone net and no `--board` was given | Give both sets an Edge.Cuts layer; pass `--board` |
 | `gate-check` | refused | `pcb gate pass` found unwaived `pcb check` findings | Fix them, or add a `[[waiver]]` with a reason |
 | `gate-missing` | refused | `pcb release` found no gate recorded in pcb.toml | Run `pcb check`, then `pcb gate pass NAME` |
@@ -77,6 +77,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `stale` | check | A finding, not a warning: `pcb zone`, `pcb paste` or `pcb art` has not run since pcb.toml's settings for it, or a file they name, changed. Run it again; no waiver covers it |
 | `bottom-cpl-unverified` | release | The CPL has bottom-side parts, whose rotation convention pcb has not checked against JLCPCB's |
 | `version-not-on-board` | release | No `[[text]]` entry prints the project version on the board (`{version}`) |
+| `finish-unset` | release, render | pcb.toml has no `[finish]`: release has no order options to print, and `render --look` falls back to green mask, white silkscreen, lead-free HASL |
 | `drc-allowed` | zone | A DRC kind grew within its `pcb.toml [[drc_allow]]` allowance; the message names it |
 | `second-run-failed` | route | The router's second run (no region keep-outs) failed or timed out; the first run's result stands |
 | `join-outside-region` | route | The router joined tracks wholly outside the region in their middle; they were left unsplit |
