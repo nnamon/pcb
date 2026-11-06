@@ -1,6 +1,3 @@
-Added as a named section with the specific tells rather than a general warning, plus a mechanical check you can run before shipping. Full guide again so you can copy the whole thing; everything else is unchanged from the last version, and the rule numbers are stable.
-
-````markdown
 # Writing style
 
 Applies to everything in this repo: READMEs, notes, changelogs, commit messages, tag messages, code comments, review reports, PR descriptions, design docs, how-to guides. Write like an engineer explaining something to a colleague who is busy, knows the field, and wants to get the job done.
@@ -177,6 +174,3 @@ Four moves in four sentences: what it is, why it exists, the hard part named out
 | This query cost 187 s for a single day of data. | It's slow, about 3 minutes per day of data. Keep `days` at 1. |
 | (table column) Runtime: under 1 s, under 1 s, under 1 s… | (delete the column; mention slowness only where it changes what you do) |
 | The probe sends two requests. The first is short. The second is long. Only the pair counts. | The probe sends two requests on one connection, short then long, and only the pair counts: short refused, long accepted. |
-````
-
-The new section lists tells instead of saying "don't sound like an AI", because the general instruction doesn't survive contact with a draft. Every item is something you can search for. The six-step check at the end is the part I'd actually run; steps 1 and 2 are what would have caught the paragraph you rejected on PR 1803, since I was fixing sentences and never looked at the shape of the paragraph.
