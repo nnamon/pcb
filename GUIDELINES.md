@@ -149,7 +149,7 @@ A board is orderable only when every check below passes on the final files, or c
 8. **Netlist match.** `compare_netlist.py` proves the readable source matches the routed board.
 9. **Current, thermal and signal.**
    - Trace widths sized for each net's current (IPC-2152), with copper for parts that dissipate heat.
-   - Decoupling capacitors at their pins.
+   - Decoupling capacitors at their pins. For each regulator, measure every input and output capacitor's distance to its pins against the datasheet's layout section, right after placement. The badge carrier 0.6.0 placer put the boost's output capacitors 14–18 mm from VOUT, and only Gate 2 caught it.
    - Unbroken return paths under fast signals.
    - USB pairs and crystals routed per the MCU's hardware guide.
 10. **Mechanical fit.** Check connector positions and overhangs against the mating parts' drawings, plus keep-outs and the outline. When fit matters, use a 1:1 paper print with the real parts laid on it, or a STEP check against the enclosure.
@@ -223,7 +223,7 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all assemble
 - tscircuit writes 2-layer Gerber attributes. On 4 layers, set the plated drill to span L1–L4 and B_Cu to copper layer 4, or the bottom clashes with In1_Cu.
 - Put rail test points beside their sources. A strip of test points far from the power section pulls wide power traces across the ground plane under fast signals, and can run unfused cell copper next to GND.
 - Give every decoupling capacitor and IC ground pin its own via to the ground plane, and give every layer change on a high-current path enough vias for its current (about 1 A per 0.3 mm via).
-- Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint.
+- Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint. Scan the finished board for any via touching an SMD pad: a router that may change layer at its start point drops vias into pads (badge carrier 0.6.0).
 - Scripts that finish the router's open connections must never complete a power net, and must log every trace and via they add. On the badge carrier one closed VBAT and VBOOST with 0.2 mm traces across the ground kept under the boost IC, and a `tail -1` in the pipeline hid it; only the current check caught it.
 - Check where the power nets have to cross before restricting them to one layer. Two power nets that must cross (a boost output going one way, its input the other) need a planned layer change with enough vias, or the router leaves them open.
 - When filling power nets with copper, first give every power net a strip along its own traces, then grow the large fills. A single pass lets the first big fill take the room a neighbouring power trace needs.
