@@ -40,6 +40,8 @@ pub struct Report {
     pub written: String,
     /// `pcb parts` run again from the cache (M4): its findings are problems, its warnings the release's.
     pub parts_checked: bool,
+    /// The order form's options for the board's finish (pcb.toml `[finish]`), to set when ordering; none without one.
+    pub order_options: Option<String>,
     #[serde(skip)]
     pub warnings: Vec<crate::contract::Warning>,
 }
@@ -119,6 +121,10 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     let b = Board::load(&board_path)?;
     let stem = format!("{}_v{}", p.project.name, p.project.version);
     let mut rep = Report { written: out_dir.to_string(), ..Default::default() };
+    rep.order_options = l.project.finish.as_ref().map(|f| f.order_options());
+    if rep.order_options.is_none() {
+        rep.warnings.push(crate::contract::warn("finish-unset", "pcb.toml has no [finish]: the mask colour, silkscreen colour and copper finish to order are written nowhere pcb reads".to_string()));
+    }
     rep.version_on_board = p.text.iter().any(|t| t.text.contains("{version}") || t.text.contains(&p.project.version));
 
     // 1. Gerbers and drill files

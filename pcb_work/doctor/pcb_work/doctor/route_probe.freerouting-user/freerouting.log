@@ -1,0 +1,83 @@
+2026-11-06 12:15:28.315 INFO   Freerouting v2.5.0 (build-date: 2026-10-05)
+2026-11-06 12:15:28.318 DEBUG  [startup] user-data path : pcb_work/doctor/route_probe.freerouting-user  (source: CLI argument --user_data_path)
+2026-11-06 12:15:28.318 DEBUG  [startup] log file       : /home/claude/wt-pcb/tools/pcb/pcb_work/doctor/pcb_work/doctor/route_probe.freerouting-user/freerouting.log
+2026-11-06 12:15:28.321 DEBUG  No freerouting.json found at 'pcb_work/doctor/route_probe.freerouting-user/freerouting.json' — will create one with default settings.
+2026-11-06 12:15:28.391 DEBUG  Default settings saved to 'pcb_work/doctor/route_probe.freerouting-user/freerouting.json'.
+2026-11-06 12:15:28.615 INFO   Hardware: 2 CPU cores, 451 CPU score, 1536 MB RAM
+2026-11-06 12:15:28.616 DEBUG  UTC Time: 2026-11-06T04:15:28.391588797Z
+2026-11-06 12:15:28.827 WARN   GUI is disabled and you don't have a console available, so the only feedback from Freerouting is in the log.
+2026-11-06 12:15:28.827 DEBUG  GUI Language: en_US
+2026-11-06 12:15:28.827 DEBUG  Host: N/A
+2026-11-06 12:15:28.831 INFO   Configured network proxy: 127.0.0.1:39937
+2026-11-06 12:15:28.835 DEBUG  Analytics are disabled
+2026-11-06 12:15:30.445 DEBUG  Loaded router settings from: pcb_work/doctor/route_probe.freerouting-user/freerouting.json
+2026-11-06 12:15:30.446 DEBUG  Applied CLI router setting: router.autorouter.max_passes = 5
+2026-11-06 12:15:30.447 DEBUG  Applied CLI router setting: router.fanout.enabled = false
+2026-11-06 12:15:30.447 DEBUG  Applied CLI router setting: router.automatic_neckdown = false
+2026-11-06 12:15:30.447 DEBUG  Applied CLI router setting: router.plane_nets = 
+2026-11-06 12:15:30.447 DEBUG  Applied CLI router setting: router.layers.routable = true,true
+2026-11-06 12:15:30.447 DEBUG  Applied CLI router setting: router.autorouter.enabled = true (implicit from -de/-do batch mode)
+2026-11-06 12:15:30.447 DEBUG  No router settings found in environment variables
+2026-11-06 12:15:30.541 DEBUG  Set DEFAULT clearance (all layers): 2000 (0.05 mm) from DSN value 200.0
+2026-11-06 12:15:30.546 DEBUG  Set clearance (all layers): smd_smd = 500 (0.0125 mm), classes [2,2]
+2026-11-06 12:15:30.547 DEBUG  Set default trace width (all layers): DSN=200.0 → board=2000 (0.05 mm)
+2026-11-06 12:15:30.559 DEBUG  Loaded router settings from DSN file: route_probe.dsn (2 layers)
+2026-11-06 12:15:30.560 DEBUG  Merging settings from 5 sources:
+2026-11-06 12:15:30.561 DEBUG    - Default Settings (priority 0): base settings
+2026-11-06 12:15:30.563 DEBUG    - freerouting.json (priority 10): 0 fields changed
+2026-11-06 12:15:30.564 DEBUG    - DSN file: route_probe.dsn (priority 20): 5 fields changed
+2026-11-06 12:15:30.564 DEBUG    - Environment Variables (priority 55): 0 fields changed
+2026-11-06 12:15:30.564 DEBUG    - CLI Arguments (priority 60): 6 fields changed
+2026-11-06 12:15:30.564 DEBUG  Settings merged successfully from 5 source(s)
+2026-11-06 12:15:30.731 INFO   [4CE5BF\5F4AAC] Loading board file 'route_probe.dsn'...
+2026-11-06 12:15:30.761 DEBUG  Set DEFAULT clearance (all layers): 2000 (0.05 mm) from DSN value 200.0
+2026-11-06 12:15:30.761 DEBUG  Set clearance (all layers): smd_smd = 500 (0.0125 mm), classes [2,2]
+2026-11-06 12:15:30.761 DEBUG  Set default trace width (all layers): DSN=200.0 → board=2000 (0.05 mm)
+2026-11-06 12:15:30.770 DEBUG  applyBoardSpecificOptimizations changed parameters:
+  Layer 0: bendCost: null -> 0.0; preferredDirectionHorizontal: null -> true; undesiredDirectionTraceCost: 1.0 -> 2.5;
+  Layer 1: bendCost: null -> 0.0; preferredDirectionHorizontal: null -> false; undesiredDirectionTraceCost: 1.0 -> 1.7000000000000002;
+2026-11-06 12:15:30.775 DEBUG  Applied copper-to-edge clearance override: 250.0 um (2500 board units).
+2026-11-06 12:15:30.776 DEBUG  Applied plane_as_obstacle override: false
+2026-11-06 12:15:30.777 DEBUG  Applied clearance tolerance: 1.0 um.
+2026-11-06 12:15:30.794 DEBUG  Set DEFAULT clearance (all layers): 2000 (0.05 mm) from DSN value 200.0
+2026-11-06 12:15:30.794 DEBUG  Set clearance (all layers): smd_smd = 500 (0.0125 mm), classes [2,2]
+2026-11-06 12:15:30.794 DEBUG  Set default trace width (all layers): DSN=200.0 → board=2000 (0.05 mm)
+2026-11-06 12:15:30.795 DEBUG  Loaded router settings from DSN file: route_probe.dsn (2 layers)
+2026-11-06 12:15:30.796 DEBUG  Merging settings from 6 sources:
+2026-11-06 12:15:30.796 DEBUG    - Default Settings (priority 0): base settings
+2026-11-06 12:15:30.796 DEBUG    - freerouting.json (priority 10): 0 fields changed
+2026-11-06 12:15:30.808 DEBUG    - DSN file: route_probe.dsn (priority 20): 5 fields changed
+2026-11-06 12:15:30.808 DEBUG    - Environment Variables (priority 55): 0 fields changed
+2026-11-06 12:15:30.809 DEBUG    - CLI Arguments (priority 60): 6 fields changed
+2026-11-06 12:15:30.816 DEBUG    - API Settings (priority 70): 45 fields changed
+2026-11-06 12:15:30.816 DEBUG  Settings merged successfully from 6 source(s)
+2026-11-06 12:15:30.819 INFO   [4CE5BF\5F4AAC] Job '4CE5BF\5F4AAC' started at 2026-11-06T04:15:30.819524976Z.
+2026-11-06 12:15:30.888 INFO   [4CE5BF\5F4AAC] Pipeline thread limits: autorouter pass is single-threaded, optimizer.max_threads=1.
+2026-11-06 12:15:30.902 DEBUG  [4CE5BF\5F4AAC] Checking fanout pre-pass. settings.fanout.enabled=false, smdPins=3
+2026-11-06 12:15:30.959 INFO   [4CE5BF\5F4AAC] Auto-routing stage started on board '62d65d0673cd98ebb3258bbe38bd17f5' with baseline score 0.00 for 1 unrouted item.
+2026-11-06 12:15:31.004 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:31.004 DEBUG  Queuing item for routing: Pin on net 'A' (connected: 1/2, plane: false)
+2026-11-06 12:15:31.011 DEBUG  [4CE5BF\5F4AAC] Pass #1: 1 incompletes across 2 items to route
+2026-11-06 12:15:31.011 DEBUG  [4CE5BF\5F4AAC]   Net 'A' has 1 incomplete(s)
+2026-11-06 12:15:31.040 DEBUG  ShapeSearchTree45Degree.restrain_shape: shapeToBeContained is empty
+2026-11-06 12:15:31.065 DEBUG  GitHub release check response: GitHub access to this repository is not enabled for this session. Use add_repo to request access. If add_repo answers that read access is already available and you need GitHub API or write access, call add_repo again with access:"push" to attach the repository with credentials.
+2026-11-06 12:15:31.104 INFO   [4CE5BF\5F4AAC] Auto-routing pass #1 on board '62d65d0673cd98ebb3258bbe38bd17f5' was completed in 0.10 seconds with score 1000.00 (0 unrouted and 0 violations).
+2026-11-06 12:15:31.108 INFO   [4CE5BF\5F4AAC] Auto-routing pass #2 on board 'cae816929f708e9bbf6d07f1b831e530' was completed in 0.00 seconds with score 1000.00 (0 unrouted and 0 violations).
+2026-11-06 12:15:31.111 DEBUG  === Performance Profile ===
+2026-11-06 12:15:31.111 DEBUG  === Routing Parameters ===
+2026-11-06 12:15:31.111 DEBUG    Via Costs: 50, Plane Via Costs: 5
+2026-11-06 12:15:31.111 DEBUG    Layer Costs (Preferred / Against):
+2026-11-06 12:15:31.111 DEBUG      Layer 1: 1.0 / 2.5
+2026-11-06 12:15:31.111 DEBUG      Layer 2: 1.0 / 1.7
+2026-11-06 12:15:31.112 DEBUG  
+2026-11-06 12:15:31.112 DEBUG    autoroute_item                          :       76 ms total,        2 calls,     38 ms avg
+2026-11-06 12:15:31.112 DEBUG  
+2026-11-06 12:15:31.112 DEBUG  === Pass History ===
+2026-11-06 12:15:31.113 DEBUG    Pass 1  :    0 unrouted items,     0.10 s,   100 ripup cost
+2026-11-06 12:15:31.113 DEBUG  ===========================
+2026-11-06 12:15:31.114 INFO   [4CE5BF\5F4AAC] Auto-routing stage completed: started with 1 unrouted nets, completed in 0.22 seconds, final score: 1000.00 (0 unrouted and 0 violations), using 0.00 total CPU seconds, 0.00 GB total allocated, and 0.0 MB peak heap usage.
+2026-11-06 12:15:31.116 DEBUG  [4CE5BF\5F4AAC] Before optimization: Via count: 0, trace length: 200000
+2026-11-06 12:15:31.117 INFO   [4CE5BF\5F4AAC] Skipping optimization stage: the board has no vias to eliminate and initial optimizer score (1000.00) is already >= 950.00.
+2026-11-06 12:15:31.120 INFO   [4CE5BF\5F4AAC] Job '4CE5BF\5F4AAC' finished with state: COMPLETED (elapsed: 0.30 seconds, finished at UTC: 2026-11-06T04:15:31.120008094Z).
+2026-11-06 12:15:31.127 INFO   Saving output file '/home/claude/wt-pcb/tools/pcb/pcb_work/doctor/route_probe.ses' (SES)...
+2026-11-06 12:15:31.129 INFO   Successfully saved output file '/home/claude/wt-pcb/tools/pcb/pcb_work/doctor/route_probe.ses' (756 bytes).

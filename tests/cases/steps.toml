@@ -84,3 +84,9 @@ name = "route edge cases"
 run = ["tests/cases/route_cases.py", "{pcb}", "{jar}", "{work}"]
 covers = ["route"]
 needs = ["freerouting"]
+
+[[step]]
+id = "finish_cases"
+name = "finish: config, render --look, release order options"
+run = ["tests/cases/finish_cases.py", "{pcb}", "{work}"]
+covers = ["finish", "render", "release"]

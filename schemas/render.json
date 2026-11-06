@@ -26,7 +26,40 @@
   "properties": {
    "data": {
     "type": "object",
-    "properties": {}
+    "properties": {
+     "side": {
+      "enum": [
+       "top",
+       "bottom"
+      ],
+      "description": "--look: the side rendered"
+     },
+     "finish": {
+      "type": "object",
+      "required": [
+       "mask",
+       "silk",
+       "copper"
+      ],
+      "additionalProperties": false,
+      "properties": {
+       "mask": {
+        "type": "string"
+       },
+       "silk": {
+        "type": "string"
+       },
+       "copper": {
+        "type": "string"
+       }
+      },
+      "description": "--look: the finish rendered, pcb.toml [finish] or the default"
+     },
+     "order_options": {
+      "type": "string",
+      "description": "--look: the order form's options for that finish"
+     }
+    }
    }
   }
  }

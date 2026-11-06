@@ -70,6 +70,42 @@ pub struct Project {
     pub place: Vec<PlaceRule>,
     /// The planning drawing's title block (milestone M4, `pcb drawing`).
     pub drawing: Option<DrawingInfo>,
+    /// The finish the board is ordered with: the order options `pcb release` prints and the look `pcb render --look`
+    /// shows, from one place.
+    pub finish: Option<Finish>,
+}
+
+/// The fab's mask colours, silkscreen colours and copper finishes (JLCPCB's order options).
+pub const MASK_COLOURS: [&str; 7] = ["green", "purple", "red", "yellow", "blue", "white", "black"];
+pub const SILK_COLOURS: [&str; 2] = ["white", "black"];
+pub const COPPER_FINISHES: [&str; 3] = ["hasl", "hasl-lead-free", "enig"];
+
+/// The board's finish as ordered.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Finish {
+    /// Solder mask colour: green, purple, red, yellow, blue, white or black.
+    pub mask: String,
+    /// Silkscreen colour: white, or black on a white mask.
+    pub silk: String,
+    /// Exposed copper: hasl, hasl-lead-free or enig.
+    pub copper: String,
+}
+
+impl Finish {
+    /// The order form's words for this finish (JLCPCB: PCB Color, Silkscreen, Surface Finish).
+    pub fn order_options(&self) -> String {
+        let cap = |w: &str| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        };
+        let copper = match self.copper.as_str() {
+            "hasl" => "HASL(with lead)",
+            "hasl-lead-free" => "LeadFree HASL",
+            _ => "ENIG",
+        };
+        format!("PCB Color {}, Silkscreen {}, Surface Finish {copper}", cap(&self.mask), cap(&self.silk))
+    }
 }
 
 /// The outline of a new board: a GeoJSON polygon (mm, y up, about the outline's own centre) or a rectangle.
@@ -777,6 +813,24 @@ pub fn check(p: &Project) -> Vec<String> {
     for t in &p.net_tie {
         if t.pads.len() < 2 {
             e.push(format!("net_tie {}: needs two or more pads", t.footprint));
+        }
+    }
+    if let Some(f) = &p.finish {
+        if !MASK_COLOURS.contains(&f.mask.as_str()) {
+            e.push(format!("finish: mask {:?} is not one of {}", f.mask, MASK_COLOURS.join(", ")));
+        }
+        if !SILK_COLOURS.contains(&f.silk.as_str()) {
+            e.push(format!("finish: silk {:?} is not one of {}", f.silk, SILK_COLOURS.join(", ")));
+        }
+        if !COPPER_FINISHES.contains(&f.copper.as_str()) {
+            e.push(format!("finish: copper {:?} is not one of {}", f.copper, COPPER_FINISHES.join(", ")));
+        }
+        // JLCPCB prints black silkscreen only on a white mask, and white silkscreen on every other colour
+        if f.mask == "white" && f.silk != "black" {
+            e.push("finish: a white mask takes black silkscreen".to_string());
+        }
+        if f.silk == "black" && f.mask != "white" {
+            e.push(format!("finish: black silkscreen comes only on a white mask, not {}", f.mask));
         }
     }
     e
