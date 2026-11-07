@@ -163,7 +163,7 @@ A board is orderable only when every check below passes on the final files, or c
 **Final Gerbers and drill files**
 
 11. **Gerber set complete.** RS-274X (X2 preferred) plus Excellon drill. Every expected layer is present, the outline is closed, and the units and origin match the CPL.
-12. **Gerber connectivity.** Rebuild copper islands from the Gerbers and drill, handling pour polarity, and compare them with the intended netlist: no opens, no shorts, no unconnected pads. Re-run after any post-export edit.
+12. **Gerber connectivity.** Rebuild copper islands from the Gerbers and drill, handling pour polarity and reading regions by the nonzero winding rule (KiCad writes a plane with holes as one contour with cut-in lines, and repairing it with shapely's `buffer(0)` or `make_valid` invents copper: the badge carrier 0.7.0 reviewers measured a false 0.17 mm via-to-plane gap that way), and compare them with the intended netlist: no opens, no shorts, no unconnected pads. Re-run after any post-export edit.
 13. **DFM.** `jlc_dfm.py` checks trace and gap, copper-to-edge, annular ring, hole-to-hole between nets, slots, mask dams, silk width, and silk over pads or drills.
 14. **Paste layer.** Apertures 1:1 with the pads, and exposed pads windowed to about 65 % coverage. tscircuit's default of 70 % × 70 % is too little at 0.4 mm pitch. No paste on any pad of a part left out of the CPL (test pads, hand-fitted and DNP parts); read it back from the paste Gerber. On the badge carrier 0.7.0 a newly added test pad was missed.
 15. **Renders from the Gerbers.** Look at both sides: silkscreen not under parts, art and labels where intended, orientation right.
