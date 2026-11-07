@@ -150,6 +150,8 @@ A board is orderable only when every check below passes on the final files, or c
 9. **Current, thermal and signal.**
    - Trace widths sized for each net's current (IPC-2152), with copper for parts that dissipate heat.
    - Decoupling capacitors at their pins. For each regulator, measure every input and output capacitor's distance to its pins against the datasheet's layout section, right after placement. The badge carrier 0.6.0 placer put the boost's output capacitors 14–18 mm from VOUT, and only Gate 2 caught it.
+   - The ground side too: each switching regulator's input and output capacitors return to the IC's power-ground pin on the same copper, a few millimetres at most, or through a GND via at each end within 1 mm. On the badge carrier 0.7.0 the converter's output capacitors sat 1 mm from VOUT but on a separate ground island, 12.6 mm from the GND pin.
+   - Every power path from source to load: count the vias at each layer change against the current (about 1 A per 0.3 mm via), not only the track widths. On the badge carrier 0.7.0 the router's join left the Lyra's whole supply on one via and 0.40 mm.
    - Unbroken return paths under fast signals.
    - USB pairs and crystals routed per the MCU's hardware guide.
 10. **Mechanical fit.** Check connector positions and overhangs against the mating parts' drawings, plus keep-outs and the outline. When fit matters, use a 1:1 paper print with the real parts laid on it, or a STEP check against the enclosure.
@@ -163,7 +165,7 @@ A board is orderable only when every check below passes on the final files, or c
 11. **Gerber set complete.** RS-274X (X2 preferred) plus Excellon drill. Every expected layer is present, the outline is closed, and the units and origin match the CPL.
 12. **Gerber connectivity.** Rebuild copper islands from the Gerbers and drill, handling pour polarity, and compare them with the intended netlist: no opens, no shorts, no unconnected pads. Re-run after any post-export edit.
 13. **DFM.** `jlc_dfm.py` checks trace and gap, copper-to-edge, annular ring, hole-to-hole between nets, slots, mask dams, silk width, and silk over pads or drills.
-14. **Paste layer.** Apertures 1:1 with the pads, and exposed pads windowed to about 65 % coverage. tscircuit's default of 70 % × 70 % is too little at 0.4 mm pitch.
+14. **Paste layer.** Apertures 1:1 with the pads, and exposed pads windowed to about 65 % coverage. tscircuit's default of 70 % × 70 % is too little at 0.4 mm pitch. No paste on any pad of a part left out of the CPL (test pads, hand-fitted and DNP parts); read it back from the paste Gerber. On the badge carrier 0.7.0 a newly added test pad was missed.
 15. **Renders from the Gerbers.** Look at both sides: silkscreen not under parts, art and labels where intended, orientation right.
 
 **Assembly files and firmware**
