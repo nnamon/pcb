@@ -172,6 +172,7 @@ A board is orderable only when every check below passes on the final files, or c
 
 16. **BOM/CPL.**
     - Every designator exists, and LCSC codes match the design.
+    - The board spec (layers, thickness, colour, finish, quantity) is one the chosen assembly service accepts: JLCPCB's Economic assembly takes only the combinations in its capabilities table (in Nov 2026, 4-layer boards in green only and ENIG on green only). Check the table on the day, not only the parts (the badge carrier 0.7.2 specified 4-layer black ENIG with Economic assembly).
     - X/Y sit at the footprint centre in the Gerber origin.
     - Rotation is solved against JLCPCB's EasyEDA footprint, so pad 1 lands on pin 1. JLCPCB rotates counter-clockwise, viewed from the top.
     - Not-assembled pads are excluded.
