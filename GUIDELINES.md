@@ -1,6 +1,6 @@
 # PCB Project Guidelines: Deliverables, Checks, Formats
 
-Last updated 30 Oct 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
+Last updated 9 Nov 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
 
 Every board in this project ships as one versioned zip that a person can order from without reading the source, and it passes two independent review gates (schematic, then release) plus checks on the final Gerbers before anything is ordered. These rules come from the Quansheng paddle adapter (v1.0.0, two boards) and the paddle keyer (v0.2.x).
 
