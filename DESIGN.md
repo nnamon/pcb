@@ -473,6 +473,8 @@ The original six phases became five milestones in the proposal ("pcb tool: propo
 | M3 Check and release | `pcb check` (fab rule sets, path width, ratings, paste, bring-up), `pcb gate`, `pcb release` | The paddle-keyer package matches the files it was ordered with; badge 0.5.0 checked through `pcb` |
 | M4 Netlist and placement | `pcb sync` with pin-name checks, `pcb parts`, `pcb place`, `pcb drawing`, locks | paddle-keyer from netlist to order with no per-board code (see "Netlist and placement") |
 
+**M5, proposed 10 Nov 2026** ("pcb tool: review and M5 proposal", Claude doc, https://claude.ai/artifact/2CZ7UCHgbVxiMMJH7Yfwjk; owner: write it up and prepare to implement). M5a: one fab data file, the checks the badge's reviews did by hand, placement and edge constraints, net classes and top-first routing. M5b: a copper graph, current paths, route quality limits. Branch `pcb-0.5.0`.
+
 **The tool before the boards** (owner, 4 Nov 2026). Every gate is judged on the tool alone. Real boards serve as fixtures, and their hard spots become cases, but no board's design work (the badge's ILM, VBUS_F and J102 fixes, its release) is done until M4 closes.
 
 The project's Python scripts stay in the repository until `pcb` replaces their use.
