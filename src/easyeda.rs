@@ -94,8 +94,8 @@ pub fn package_name(raw: &Value) -> String {
 }
 
 fn path_points(d: &str) -> Result<Vec<(f64, f64)>> {
-    let v: Vec<f64> = d.split(|c: char| c == ' ' || c == ',').filter(|s| !s.is_empty()).map(num).collect::<Result<_>>()?;
-    if v.len() % 2 != 0 {
+    let v: Vec<f64> = d.split([' ', ',']).filter(|s| !s.is_empty()).map(num).collect::<Result<_>>()?;
+    if !v.len().is_multiple_of(2) {
         bail!("odd point list {d:?}");
     }
     Ok(v.chunks(2).map(|c| (c[0], c[1])).collect())

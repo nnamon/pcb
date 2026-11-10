@@ -140,7 +140,7 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     let rules = fab_rules(&p.project.fab).ok_or_else(|| refused("config", format!("project.fab {:?} is not a rule set pcb has (jlcpcb-2layer-1.6mm, jlcpcb-4layer-1.6mm, jlcpcb-6layer-1.6mm)", p.project.fab)))?;
     let (rules, fab_layers) = rules;
     crate::gate::check_work(work)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let board_path = l.board_path();
     let b = Board::load(&board_path.to_string_lossy())?;
     // a rule set for another layer count would drop or invent rules (review 15, 10)
@@ -176,15 +176,14 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
             std::fs::write(&dru, format!("(version 1)\n{rules}"))?;
         }
         let pro = copy.with_extension("kicad_pro");
-        if let Ok(text) = std::fs::read_to_string(&pro) {
-            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(sev) = v.pointer_mut("/board/design_settings/rule_severities").and_then(|x| x.as_object_mut()) {
-                    for k in FAB_KINDS.iter().chain(["unconnected_items", "shorting_items"].iter()) {
-                        sev.insert(k.to_string(), serde_json::json!("error"));
-                    }
+        if let Ok(text) = std::fs::read_to_string(&pro)
+            && let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(sev) = v.pointer_mut("/board/design_settings/rule_severities").and_then(|x| x.as_object_mut()) {
+                for k in FAB_KINDS.iter().chain(["unconnected_items", "shorting_items"].iter()) {
+                    sev.insert(k.to_string(), serde_json::json!("error"));
                 }
-                std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
             }
+            std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
         }
         for (k, c) in crate::kicad::drc_counts_with(work, &copy.to_string_lossy(), &format!("check_drc_{tag}"), fab_only && !b.zones.is_empty())? {
             let e = counts.entry(k).or_default();
@@ -230,10 +229,9 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
             let outer = layer == "F.Cu" || layer == "B.Cu";
             let need = ipc_width_mm(a, outer);
             let widths = b.tracks.iter().filter(|t| &t.net == net && &t.layer == layer).map(|t| t.width).chain(b.arcs.iter().filter(|t| &t.net == net && &t.layer == layer).map(|t| t.width));
-            if let Some(w) = widths.reduce(f64::min) {
-                if w + 1e-6 < need {
-                    add("width-current", format!("{net} {layer}"), 1, format!("{net} carries {a} A; its narrowest track on {layer} is {w} mm, IPC-2221 asks {need:.3} mm at a 10 °C rise"));
-                }
+            if let Some(w) = widths.reduce(f64::min)
+                && w + 1e-6 < need {
+                add("width-current", format!("{net} {layer}"), 1, format!("{net} carries {a} A; its narrowest track on {layer} is {w} mm, IPC-2221 asks {need:.3} mm at a 10 °C rise"));
             }
         }
     }

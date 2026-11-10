@@ -46,6 +46,22 @@ pub fn check_out(out: &str) -> Result<()> {
     Ok(())
 }
 
+/// Makes a work folder. The highest folder this call creates, and any `pcb_work` above the work folder, gets a
+/// `.gitignore` of `*`, so pcb's scratch files are never committed with the project (a badge carrier session left
+/// `pcb_work` in its design folder, one `git add -A` from the repository).
+pub fn make_work(work: &Path) -> std::io::Result<()> {
+    let created = work.ancestors().take_while(|a| !a.as_os_str().is_empty() && !a.exists()).last().map(Path::to_path_buf);
+    std::fs::create_dir_all(work)?;
+    let named = work.ancestors().filter(|a| a.file_name().is_some_and(|n| n == "pcb_work")).map(Path::to_path_buf);
+    for dir in created.into_iter().chain(named) {
+        let ignore = dir.join(".gitignore");
+        if !ignore.exists() {
+            std::fs::write(ignore, "# pcb's scratch files: never committed\n*\n")?;
+        }
+    }
+    Ok(())
+}
+
 /// Refuses a work folder path where a file stands (review 12, R6).
 pub fn check_work(work: &Path) -> Result<()> {
     if work.exists() && !work.is_dir() {

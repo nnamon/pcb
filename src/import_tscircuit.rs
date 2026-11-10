@@ -215,10 +215,9 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
     for (t, n_) in &errs {
         warnings.push(crate::contract::warn("source-errors", format!("circuit JSON has {n_} {t}")));
     }
-    if let Some(nl) = f(board, "num_layers") {
-        if nl as u32 != layers {
-            warnings.push(crate::contract::warn("layer-count", format!("circuit JSON says {nl} layers; writing {layers}")));
-        }
+    if let Some(nl) = f(board, "num_layers")
+        && nl as u32 != layers {
+        warnings.push(crate::contract::warn("layer-count", format!("circuit JSON says {nl} layers; writing {layers}")));
     }
 
     // nets: every source_trace joins all its ports and nets (review 1, S2)
@@ -253,10 +252,9 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
     let mut group_name: HashMap<String, String> = HashMap::new();
     for (id, name) in &net_by_id {
         let g = uf.find(id);
-        if let Some(prev) = group_name.get(&g) {
-            if prev != name {
-                bail!("source nets {prev} and {name} are joined by traces (a short in the source)");
-            }
+        if let Some(prev) = group_name.get(&g)
+            && prev != name {
+            bail!("source nets {prev} and {name} are joined by traces (a short in the source)");
         }
         group_name.insert(g, name.to_string());
     }
@@ -332,10 +330,9 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                 if !lay.is_empty() && !layers.is_empty() && !layers.contains(&lay) {
                     continue;
                 }
-                if let Some(pn) = port_net.get(s(pp, "source_port_id")) {
-                    if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 {
-                        e.insert(pn.clone());
-                    }
+                if let Some(pn) = port_net.get(s(pp, "source_port_id"))
+                    && (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 {
+                    e.insert(pn.clone());
                 }
             }
         }
@@ -413,7 +410,7 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                 }
                 let pn = port_net.get(s(pp, "source_port_id")).cloned().unwrap_or_default();
                 if (px - qx).abs() < 0.01 && (py - qy).abs() < 0.01 && !pn.is_empty() && pn != net {
-                    if !allow_cross.iter().any(|a| *a == net) {
+                    if !allow_cross.contains(&net) {
                         bail!("trace {} ({net}) ends on a port of net {pn}: a short (allow it with --allow-cross-net {net} if the trace is a net tie)", s(t, "pcb_trace_id"));
                     }
                     warnings.push(crate::contract::warn("cross-net-allowed", format!("trace {} ({net}) ends on a port of net {pn}, allowed", s(t, "pcb_trace_id"))));
@@ -564,10 +561,9 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                     warnings.push(crate::contract::warn("mechanical-pad", format!("{reference}: pad with no port written as mechanical pad MP")));
                     continue;
                 }
-                if let Some(prev) = seen_nums.insert(num.clone(), net.clone()) {
-                    if prev != net || s(e, "type") == "pcb_smtpad" {
-                        bail!("{reference}: two pads numbered {num}");
-                    }
+                if let Some(prev) = seen_nums.insert(num.clone(), net.clone())
+                    && (prev != net || s(e, "type") == "pcb_smtpad") {
+                    bail!("{reference}: two pads numbered {num}");
                 }
             }
         }
@@ -825,10 +821,9 @@ pub fn convert(cj: &str, layers: Option<u32>, allow_cross: &[String]) -> Result<
                     }
                     // review 2, 2: the layers must be known and follow on from the incoming wire
                     let to = layer(s(p, "to_layer")).with_context(|| format!("trace {}: via point at ({px}, {py}) has no usable to_layer", s(t, "pcb_trace_id")))?.to_string();
-                    if let (Some((_, _, al, _)), Ok(fl)) = (&prev, layer(s(p, "from_layer"))) {
-                        if al != fl {
-                            bail!("trace {}: via point at ({px}, {py}) comes from {fl} but the wire is on {al}", s(t, "pcb_trace_id"));
-                        }
+                    if let (Some((_, _, al, _)), Ok(fl)) = (&prev, layer(s(p, "from_layer")))
+                        && al != fl {
+                        bail!("trace {}: via point at ({px}, {py}) comes from {fl} but the wire is on {al}", s(t, "pcb_trace_id"));
                     }
                     // review 2, 1: a via point with no pcb_via there gets a via of the board's usual size
                     if !via_pts.iter().any(|(vx, vy)| (vx - px).abs() < 1e-3 && (vy - py).abs() < 1e-3) {

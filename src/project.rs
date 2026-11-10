@@ -527,6 +527,7 @@ fn is_date(d: &str) -> bool {
 }
 
 /// Problems inside the file itself, each as a sentence naming the key.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // `!(x > 0.0)` refuses NaN as well
 pub fn check(p: &Project) -> Vec<String> {
     let mut e = vec![];
     let i = &p.project;
@@ -539,10 +540,9 @@ pub fn check(p: &Project) -> Vec<String> {
     if !matches!(i.layers, 2 | 4 | 6 | 8) {
         e.push(format!("project.layers {} is not 2, 4, 6 or 8", i.layers));
     }
-    if let Some(nl) = &i.netlist {
-        if !(nl.ends_with(".kicad_sch") || nl.ends_with(".net")) {
-            e.push(format!("project.netlist {nl:?} is not a .kicad_sch or .net file"));
-        }
+    if let Some(nl) = &i.netlist
+        && !(nl.ends_with(".kicad_sch") || nl.ends_with(".net")) {
+        e.push(format!("project.netlist {nl:?} is not a .kicad_sch or .net file"));
     }
     if let Some(o) = &p.outline {
         match (&o.file, &o.rect_mm) {
@@ -569,10 +569,9 @@ pub fn check(p: &Project) -> Vec<String> {
             e.push(format!("place[{k}] ({}) side {:?} is not top or bottom", pl.reference, pl.side));
         }
     }
-    if let Some(a) = &p.assembly {
-        if a.boards == Some(0) {
-            e.push("assembly.boards is 0".into());
-        }
+    if let Some(a) = &p.assembly
+        && a.boards == Some(0) {
+        e.push("assembly.boards is 0".into());
     }
     for (code, r) in &p.parts {
         for (pad, nm) in &r.pins {
@@ -603,10 +602,9 @@ pub fn check(p: &Project) -> Vec<String> {
     }
     for (n, r) in &p.nets {
         for (k, v) in [("current_a", r.current_a), ("width_mm", r.width_mm), ("fill_grow_mm", r.fill_grow_mm)] {
-            if let Some(v) = v {
-                if !(v > 0.0 && v.is_finite()) {
-                    e.push(format!("nets.{n}.{k} is {v}; it must be above 0"));
-                }
+            if let Some(v) = v
+                && !(v > 0.0 && v.is_finite()) {
+                e.push(format!("nets.{n}.{k} is {v}; it must be above 0"));
             }
         }
     }
@@ -647,10 +645,9 @@ pub fn check(p: &Project) -> Vec<String> {
         if k.forbid.is_empty() {
             e.push(format!("keepout {:?}: forbid is empty, so the keep-out would forbid nothing", k.name));
         }
-        if let Layers::List(v) = &k.layers {
-            if v.iter().collect::<std::collections::BTreeSet<_>>().len() != v.len() {
-                e.push(format!("keepout {:?}: a layer is listed twice", k.name));
-            }
+        if let Layers::List(v) = &k.layers
+            && v.iter().collect::<std::collections::BTreeSet<_>>().len() != v.len() {
+            e.push(format!("keepout {:?}: a layer is listed twice", k.name));
         }
     }
     let mut zl = std::collections::BTreeSet::new();
@@ -661,25 +658,22 @@ pub fn check(p: &Project) -> Vec<String> {
             }
         }
     }
-    if let Some(v) = p.fill.as_ref().and_then(|f| f.layers.as_ref()) {
-        if v.iter().collect::<std::collections::BTreeSet<_>>().len() != v.len() {
-            e.push("fill.layers: a layer is listed twice".to_string());
-        }
+    if let Some(v) = p.fill.as_ref().and_then(|f| f.layers.as_ref())
+        && v.iter().collect::<std::collections::BTreeSet<_>>().len() != v.len() {
+        e.push("fill.layers: a layer is listed twice".to_string());
     }
     for k in &p.keepout {
         let [x0, y0, x1, y1] = k.rect;
         if !(x1 > x0 && y1 > y0) {
             e.push(format!("keepout {:?}: rect must be x0, y0, x1, y1 with x1 > x0 and y1 > y0", k.name));
         }
-        if let Some(g) = k.grow_mm {
-            if !(g >= 0.0 && g.is_finite()) {
-                e.push(format!("keepout {:?}: grow_mm is {g}; it must be 0 or more", k.name));
-            }
+        if let Some(g) = k.grow_mm
+            && !(g >= 0.0 && g.is_finite()) {
+            e.push(format!("keepout {:?}: grow_mm is {g}; it must be 0 or more", k.name));
         }
-        if let Layers::Named(s) = &k.layers {
-            if s != "all" {
-                e.push(format!("keepout {:?}: layers is \"all\" or a list of copper layers", k.name));
-            }
+        if let Layers::Named(s) = &k.layers
+            && s != "all" {
+            e.push(format!("keepout {:?}: layers is \"all\" or a list of copper layers", k.name));
         }
         for f in &k.forbid {
             if !matches!(f.as_str(), "pour" | "track" | "via" | "footprint") {
@@ -691,18 +685,16 @@ pub fn check(p: &Project) -> Vec<String> {
         if !(z.clearance_mm > 0.0) {
             e.push(format!("zone {}: clearance_mm must be above 0", z.net));
         }
-        if let Some(t) = &z.thermal {
-            if !(t.gap_mm > 0.0 && t.spoke_mm > 0.0) {
-                e.push(format!("zone {}: thermal gap_mm and spoke_mm must be above 0", z.net));
-            }
+        if let Some(t) = &z.thermal
+            && !(t.gap_mm > 0.0 && t.spoke_mm > 0.0) {
+            e.push(format!("zone {}: thermal gap_mm and spoke_mm must be above 0", z.net));
         }
         if z.min_width_mm.is_some_and(|w| !(w > 0.0 && w.is_finite())) {
             e.push(format!("zone {}: min_width_mm must be above 0", z.net));
         }
-        if let Some(c) = &z.connect {
-            if !matches!(c.as_str(), "thermal" | "solid" | "none") {
-                e.push(format!("zone {}: connect is thermal, solid or none", z.net));
-            }
+        if let Some(c) = &z.connect
+            && !matches!(c.as_str(), "thermal" | "solid" | "none") {
+            e.push(format!("zone {}: connect is thermal, solid or none", z.net));
         }
         if z.layers.is_empty() {
             e.push(format!("zone {}: layers is empty", z.net));
@@ -727,10 +719,9 @@ pub fn check(p: &Project) -> Vec<String> {
         if s.pitch_mm.is_finite() && s.size_mm.is_finite() && s.pitch_mm < s.size_mm + m - 1e-9 {
             e.push(format!("stitch {}: pitch_mm {} is below size_mm plus margin_mm ({})", s.net, s.pitch_mm, s.size_mm + m));
         }
-        if let Some([x0, y0, x1, y1]) = s.rect {
-            if !(x1 > x0 && y1 > y0) {
-                e.push(format!("stitch {}: rect must be x0, y0, x1, y1 with x1 > x0 and y1 > y0", s.net));
-            }
+        if let Some([x0, y0, x1, y1]) = s.rect
+            && !(x1 > x0 && y1 > y0) {
+            e.push(format!("stitch {}: rect must be x0, y0, x1, y1 with x1 > x0 and y1 > y0", s.net));
         }
     }
     let mut paste_pads = std::collections::BTreeSet::new();

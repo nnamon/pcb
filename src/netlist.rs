@@ -89,7 +89,7 @@ pub fn load(path: &Path, work: &Path) -> Result<Netlist> {
         return Err(refused("config", format!("{}: no such netlist or schematic", path.display())));
     }
     let text = if path.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
-        std::fs::create_dir_all(work).map_err(|e| failed("io", format!("{}: {e}", work.display())))?;
+        crate::gate::make_work(work).map_err(|e| failed("io", format!("{}: {e}", work.display())))?;
         let out = work.join("netlist.net");
         let r = std::process::Command::new("kicad-cli")
             .args(["sch", "export", "netlist", "--format", "kicadsexpr", "-o"])

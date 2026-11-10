@@ -195,6 +195,7 @@ fn grown_copper(b: &Board, net: &str, layer: &str, grow: f64) -> MultiPolygon<f6
 }
 
 /// The tracks and vias of the absorbed net, and what they become.
+#[allow(clippy::explicit_counter_loop)] // `next` numbers the new via pads after the footprint's own
 fn net_tie(b: &Board, src: &str, e: &mut Edits, t: &crate::project::NetTie) -> Result<TieMade> {
     let f = b.footprint_by_ref(&t.footprint).ok_or_else(|| refused("config", format!("net_tie: no footprint {}", t.footprint)))?;
     let node = sexpr::parse(&src[f.span.0..f.span.1])?;
@@ -351,6 +352,7 @@ fn pad_has(p: &Pad, q: (f64, f64)) -> bool {
 }
 
 /// `pcb zone`: see the module documentation.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // `!(a <= b)` refuses NaN as well
 pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     let p = &l.project;
     let problems = crate::project::check(p);
@@ -360,7 +362,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
     let board_path = l.board_path().to_string_lossy().to_string();
     crate::gate::check_work(work)?;
     crate::gate::check_out(out_path)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let b = Board::load(&board_path)?;
     // names the board lacks are errors here: a zone on a missing net would be built wrong
     let mism = crate::project::check_against(p, &b);
@@ -623,6 +625,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
 /// Vias that join the net's fill pieces nothing else joins (`[[stitch]] join`): candidates on a 0.25 mm grid, each
 /// held to the rules `stitch_points` holds a grid via to; one is laid where it sits in pieces of two groups not yet
 /// connected by the net's pads, tracks, vias, the grid's vias (`grid`) or a via laid before it.
+#[allow(clippy::needless_range_loop)] // `k` is a union-find index as well as a piece index
 fn join_points(b: &Board, st: &crate::project::Stitch, keepouts: &[Polygon<f64>], placed: &[(f64, f64, f64)], grid: &[(f64, f64)]) -> Vec<(f64, f64)> {
     use geo::Contains;
     let fine = crate::project::Stitch { pitch_mm: 0.25, rect: st.rect, net: st.net.clone(), size_mm: st.size_mm, drill_mm: st.drill_mm, margin_mm: Some(0.05), join: false };

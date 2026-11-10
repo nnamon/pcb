@@ -131,10 +131,9 @@ fn silk_layer(g: &sexpr::Node) -> Option<&str> {
 
 /// Each footprint (in `refs`, when given) with its parsed node, and its silkscreen shapes as (absolute span, node).
 fn silk_of<'a>(b: &'a Board, refs: &Option<Vec<String>>, i: usize) -> Result<Vec<(&'a Footprint, Vec<((usize, usize), sexpr::Node)>)>> {
-    if let Some(rs) = refs {
-        if let Some(r) = rs.iter().find(|r| b.footprint_by_ref(r).is_none()) {
-            return Err(refused("edit-no-target", format!("operation {i}: no footprint {r}")));
-        }
+    if let Some(rs) = refs
+        && let Some(r) = rs.iter().find(|r| b.footprint_by_ref(r).is_none()) {
+        return Err(refused("edit-no-target", format!("operation {i}: no footprint {r}")));
     }
     let mut out = vec![];
     for f in &b.footprints {
@@ -369,7 +368,7 @@ fn on_copper_except(b: &Board, net: &str, p: (f64, f64), layer: Option<&str>, sk
 /// Apply `ops` to the board at `board_path` and write the result through the gate.
 pub fn run(board_path: &str, ops: &[Op], out_path: &str, work: &Path) -> Result<Report> {
     crate::gate::check_work(work)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     crate::gate::check_out(out_path)?;
     // a board that is not there is the caller's mistake, not a tool failure (review 9, 10)
     if !Path::new(board_path).exists() {
@@ -384,6 +383,7 @@ pub fn run(board_path: &str, ops: &[Op], out_path: &str, work: &Path) -> Result<
 
 /// The board text with `ops` applied, and a line per operation; every check but the gate (targets, expectations,
 /// locks, joins). `pcb route --prewire` applies its operations with this, then routes, then gates the whole.
+#[allow(clippy::needless_range_loop)] // `i` is a union-find index as well as a node index
 pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
     let src = &b.src;
     let (bx0, by0, bx1, by1) = b.bbox();
@@ -462,7 +462,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
             }
             Op::MoveVia { net, at, to, unlock } => {
                 check_in(*to)?;
-                let v = find_via(&b, i, net, *at, None)?;
+                let v = find_via(b, i, net, *at, None)?;
                 if v.locked && !unlock {
                     return Err(locked_refusal(i, &format!("the via at {}", p2(*at))));
                 }
@@ -486,12 +486,11 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                     What::Via => {
                         let at_given = *at;
                         let at = at.or(if uuid.is_some() { Some([f64::NAN, f64::NAN]) } else { None }).ok_or_else(|| refused("edit-op", format!("operation {i}: delete via needs at or uuid")))?;
-                        let vs = find_vias(&b, i, net, at, uuid.as_deref(), *all)?;
+                        let vs = find_vias(b, i, net, at, uuid.as_deref(), *all)?;
                         // a uuid and a position must name the same via
-                        if let (Some(_), Some(p)) = (uuid, at_given) {
-                            if let Some(v) = vs.iter().find(|v| !near((v.x, v.y), p)) {
-                                return Err(refused("edit-mismatch", format!("operation {i}: the via with that uuid is at {}, not {}", p2([v.x, v.y]), p2(p))));
-                            }
+                        if let (Some(_), Some(p)) = (uuid, at_given)
+                            && let Some(v) = vs.iter().find(|v| !near((v.x, v.y), p)) {
+                            return Err(refused("edit-mismatch", format!("operation {i}: the via with that uuid is at {}, not {}", p2([v.x, v.y]), p2(p))));
                         }
                         if let Some(v) = vs.iter().find(|v| v.locked && !unlock) {
                             return Err(locked_refusal(i, &format!("the via at {}", p2([v.x, v.y]))));
@@ -504,7 +503,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                             _ if uuid.is_some() => ("", [f64::NAN; 2], [f64::NAN; 2]),
                             _ => return Err(refused("edit-op", format!("operation {i}: delete track needs layer, start and end, or uuid"))),
                         };
-                        let ts = find_tracks(&b, i, net, l, s, e, uuid.as_deref(), *all)?;
+                        let ts = find_tracks(b, i, net, l, s, e, uuid.as_deref(), *all)?;
                         // a uuid and the track's layer and ends must name the same track
                         if uuid.is_some() {
                             for t in &ts {
@@ -535,7 +534,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                 if !(*to > 0.0 && to.is_finite()) {
                     return Err(refused("edit-op", format!("operation {i}: set_width needs a width above 0")));
                 }
-                let t = find_track(&b, i, net, layer, *start, *end, None)?;
+                let t = find_track(b, i, net, layer, *start, *end, None)?;
                 if (t.width - from).abs() > 1e-6 {
                     return Err(refused("edit-mismatch", format!("operation {i}: the track is {} mm wide, not {}", n(t.width), n(*from))));
                 }
@@ -761,7 +760,7 @@ pub fn apply(b: &Board, ops: &[Op]) -> Result<(String, Vec<String>)> {
                             if let (true, Some(u)) = (k > 0, us) {
                                 reps.push((u, String::new()));
                             }
-                            reps.sort_by(|x, y| y.0.0.cmp(&x.0.0));
+                            reps.sort_by_key(|x| std::cmp::Reverse(x.0.0));
                             let mut piece = text.to_string();
                             for (r, s2) in reps {
                                 piece.replace_range(r.0 - sp.0..r.1 - sp.0, &s2);

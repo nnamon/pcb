@@ -142,6 +142,7 @@ Every command:
   - the acceptance tests;
   - one column per unit for results.
 - **`CHECKSUMS.txt`** and the verification-record rows for the README.
+- **Scratch files** go to the command's `--work` folder, `pcb_work/<command>` beside the project by default. The highest folder a run creates, and any `pcb_work` above the work folder, gets a `.gitignore` of `*` (0.4.4), so scratch files never reach a commit.
 
 ## Testing and contract (milestone M0)
 

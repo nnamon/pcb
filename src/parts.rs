@@ -155,10 +155,9 @@ pub fn assembled(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<BTreeMap<
         let path = l.path.parent().unwrap_or(Path::new(".")).join(nl);
         let n = crate::netlist::load(&path, work)?;
         for c in &n.comps {
-            if let Some(code) = c.lcsc() {
-                if !hand.contains(&c.reference) && !c.flags().contains(&"exclude_from_bom") {
-                    m.entry(code).or_default().push(c.reference.clone());
-                }
+            if let Some(code) = c.lcsc()
+                && !hand.contains(&c.reference) && !c.flags().contains(&"exclude_from_bom") {
+                m.entry(code).or_default().push(c.reference.clone());
             }
         }
     }
@@ -288,10 +287,9 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                         extended.push(code.clone());
                     }
                 }
-                if let Some(f) = &info.fetched {
-                    if days_between(f, &today).map(|n| n > STALE_DAYS).unwrap_or(true) {
-                        stale.push(format!("{code} ({f})"));
-                    }
+                if let Some(f) = &info.fetched
+                    && days_between(f, &today).map(|n| n > STALE_DAYS).unwrap_or(true) {
+                    stale.push(format!("{code} ({f})"));
                 }
             }
         }
@@ -369,8 +367,8 @@ pub fn run(l: &Loaded, live: bool, work: &Path) -> Result<Report> {
         let today = crate::gates::today();
         let mut codes: Vec<String> = assembled(l, b.as_ref(), work)?.into_keys().collect();
         // the netlist's parts too, so a part sync is about to add is cached before it is needed
-        if b.is_some() && l.project.project.netlist.is_some() {
-            let nl = l.path.parent().unwrap_or(Path::new(".")).join(l.project.project.netlist.as_ref().unwrap());
+        if let (Some(_), Some(netlist)) = (b.as_ref(), l.project.project.netlist.as_ref()) {
+            let nl = l.path.parent().unwrap_or(Path::new(".")).join(netlist);
             for c in crate::netlist::load(&nl, work)?.comps {
                 if let Some(code) = c.lcsc() {
                     codes.push(code);

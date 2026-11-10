@@ -183,7 +183,7 @@ mod tests {
         // a header inside a multi-line string is a string
         let c = "schema = 1\n[[waiver]]\nwhy = \"\"\"x\n[gates.zz]\n\"\"\"\nmax = 9\n";
         let d = c.replace("max = 9", "max = 400");
-        assert_ne!(without_gates(&c), without_gates(&d));
+        assert_ne!(without_gates(c), without_gates(&d));
     }
 
     #[test]

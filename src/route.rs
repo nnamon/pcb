@@ -288,10 +288,9 @@ fn declare_wiring_nets(dsn: &str) -> Result<(String, Vec<String>)> {
     let mut missing = std::collections::BTreeSet::new();
     if let Some(wiring) = root.find("wiring") {
         for item in wiring.items() {
-            if let Some(net) = item.find("net").and_then(|n| n.arg(1)) {
-                if !declared.contains(net) {
-                    missing.insert(net.to_string());
-                }
+            if let Some(net) = item.find("net").and_then(|n| n.arg(1))
+                && !declared.contains(net) {
+                missing.insert(net.to_string());
             }
         }
     }
@@ -408,15 +407,13 @@ fn via_spacing(dsn: &str, board: &Path) -> Result<String> {
     if let Some(lib) = root.find("library") {
         for ps in lib.find_all("padstack") {
             let name = ps.arg(1).unwrap_or("");
-            if let Some(rest) = name.strip_prefix("Via[") {
-                if let Some((_, dims)) = rest.split_once("]_") {
-                    let dims = dims.trim_end_matches("_um");
-                    if let Some((sz, dr)) = dims.split_once(':') {
-                        if let (Ok(sz), Ok(dr)) = (sz.parse::<f64>(), dr.parse::<f64>()) {
-                            ring_um = ring_um.max(sz - dr);
-                        }
+            if let Some(rest) = name.strip_prefix("Via[")
+                && let Some((_, dims)) = rest.split_once("]_") {
+                let dims = dims.trim_end_matches("_um");
+                if let Some((sz, dr)) = dims.split_once(':')
+                    && let (Ok(sz), Ok(dr)) = (sz.parse::<f64>(), dr.parse::<f64>()) {
+                        ring_um = ring_um.max(sz - dr);
                     }
-                }
             }
         }
     }
@@ -653,7 +650,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let t0 = Instant::now();
     crate::gate::check_work(&o.work)?;
     crate::gate::check_out(out_path)?;
-    std::fs::create_dir_all(&o.work)?;
+    crate::gate::make_work(&o.work)?;
     // absolute, because Freerouting runs inside the work directory
     let work = std::fs::canonicalize(&o.work)?;
     let mut prewired: Vec<String> = vec![];
@@ -1043,7 +1040,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
                         || b.zones.iter().any(|z| {
                             z.net == sg.net
                                 && if z.filled.is_empty() {
-                                    z.layers.iter().any(|l| *l == sg.layer) && point_in_poly(p, &z.outline) && !z.holes.iter().any(|h| point_in_poly(p, h))
+                                    z.layers.contains(&sg.layer) && point_in_poly(p, &z.outline) && !z.holes.iter().any(|h| point_in_poly(p, h))
                                 } else {
                                     z.filled.iter().any(|(l, poly)| *l == sg.layer && point_in_poly(p, poly))
                                 }

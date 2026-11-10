@@ -422,8 +422,8 @@ impl Board {
                     })
                 }
                 Some("zone") => b.zones.push(parse_zone(n, None, (0.0, 0.0))),
-                Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle") => {
-                    if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") {
+                Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle")
+                    if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") => {
                         let (x0, y0) = xy(n, "start");
                         let (x1, y1) = xy(n, "end");
                         match n.head() {
@@ -459,7 +459,6 @@ impl Board {
                             _ => b.outline.push(Segment { x0, y0, x1, y1 }),
                         }
                     }
-                }
                 _ => {}
             }
         }
@@ -562,19 +561,17 @@ impl Board {
         let width = |g: &Node| g.find("stroke").and_then(|s| s.find("width")).or_else(|| g.find("width")).and_then(|w| w.num(1));
         let silk = |g: &Node| g.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".SilkS") || l.ends_with(".Silkscreen"));
         for g in self.root.items().iter().filter(|g| matches!(g.head(), Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly"))) {
-            if silk(g) {
-                if let Some(w) = width(g) {
-                    out.push((w, "board".to_string()));
-                }
+            if silk(g)
+                && let Some(w) = width(g) {
+                out.push((w, "board".to_string()));
             }
         }
         for f in &self.footprints {
             if let Ok(n) = sexpr::parse(&self.src[f.span.0..f.span.1]) {
                 for g in n.items().iter().filter(|g| matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly"))) {
-                    if silk(g) {
-                        if let Some(w) = width(g) {
-                            out.push((w, f.reference.clone()));
-                        }
+                    if silk(g)
+                        && let Some(w) = width(g) {
+                        out.push((w, f.reference.clone()));
                     }
                 }
             }

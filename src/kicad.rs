@@ -18,7 +18,7 @@ pub fn helper(work: &Path, args: &[&str]) -> Result<serde_json::Value> {
         return Err(failed("kicad", format!("kicad helper {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr))));
     }
     let s = String::from_utf8_lossy(&out.stdout);
-    let last = s.lines().filter(|l| l.trim_start().starts_with('{')).last().context("no JSON from kicad helper")?;
+    let last = s.lines().rfind(|l| l.trim_start().starts_with('{')).context("no JSON from kicad helper")?;
     Ok(serde_json::from_str(last)?)
 }
 
@@ -109,7 +109,7 @@ pub fn drc_counts_with(work: &Path, board: &str, name: &str, keep_fills: bool) -
         let list: Vec<String> = t.iter().map(|(k, v)| format!("{k} {v}")).collect();
         return Err(refused(
             "drc-truncated",
-            format!("KiCad listed only the first violations of some types ({}), so its DRC of {board} is incomplete and cannot be compared. Fix the design rules or the board until every type is under KiCad's limit", list.join(", ")),
+            format!("KiCad listed only the first violations of some types ({}), so its DRC of {board} is incomplete and cannot be compared. Fix the design rules or the board until every type is under KiCad's limit. If the type is one the design means to break, such as silk_over_copper under artwork, set its severity to \"ignore\" in the board's .kicad_pro (board.design_settings.rule_severities); the fab's own kinds stay errors in pcb check whatever it says", list.join(", ")),
         ));
     }
     let mut m = BTreeMap::new();
