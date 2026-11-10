@@ -1,6 +1,6 @@
 # PCB Project Guidelines: Deliverables, Checks, Formats
 
-Last updated 24 Oct 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
+Last updated 9 Nov 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
 
 Every board in this project ships as one versioned zip that a person can order from without reading the source, and it passes two independent review gates (schematic, then release) plus checks on the final Gerbers before anything is ordered. These rules come from the Quansheng paddle adapter (v1.0.0, two boards) and the paddle keyer (v0.2.x).
 
@@ -51,7 +51,7 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 | PATCH | Iterative change within the spin. | Anything else that changes the order files: a value or part swap with the same function and footprint, routing and clearance fixes, silkscreen and art, paste and DFM fixes, BOM/CPL corrections. | nothing |
 
 - **Spin lifecycle.** Spin 2 starts at `2.0.0` and moves through `2.0.1`, `2.1.0`, `2.1.1` and so on. Whatever version is current when it passes Gate 2 is the one ordered, for example `2.1.1`. That version is tagged and frozen, and the next change starts `3.0.0`.
-- **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
+- **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues, and `VERSION` changes with the branch. On the badge carrier 0.5.0 the cell-input change was routed before Gate 1, which then found a blocker, and the version file still said 0.4.0. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
 - **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
 - **Every version is tagged** when it is committed: hardware `<project>-v<x.y.z>`, firmware `<project>-fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered.
@@ -115,7 +115,7 @@ A board is orderable only when every check below passes on the final files, or c
 2. **Pins against the datasheet.** Map every IC, connector and polarised part by pad position against the datasheet and the EasyEDA footprint and symbol. tscircuit's JLCPCB import swapped VIN and VOUT on the XC6206 LDO.
    - For every connector, check the mating part as it will physically meet the board: gender (badges carry the female SAO header, add-ons the male), the side the cable or board enters, and its orientation when fitted. Read the connector's section drawing for which side the FFC/FPC enters relative to the solder tails, and derive the pin-to-pad map from the flat cable's real path. On nandynarwhals-defcon-sg-2027-badge 0.1.0 the SAO header was male and the e-paper map assumed the wrong mouth side; 0.2.0 first reversed every e-paper pin.
    - For a module on a header, confirm which way its header is fitted (on a Pi-style module, pins up on the component side means it mounts face down) and map the socket from that flip. Check that the module's holes and header stay aligned after the flip.
-3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Prefer Basic, and flag low stock in the README. A part with stock under 20 times the need, or under 1000, goes in a buy-ahead table: the owner buys it into the JLCPCB parts library (or the LCSC cart if hand-fitted) before ordering.
+3. **JLCPCB eligibility and stock.** Query each LCSC code for library type (Basic/Extended), `preferredComponentFlag`, `componentProductType` (0 = Economic OK, 2 = Standard only) and stock. Basic and Preferred Extended parts carry no loading fee in Economic assembly; every other Extended part costs about $3 per order. Choose Basic or Preferred for every part that has one, trying the next package size up (0402 to 0603) before an Extended part, and justify each remaining Extended line in the README. Check the assembly page's own BOM match too: it flags parts it calls difficult to process, which the API does not show. Flag low stock in the README. A part with stock under 20 times the need, or under 1000, goes in a buy-ahead table: the owner buys it into the JLCPCB parts library (or the LCSC cart if hand-fitted) before ordering.
 4. **Ratings and margins.**
    - Resistors at ≤ 50 % of rated power (I²R × duty).
    - MLCCs rated ≥ 2× working voltage, since DC bias cuts their capacitance.
@@ -149,7 +149,9 @@ A board is orderable only when every check below passes on the final files, or c
 8. **Netlist match.** `compare_netlist.py` proves the readable source matches the routed board.
 9. **Current, thermal and signal.**
    - Trace widths sized for each net's current (IPC-2152), with copper for parts that dissipate heat.
-   - Decoupling capacitors at their pins.
+   - Decoupling capacitors at their pins. For each regulator, measure every input and output capacitor's distance to its pins against the datasheet's layout section, right after placement. The badge carrier 0.6.0 placer put the boost's output capacitors 14–18 mm from VOUT, and only Gate 2 caught it.
+   - The ground side too: each switching regulator's input and output capacitors return to the IC's power-ground pin on the same copper, a few millimetres at most, or through a GND via at each end within 1 mm. On the badge carrier 0.7.0 the converter's output capacitors sat 1 mm from VOUT but on a separate ground island, 12.6 mm from the GND pin.
+   - Every power path from source to load: count the vias at each layer change against the current (about 1 A per 0.3 mm via), not only the track widths. On the badge carrier 0.7.0 the router's join left the Lyra's whole supply on one via and 0.40 mm.
    - Unbroken return paths under fast signals.
    - USB pairs and crystals routed per the MCU's hardware guide.
 10. **Mechanical fit.** Check connector positions and overhangs against the mating parts' drawings, plus keep-outs and the outline. When fit matters, use a 1:1 paper print with the real parts laid on it, or a STEP check against the enclosure.
@@ -161,15 +163,16 @@ A board is orderable only when every check below passes on the final files, or c
 **Final Gerbers and drill files**
 
 11. **Gerber set complete.** RS-274X (X2 preferred) plus Excellon drill. Every expected layer is present, the outline is closed, and the units and origin match the CPL.
-12. **Gerber connectivity.** Rebuild copper islands from the Gerbers and drill, handling pour polarity, and compare them with the intended netlist: no opens, no shorts, no unconnected pads. Re-run after any post-export edit.
-13. **DFM.** `jlc_dfm.py` checks trace and gap, copper-to-edge, annular ring, hole-to-hole between nets, slots, mask dams, silk width, and silk over pads or drills.
-14. **Paste layer.** Apertures 1:1 with the pads, and exposed pads windowed to about 65 % coverage. tscircuit's default of 70 % × 70 % is too little at 0.4 mm pitch.
-15. **Renders from the Gerbers.** Look at both sides: silkscreen not under parts, art and labels where intended, orientation right.
+12. **Gerber connectivity.** Rebuild copper islands from the Gerbers and drill, handling pour polarity and reading regions by the nonzero winding rule (KiCad writes a plane with holes as one contour with cut-in lines, and repairing it with shapely's `buffer(0)` or `make_valid` invents copper: the badge carrier 0.7.0 reviewers measured a false 0.17 mm via-to-plane gap that way), and compare them with the intended netlist: no opens, no shorts, no unconnected pads. Re-run after any post-export edit.
+13. **DFM.** `jlc_dfm.py` checks trace and gap, copper-to-edge, annular ring, hole-to-hole between nets, slots, mask dams, silk width, and silk over pads or drills. Silkscreen gaps include slits inside one piece (a "C" whose mouth nearly closes): find them as each piece's mitred closing minus the piece, since a gap check between pieces misses them (the badge carrier 0.7.1 had 22).
+14. **Paste layer.** Apertures 1:1 with the pads, and exposed pads windowed to about 65 % coverage. tscircuit's default of 70 % × 70 % is too little at 0.4 mm pitch. No paste on any pad of a part left out of the CPL (test pads, hand-fitted and DNP parts); read it back from the paste Gerber. On the badge carrier 0.7.0 a newly added test pad was missed.
+15. **Renders from the Gerbers.** Every designator and polarity mark sits nearer its own part than any other part (check by script against the footprint positions, not by eye alone; the badge carrier 0.7.1 had about fifteen beside the wrong part). Marks also sit outside their own package body, taken from the L × W in the footprint name (or from the datasheet when the name gives none: the badge carrier 0.8.0 had U602's dot half under its body), and a "+" is nearer its own pad than the part's other pads (the badge carrier 0.7.1 had dots under LED bodies and two "+" marks at pad 1). Look at both sides: silkscreen not under parts, art and labels where intended, orientation right. Compare the art with the last version the owner approved, not only the previous candidate (the badge carrier 0.7.1 lost a drawing's detail to the 0.15 mm silkscreen rules and nobody saw it until the owner did).
 
 **Assembly files and firmware**
 
 16. **BOM/CPL.**
     - Every designator exists, and LCSC codes match the design.
+    - The board spec (layers, thickness, colour, finish, quantity) is one the chosen assembly service accepts: JLCPCB's Economic assembly takes only the combinations in its capabilities table (in Nov 2026, 4-layer boards in green only and ENIG on green only). Check the table on the day, not only the parts (the badge carrier 0.7.2 specified 4-layer black ENIG with Economic assembly).
     - X/Y sit at the footprint centre in the Gerber origin.
     - Rotation is solved against JLCPCB's EasyEDA footprint, so pad 1 lands on pin 1. JLCPCB rotates counter-clockwise, viewed from the top.
     - Not-assembled pads are excluded.
@@ -193,15 +196,16 @@ A board is orderable only when every check below passes on the final files, or c
 
 ## JLCPCB rules and part selection
 
-Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on top; anything outside these numbers needs a stated reason in the README.
+Design to JLCPCB's standard 2-layer process with Economic assembly, all assembled parts on top; anything outside these numbers needs a stated reason in the README. Hand-fitted parts may go on the back.
 
 | Rule | Project default | Why |
 | --- | --- | --- |
-| Layers, thickness, finish | 2 layers, 1.6 mm, 1 oz copper, HASL | Cheapest; HASL is fine for 0.5 mm-pitch USB-C |
+| Layers, thickness, finish | 2 layers, 1.6 mm, 1 oz copper, HASL. 4 layers when the owner allows it: L2 and L3 solid GND, inner copper 0.5 oz | Cheapest; HASL is fine for 0.5 mm-pitch USB-C. On the badge carrier the power copper split a 2-layer ground under the power stage. Economic assembly takes 4-layer boards in green only, with ENIG on green only, and black 2-layer boards at 1.6 mm with HASL only (assembly capabilities page, 8 Nov 2026): settle colour and finish with the layer count, before layout |
+| Inner copper to holes (4 layers) | ≥ 0.3 mm from a component hole, ≥ 0.2 mm from a via (design to 0.35) | JLCPCB multilayer capabilities, checked 30 Oct 2026 |
 | Trace / gap | 0.15 / 0.15 mm | Standard process |
 | Vias | 0.3 mm drill / 0.6 mm pad | Standard process |
 | Hole-to-hole, different nets | ≥ 0.5 mm edge to edge (design to 0.56) | Means ≥ 0.2 mm copper between via pads, including vias next to NPTH pegs |
-| Copper to routed edge | ≥ 0.3 mm | JLCPCB guideline |
+| Copper to routed edge | ≥ 0.3 mm; set the board's copper-to-edge to 0.35 mm when the outline has arcs | JLCPCB guideline. Pours fill to chords of a rounded corner and read back 0.299 mm against a 0.3 mm setting (badge carrier 0.8.0) |
 | Silkscreen | ink-jet; lines ≥ 0.15 mm; text ≥ 0.6 mm cap height in a bold font (Inter ExtraBold), 1.0 mm where there is room | JLCPCB asks for 0.8 mm; 0.6 mm bold text with 0.15 mm strokes is the project's floor. The adapter A test (Oct 2026, ink-jet) printed separate dots from 0.12 mm and merged 0.10 mm, so 0.15 mm strokes have margin. Polarity marks are shapes, not text. High-precision silkscreen costs 4× here |
 | Assembly | Economic, top side only | Standard PCBA is $25 setup per side and forces a 70 × 70 mm panel with rails |
 
@@ -218,20 +222,25 @@ Design to JLCPCB's standard 2-layer process with Economic assembly, all parts on
 - Treat a through-hole pad as copper on both sides when packing parts and checking overlaps. A same-side check let an SMD capacitor sit on a back-side connector's plated pad (badge carrier, Oct 2026).
 - When writing Gerber regions with holes (pours, silkscreen), draw them largest first. A hole is drawn in clear polarity and erases anything drawn before it inside the hole: on the badge carrier it wiped the text inside the holder outline, and would have wiped pour islands of other nets.
 - Freerouting leaves fixed (pre-routed) wires and vias out of its session file, so add them back when importing the routing.
+- Seed the router from an earlier run only while every pad that run touched is where it was. The router keeps seeded copper, so wires to a removed part or under a part the packer moved become shorts. Drop seeded copper at removed pads and pin moved parts at the seed run's positions, or route fresh.
+- tscircuit writes 2-layer Gerber attributes. On 4 layers, set the plated drill to span L1–L4 and B_Cu to copper layer 4, or the bottom clashes with In1_Cu.
 - Put rail test points beside their sources. A strip of test points far from the power section pulls wide power traces across the ground plane under fast signals, and can run unfused cell copper next to GND.
 - Give every decoupling capacitor and IC ground pin its own via to the ground plane, and give every layer change on a high-current path enough vias for its current (about 1 A per 0.3 mm via).
-- Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint.
+- Keep vias out of printed SMD pads unless they are plugged: an open drill wicks the solder away from the joint. Scan the finished board for any via touching an SMD pad: a router that may change layer at its start point drops vias into pads (badge carrier 0.6.0), and so does a script joining ground islands unless it keeps its vias 0.15 mm off every SMD pad (badge carrier 0.8.0, inside C320's pad).
 - Scripts that finish the router's open connections must never complete a power net, and must log every trace and via they add. On the badge carrier one closed VBAT and VBOOST with 0.2 mm traces across the ground kept under the boost IC, and a `tail -1` in the pipeline hid it; only the current check caught it.
 - Check where the power nets have to cross before restricting them to one layer. Two power nets that must cross (a boost output going one way, its input the other) need a planned layer change with enough vias, or the router leaves them open.
 - When filling power nets with copper, first give every power net a strip along its own traces, then grow the large fills. A single pass lets the first big fill take the room a neighbouring power trace needs.
 - Leave no room for, and ask JLCPCB not to add, order numbers or tooling holes inside small boards; plan for edge rails instead.
+- When the outline changes, move what belongs on an edge with that edge (switches, IR parts, lanyard holes; list them in `NOTES.md`) and keep the inner cut-outs. Diff Edge.Cuts and the NPTH drill file against the last release before review. On the badge carrier 0.8.0 the square outline dropped the test slot and left SW101, the IR parts and the lanyard holes 10 mm inside the edge. A hole that carries load (lanyard, strap) keeps at least 3 mm of board to the edge: 0.8.0 put its 4 mm lanyard holes 1.4 mm from the edge, and an external review caught it.
+- A script that adds a track with KiCad's Python API must remove the copper it crosses before laying it: `SaveBoard` gives a track that touches another net's copper that net's name. Check the nets of what was added after saving (badge carrier 0.8.0).
+- An edit made to the board or schematic by hand also goes into the script that generates it, or the next run undoes it (badge carrier 0.7.2: R502 fitted in the schematic, still DNP in `make_schematic.py`).
 - Keep a readable hand-written source with datasheet pin names next to the generated files.
 
 ## Ordering
 
 The README's ordering steps list only what differs from JLCPCB's defaults, per board, so a person can order without a back-and-forth.
 
-1. **Upload** only that board's Gerber zip from `order/`. Confirm JLCPCB detects 2 layers and the expected size, which the README states. "Detected 0 layer" means nothing was read. Step through JLCPCB's layer preview and compare it with the renders.
+1. **Upload** only that board's Gerber zip from `order/`. Confirm JLCPCB detects the layer count and size the README states. "Detected 0 layer" means nothing was read. Step through JLCPCB's layer preview and compare it with the renders.
 2. **PCB options:** Remove Mark; colour and silkscreen technology as chosen; everything else default.
 3. **PCB remark** (paste-ready in the README): name anything intentional that looks odd, such as bottom art, exposed copper or test patterns, and add: "Please do not add tooling holes, order numbers or marks inside the board outline."
 4. **Assembly:** Economic, top side, qty 5 (minimum); Confirm parts placement: Yes; depanel and edge rails if cheap.
