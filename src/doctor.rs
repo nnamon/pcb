@@ -38,7 +38,7 @@ fn on_path(prog: &str) -> bool {
 }
 
 pub fn run(work: &Path, freerouting: Option<&Path>, java: &str) -> Result<(Vec<Check>, Vec<Warning>)> {
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let mut checks = vec![];
     let mut warnings = vec![];
     match kicad::helper(work, &["selftest", work.to_str().unwrap_or(".")]) {

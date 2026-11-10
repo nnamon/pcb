@@ -37,6 +37,16 @@
      "ok": {
       "type": "boolean"
      },
+     "sets": {
+      "type": "object",
+      "required": ["a", "b"],
+      "properties": {
+       "a": {"type": "string"},
+       "b": {"type": "string"},
+       "a_is": {"type": "string"},
+       "b_is": {"type": "string"}
+      }
+     },
      "error": {
       "type": "string"
      },

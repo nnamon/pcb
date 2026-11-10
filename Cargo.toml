@@ -1,6 +1,6 @@
 [package]
 name = "pcb"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 
 [dependencies]
@@ -15,6 +15,11 @@ sha2 = "0.10"
 svg2pdf = "0.13.0"
 toml = "1.1.8"
 ttf-parser = "0.25"
+
+[lints.clippy]
+# Board geometry passes many plain values and tuples; aliases and structs for each would hide more than they name.
+too_many_arguments = "allow"
+type_complexity = "allow"
 
 [workspace]
 members = ["xtask"]

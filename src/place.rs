@@ -134,7 +134,7 @@ pub fn run(l: &Loaded, only: &[String], work: &Path, out_path: &str) -> Result<R
     }
     crate::gate::check_work(work)?;
     crate::gate::check_out(out_path)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let board_path = l.board_path().to_string_lossy().to_string();
     let b = Board::load(&board_path)?;
     let mut rep = Report::default();

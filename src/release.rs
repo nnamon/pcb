@@ -116,7 +116,7 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     }
     crate::gate::check_work(work)?;
     std::fs::create_dir_all(out)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let board_path = l.board_path().to_string_lossy().to_string();
     let b = Board::load(&board_path)?;
     let stem = format!("{}_v{}", p.project.name, p.project.version);

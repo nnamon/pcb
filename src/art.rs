@@ -222,7 +222,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
 /// The board text this command would write, without the gate: `pcb check` compares it with the board, so output
 /// removed by hand or by a footprint update is found (review 17, 39).
 pub fn would_write(l: &Loaded, work: &Path) -> Result<String> {
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let out = work.join("dry.kicad_pcb");
     run_inner(l, &out.to_string_lossy(), work, true).map(|(_, t)| t.unwrap_or_default())
 }
@@ -236,13 +236,12 @@ fn run_inner(l: &Loaded, out_path: &str, work: &Path, dry: bool) -> Result<(Repo
     let board_path = l.board_path().to_string_lossy().to_string();
     crate::gate::check_work(work)?;
     crate::gate::check_out(out_path)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let b = Board::load(&board_path)?;
     for a in &p.art {
-        if let Some(net) = &a.net {
-            if !b.nets.contains(net) {
-                return Err(refused("config", format!("art {:?}: no net {net} on the board", a.name)));
-            }
+        if let Some(net) = &a.net
+            && !b.nets.contains(net) {
+            return Err(refused("config", format!("art {:?}: no net {net} on the board", a.name)));
         }
         for lay in a.layers.iter().filter(|l| l.ends_with(".Cu")) {
             if !b.copper_layers.contains(lay) {
@@ -292,10 +291,9 @@ fn run_inner(l: &Loaded, out_path: &str, work: &Path, dry: bool) -> Result<(Repo
         entries.push((a.name.clone(), a.layers.clone(), a.net.clone(), polys));
     }
     for t in &p.text {
-        if let Some(net) = &t.net {
-            if !b.nets.contains(net) {
-                return Err(refused("config", format!("text {:?}: no net {net} on the board", t.name)));
-            }
+        if let Some(net) = &t.net
+            && !b.nets.contains(net) {
+            return Err(refused("config", format!("text {:?}: no net {net} on the board", t.name)));
         }
         entries.push((t.name.clone(), vec![t.layer.clone()], t.net.clone(), text_polygons(t, &base, (cx, cy), &p.project.version)?));
     }

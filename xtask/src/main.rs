@@ -1,7 +1,7 @@
 //! `cargo xtask test [--fast] [--only WORD] [--list]`: runs the pcb test suite from a clean checkout and prints one
 //! summary.
 //!
-//! Order (proposal, "Testing"): unit tests; `pcb doctor`; the edge cases listed in tests/cases/steps.toml; each
+//! Order (proposal, "Testing"): unit tests; clippy, where installed; `pcb doctor`; the edge cases listed in tests/cases/steps.toml; each
 //! fixture in tests/fixtures (a folder with a fixture.toml) through its import, route, edit, zone, release or M4 flow,
 //! each result checked by its independent oracle and each oracle by its mutation suite; then the cases marked
 //! `after_fixtures`, which read a fixture's flow. `--fast` skips everything that runs Freerouting and the mutation suites. `--only`
@@ -190,6 +190,12 @@ fn main() -> Result<()> {
 
     // unit tests and the release binary every later step uses
     s.run("unit tests", "cargo", &["test", "--release", "--package", "pcb", "--quiet"]);
+    // lints, where the toolchain has clippy (the pinned image's minimal Rust profile does not)
+    if Command::new("cargo").args(["clippy", "--version"]).output().is_ok_and(|o| o.status.success()) {
+        s.run("clippy", "cargo", &["clippy", "--release", "--workspace", "--all-targets", "--quiet", "--", "-D", "warnings"]);
+    } else {
+        s.skip("clippy", "not installed for this toolchain");
+    }
     if !s.run("build pcb", "cargo", &["build", "--release", "--package", "pcb", "--quiet"]) {
         return finish(&s, t0);
     }
@@ -301,11 +307,10 @@ fn run_specs(s: &mut Suite, specs: &[Spec], pcb: &str, jar: Option<&str>, only: 
             s.skip(&sp.name, "--fast");
             continue;
         }
-        if let Some(a) = &sp.after {
-            if !s.passed.contains(a) {
-                s.skip(&sp.name, &format!("needs {a}, which did not pass"));
-                continue;
-            }
+        if let Some(a) = &sp.after
+            && !s.passed.contains(a) {
+            s.skip(&sp.name, &format!("needs {a}, which did not pass"));
+            continue;
         }
         let fill = |a: &str| -> Option<String> {
             let mut a = a.replace("{pcb}", pcb).replace("{jar}", jar.unwrap_or("")).replace("{work}", &s.w(&sp.id));
@@ -430,10 +435,9 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         if open != want_open {
             problems.push(format!("still open {open:?} (want {want_open:?})"));
         }
-        if let Some(a) = case.get("attempt_used").and_then(|x| x.as_integer()) {
-            if v["data"]["attempt_used"].as_i64() != Some(a) {
-                problems.push(format!("attempt_used {} (want {a}): {}", v["data"]["attempt_used"], v["data"]["attempts"]));
-            }
+        if let Some(a) = case.get("attempt_used").and_then(|x| x.as_integer())
+            && v["data"]["attempt_used"].as_i64() != Some(a) {
+            problems.push(format!("attempt_used {} (want {a}): {}", v["data"]["attempt_used"], v["data"]["attempts"]));
         }
         let ok = problems.is_empty();
         eprintln!("   {} ({:.0} s)", if ok { "ok" } else { "FAILED" }, t0.elapsed().as_secs_f64());
@@ -476,10 +480,9 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
         if v["outcome"] != want {
             problems.push(format!("outcome {} (want {want}): {} {}", v["outcome"], v["error"], v["data"]["regressions"]));
         }
-        if let Some(c) = case.get("code").and_then(|x| x.as_str()) {
-            if v["error"]["code"] != c {
-                problems.push(format!("code {} (want {c})", v["error"]["code"]));
-            }
+        if let Some(c) = case.get("code").and_then(|x| x.as_str())
+            && v["error"]["code"] != c {
+            problems.push(format!("code {} (want {c})", v["error"]["code"]));
         }
         let got: Vec<String> = v["data"]["regressions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
         for r in case.get("regressions").and_then(|x| x.as_array()).cloned().unwrap_or_default() {

@@ -57,7 +57,7 @@ pub fn run(l: &Loaded, out_path: &str, work: &Path) -> Result<Report> {
 /// The board text this command would write, without the gate: `pcb check` compares it with the board, so output
 /// removed by hand or by a footprint update is found (review 17, 39).
 pub fn would_write(l: &Loaded, work: &Path) -> Result<String> {
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let out = work.join("dry.kicad_pcb");
     run_inner(l, &out.to_string_lossy(), work, true).map(|(_, t)| t.unwrap_or_default())
 }
@@ -71,7 +71,7 @@ fn run_inner(l: &Loaded, out_path: &str, work: &Path, dry: bool) -> Result<(Repo
     let board_path = l.board_path().to_string_lossy().to_string();
     crate::gate::check_work(work)?;
     crate::gate::check_out(out_path)?;
-    std::fs::create_dir_all(work)?;
+    crate::gate::make_work(work)?;
     let b = Board::load(&board_path)?;
     let src = &b.src;
     let mut rep = Report::default();

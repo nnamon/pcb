@@ -94,11 +94,10 @@ pub fn svg(b: &Board, o: &Opts) -> String {
         let _ = write!(s, r##"<circle cx="{}" cy="{}" r="{}" fill="{c}"/><circle cx="{}" cy="{}" r="{}" fill="#101418"/>"##, v.x, v.y, v.size / 2.0, v.x, v.y, v.drill / 2.0);
     }
     for f in &b.footprints {
-        if let Some((a, bb, c, d)) = f.courtyard {
-            if inside((a + c) / 2.0, (bb + d) / 2.0, 10.0) {
-                let col = if f.layer == "B.Cu" { "#6688ff" } else { "#dddddd" };
-                let _ = write!(s, r#"<rect x="{a}" y="{bb}" width="{}" height="{}" fill="none" stroke="{col}" stroke-width="0.03" stroke-dasharray="0.15 0.1"/>"#, c - a, d - bb);
-            }
+        if let Some((a, bb, c, d)) = f.courtyard
+            && inside((a + c) / 2.0, (bb + d) / 2.0, 10.0) {
+            let col = if f.layer == "B.Cu" { "#6688ff" } else { "#dddddd" };
+            let _ = write!(s, r#"<rect x="{a}" y="{bb}" width="{}" height="{}" fill="none" stroke="{col}" stroke-width="0.03" stroke-dasharray="0.15 0.1"/>"#, c - a, d - bb);
         }
         for p in &f.pads {
             if !inside(p.x, p.y, 2.0) {
@@ -255,7 +254,7 @@ pub fn look(board: &str, f: &crate::project::Finish, layers: u32, o: &Look, work
         return Err(crate::contract::refused("image-too-large", format!("{} x {} pixels; keep each side above 0 and the image under 64 megapixels", o.width, o.height)));
     }
     let text = std::fs::read_to_string(board).map_err(|e| crate::contract::failed("io", format!("reading {board}: {e}")))?;
-    std::fs::create_dir_all(work).map_err(|e| crate::contract::failed("io", format!("creating {}: {e}", work.display())))?;
+    crate::gate::make_work(work).map_err(|e| crate::contract::failed("io", format!("creating {}: {e}", work.display())))?;
     let copy = work.join("look.kicad_pcb");
     std::fs::write(&copy, with_stackup(&text, &stackup(f, layers))?).map_err(|e| crate::contract::failed("io", format!("writing {}: {e}", copy.display())))?;
     let (w, h) = (o.width.to_string(), o.height.to_string());

@@ -441,7 +441,6 @@ fn main() {
     let name = command_name(&cli.cmd);
     // a panic keeps the contract too: one envelope, outcome failed, exit 3 (review 5, 10)
     {
-        let json_mode = json_mode;
         std::panic::set_hook(Box::new(move |info| {
             let msg = format!("pcb panicked: {info}");
             if json_mode {
@@ -794,7 +793,7 @@ fn run(cli: Cli) -> Result<Reply> {
         Cmd::CompareGerbers { a, b, explain, board, align, work } => {
             let v = gerber::compare(&a, &b, explain.as_deref(), board.as_deref(), align, std::path::Path::new(&work))?;
             let ok = v["ok"].as_bool().unwrap_or(false);
-            let mut h = format!("{a} against {b}: {}", if ok { "every difference explained" } else { "unexplained differences" });
+            let mut h = format!("{a} (new) against {b} (golden): {}", if ok { "every difference explained" } else { "unexplained differences" });
             if let Some(e) = v["error"].as_str() {
                 h += &format!("\n  {e}");
             }
@@ -976,7 +975,7 @@ fn status(proj: &str, no_drc: bool, work: &str) -> Result<Reply> {
     let drc = if no_drc {
         serde_json::Value::Null
     } else {
-        std::fs::create_dir_all(work)?;
+        crate::gate::make_work(std::path::Path::new(work))?;
         match kicad::drc_counts(std::path::Path::new(work), &bp.to_string_lossy(), "status_drc") {
             Ok(m) => json!({ "total": m.values().sum::<usize>(), "by_key": m }),
             Err(e) => {

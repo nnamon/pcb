@@ -267,11 +267,10 @@ fn draw_part(sh: &mut Sheet, v: &View, f: &Footprint, own: bool) {
         sh.rect(a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs(), COURT, 0.12, "none", "");
     }
     // pin 1: a dot beside pad 1 (or A1) of a part with three or more pads
-    if f.pads.len() >= 3 {
-        if let Some(q) = f.pads.iter().find(|q| q.number == "1" || q.number == "A1") {
-            let (cx, cy) = v.p(q.x, q.y);
-            sh.circle(cx, cy, 0.35, INK, 0.0, INK);
-        }
+    if f.pads.len() >= 3
+        && let Some(q) = f.pads.iter().find(|q| q.number == "1" || q.number == "A1") {
+        let (cx, cy) = v.p(q.x, q.y);
+        sh.circle(cx, cy, 0.35, INK, 0.0, INK);
     }
 }
 
@@ -635,7 +634,7 @@ pub fn run(l: &Loaded, kind: &str, status: &str, rev: &str, out_dir: &str) -> Re
         let lcsc = node.find_all("property").find(|q| q.arg(1) == Some("LCSC")).and_then(|q| q.arg(2)).unwrap_or("").to_string();
         let mpn = std::fs::read_to_string(pdir.join(format!("{lcsc}.jlc.json"))).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.pointer("/part/componentModelEn").and_then(|x| x.as_str()).map(String::from)).unwrap_or_else(|| f.value.clone());
         let (x, y) = datum(f.x, f.y);
-        rows.push([f.reference.clone(), format!("{x:.3}"), format!("{y:.3}"), format!("{}", crate::sexpr::fmt_num(f.rot.rem_euclid(360.0))), if f.layer == "B.Cu" { "BOTTOM".into() } else { "TOP".into() }, lcsc, mpn]);
+        rows.push([f.reference.clone(), format!("{x:.3}"), format!("{y:.3}"), crate::sexpr::fmt_num(f.rot.rem_euclid(360.0)).to_string(), if f.layer == "B.Cu" { "BOTTOM".into() } else { "TOP".into() }, lcsc, mpn]);
     }
     rep.table_rows = rows.len();
     let cols = [("REF", 14.0), ("X", 14.0), ("Y", 14.0), ("ROT", 9.0), ("SIDE", 12.0), ("LCSC", 18.0), ("MPN", 42.0)];

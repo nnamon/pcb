@@ -2,6 +2,15 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.4.4 (10 Nov 2026)
+
+Cleanup after the badge carrier's 0.8.x releases.
+
+- Work folders mark themselves git-ignored: the highest folder a `--work` path makes, and any `pcb_work` above it, gets a `.gitignore` of `*`. The default `pcb_work` sits in the project folder and was one `git add -A` from being committed. The repository's `.gitignore` also ignores `pcb_work/` and a rejected write's side files (`*.rejected.kicad_*`).
+- `pcb compare-gerbers`: `data.sets` names the two sets and which is the new one and which the golden; the summary line says so too. Passed the other way round, a hole that moved read as the opposite move.
+- `drc-truncated`: the message and `docs/codes.md` say how to quiet a type the design means to break (`ignore` in the board's `.kicad_pro`), and that `pcb check` keeps the fab's kinds as errors.
+- Clippy clean, with two lints allowed crate-wide (`too_many_arguments`, `type_complexity`) and a reason at each local allow; dead code removed (`Atom.quoted`, `Edits::is_empty`). `cargo xtask test` runs clippy with `-D warnings` where the toolchain has it; the pinned image's minimal Rust profile does not, so there it is skipped and says so.
+
 ## 0.4.3 (6 Nov 2026)
 
 - `[[paste]] no_paste = true`: a pad loses its paste, for test pads and hand-fitted parts, which JLCPCB would otherwise print and reflow into solder bumps (Gate 2 fab finding on the badge carrier).

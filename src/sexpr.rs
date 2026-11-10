@@ -9,8 +9,8 @@ use anyhow::{Result, bail};
 #[derive(Debug, Clone)]
 pub enum Kind {
     List(Vec<Node>),
-    /// An atom; `quoted` is true for "strings".
-    Atom { text: String, quoted: bool },
+    /// An atom, quoted ("strings") or bare.
+    Atom { text: String },
 }
 
 #[derive(Debug, Clone)]
@@ -135,13 +135,13 @@ fn parse_node(src: &str, b: &[u8], i: &mut usize) -> Result<Node> {
                     }
                 }
             }
-            Ok(Node { kind: Kind::Atom { text, quoted: true }, span: (start, *i) })
+            Ok(Node { kind: Kind::Atom { text }, span: (start, *i) })
         }
         _ => {
             while *i < b.len() && !(b[*i] as char).is_ascii_whitespace() && b[*i] != b'(' && b[*i] != b')' {
                 *i += 1;
             }
-            Ok(Node { kind: Kind::Atom { text: src[start..*i].to_string(), quoted: false }, span: (start, *i) })
+            Ok(Node { kind: Kind::Atom { text: src[start..*i].to_string() }, span: (start, *i) })
         }
     }
 }
@@ -190,10 +190,6 @@ impl Edits {
     /// Insert before byte `at`.
     pub fn insert(&mut self, at: usize, text: impl Into<String>) {
         self.ops.push((at, at, text.into()));
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.ops.is_empty()
     }
 
     /// Apply to `src`. Overlapping edits are an error.
