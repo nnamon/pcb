@@ -308,6 +308,12 @@ KiCad DRC twice, on copies: once with the board's own rules, once with the fab's
 
 A `[[waiver]]` (check, item as check names it, `max`, why) covers a finding up to `max`; waived findings are listed with their reason, and a waiver that matches nothing, or whose finding counts more than `max`, is warned `waiver-unused` (`dfm` waivers are release's). Any unwaived finding makes the outcome rejected.
 
+### Fab files and M5a's checks (0.5.0)
+
+The fab's limits are one TOML file per process in `fab/`, built into the binary (`src/fab.rs`): `[limits]` (the project's design values, each with the fab's own figure and the day it was read beside it) and `[[economic_refuses]]` (board specs the Economic assembly service does not take). `pcb check` writes its KiCad rules from `[limits]`; `pcb release` and `pcb check --fab` pass the same limits to the Gerber read-back. A new process is a new file and a line in `fab.rs`.
+
+`pcb check` also reports: `spec` (layers and `[finish]` against `[[economic_refuses]]`, unless `[assembly] service = "standard"`); `via-in-pad` (a via's hole on a pasted pad of an assembled part); `paste-unassembled` (paste on a part left out of the CPL, when the board has any assembled part); `cpl-bottom` (parts assembled on the bottom: JLCPCB mirrors bottom rotations and pcb does not convert them yet); `edge-setting` (an outline with arcs, zones, and `min_copper_edge_clearance` under `cu_edge_arcs_mm`). `pcb check --fab` runs `release::read_back` in `<work>/fab` and lists each problem as a `fab` finding; `[[waiver]] check = "dfm"` entries apply to it as they do to a release.
+
 ### `pcb gate status|pass NAME`
 
 A gate's inputs are the board file, pcb.toml's content without its `[gates.*]` tables (parsed and written back as canonical TOML, so comments and layout do not count and a header-shaped line inside a string stays a string; review 16, 33), the board's `.kicad_pro` and `.kicad_dru` when present, and every file pcb.toml names (art, fonts), hashed with SHA-256 in that order. `pass` runs `check` and records `[gates.NAME]` (version, date, inputs) only when nothing is unwaived (`gate-check`). `status` says which gates are stale and why.

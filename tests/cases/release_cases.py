@@ -950,7 +950,9 @@ def g_readback():
         rnd += f'fp("H{i}", {x}, 15, [("", 0, 0, None, 1.0, 1.0, "npth")])\n'
         rnd += f'fp("P{i}", {x - 3}, {y}, [("1", 0, 0, "N{i}", 0.6, 0.6)])\ntrack("N{i}", {x - 3}, {y}, {x + 3}, {y}, 0.25)\n'
     d, t = case("npth_round", rnd)
-    want("r17 npth_round", npth_hits(t) == [(-12.0, 0.0), (-2.0, 0.0)], f"npth_copper: 0.05 and 0.09 mm found, 0.12 mm not ({npth_hits(t)})", t["release"])
+    # the verdict changed with the limit (M5a, 10 Nov 2026): review 17 judged against pcb's 0.1 mm; the fab file takes
+    # JLCPCB's NPTH to track, 0.2 mm, so the 0.12 mm case is found too
+    want("r17 npth_round", npth_hits(t) == [(-12.0, 0.0), (-2.0, 0.0), (8.0, 0.0)], f"npth_copper: 0.05, 0.09 and 0.12 mm found, under the fab's 0.2 mm ({npth_hits(t)})", t["release"])
 
     # source: review 17, npth_slot: 1.0 x 4.0 mm NPTH slots, upright and turned 30 degrees, a track 0.05 mm past each end
     slot = '''
@@ -1172,7 +1174,94 @@ def g_badge():
     want("r16 badge_release", ok, f"slots as stadiums, the badge's known opens only ({P.slim(rr)} opens {v.get('opens')} shorts {v.get('shorts')} gaps {gaps[:4]} {sorted(dfm)})", z, c, g, rr)
 
 
-for group in (g_golden, g_check, g_gate, g_stale, g_release, g_readback, g_paste_art, g_badge):
+def g_m5a():
+    """M5a (proposal, 10 Nov 2026): the checks the badge carrier's reviews did by hand, each on a small board."""
+    VIA = ('def via(n, x, y, size=0.6, drill=0.3):\n    v = pcbnew.PCB_VIA(b); v.SetPosition(P(x, y)); v.SetWidth(mm(size)); v.SetDrill(mm(drill)); v.SetNet(net(n)); b.Add(v)\n')
+
+    def checked(name, code, toml="", edit=None, fab=False):
+        d = F.synth(M3, name, VIA + code, toml_extra=toml)
+        if edit:
+            t = open(P.board(d)).read()
+            t2 = edit(t)
+            assert t2 != t, f"{name}: the board edit changed nothing"
+            open(P.board(d), "w").write(t2)
+        c = P.pcb("check", "--project", d, "--work", W(name + "_c"), *(["--fab"] if fab else []))
+        return d, c, {(f["check"], f["item"]): f for f in c["data"].get("findings", []) if not f["waived"]}
+
+    two = 'fp("R1", 10, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\nfp("R2", 20, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\ntrack("A", 10, 10, 20, 10, 0.25)\ntrack("B", 12, 10, 12, 12, 0.25)\ntrack("B", 12, 12, 22, 12, 0.25)\ntrack("B", 22, 12, 22, 10, 0.25)\n'
+
+    # source: badge carrier 0.8.0 (Gate 2 fab, C320.2): a via's hole on a pasted pad of an assembled part. R1.1 has a
+    # via at its centre; R2.1 one whose ring touches the pad and whose hole is 0.1 mm clear of it
+    d, c, f = checked("m5_via_in_pad", two + 'via("A", 10, 10)\nvia("A", 20, 10.75)\ntrack("A", 20, 10, 20, 10.75, 0.25)\n', edit=lambda t: lcsc("R2", "C22")(lcsc("R1")(t)))
+    want("m5a via_in_pad", ("via-in-pad", "R1.1") in f and ("via-in-pad", "R2.1") not in f, f"a hole on R1.1 found, a hole 0.1 mm off R2.1 not ({sorted(f)})", c)
+
+    # the same via on a part nobody assembles is no finding: no paste is printed there
+    d, c, f = checked("m5_via_in_pad_bare", two + 'via("A", 10, 10)\n')
+    want("m5a via_in_pad_unassembled", not any(k[0] == "via-in-pad" for k in f), f"no via-in-pad on a board with no assembled part ({sorted(f)})", c)
+
+    # source: badge carrier 0.7.0 (Gate 2 fab): a test pad left out of the CPL kept its paste. R1 is assembled, R2
+    # is not; then R2 with [[paste]]-style no paste (its paste layer removed) is clean
+    d, c, f = checked("m5_paste_unassembled", two, edit=lcsc("R1"))
+    want("m5a paste_unassembled", ("paste-unassembled", "R2") in f and f[("paste-unassembled", "R2")]["count"] == 2 and ("paste-unassembled", "R1") not in f,
+         f"paste on R2, left out of the CPL, found ({sorted(f)})", c)
+
+    def strip_r2_paste(t):
+        i = t.index('(property "Reference" "R2"')
+        return lcsc("R1")(t[:i] + t[i:].replace(' "F.Paste"', ""))
+    d, c, f = checked("m5_paste_unassembled_fixed", two, edit=strip_r2_paste)
+    want("m5a paste_unassembled_fixed", not any(k[0] == "paste-unassembled" for k in f), f"R2 without paste is clean ({sorted(f)})", c)
+
+    # source: badge carrier 0.7.2 (owner, 8 Nov 2026): a spec Economic assembly does not take. 2-layer black ENIG is
+    # refused, black lead-free HASL (0.8.0's spec) is not, and service = "standard" takes the ENIG board
+    fin = lambda copper, extra="": f'\n[finish]\nmask = "black"\nsilk = "white"\ncopper = "{copper}"\n{extra}'
+    d, c, f = checked("m5_spec_enig", two, toml=fin("enig"))
+    d, c2, f2 = checked("m5_spec_hasl", two, toml=fin("hasl-lead-free"))
+    d, c3, f3 = checked("m5_spec_standard", two, toml=fin("enig", '\n[assembly]\nservice = "standard"\n'))
+    d, c4, f4 = checked("m5_spec_bad_service", two, toml=fin("enig", '\n[assembly]\nservice = "cheap"\n'))
+    want("m5a spec", ("spec", "economic") in f and ("spec", "economic") not in f2 and ("spec", "economic") not in f3 and c4.get("code") == "config",
+         f"black ENIG refused for Economic, black HASL and a standard order not, an unknown service refused ({sorted(f)} {sorted(f2)} {sorted(f3)} {c4.get('code')})", c, c2, c3, c4)
+
+    # source: M5 proposal, assumption 1: parts assembled on the bottom are reported until their rotations are verified
+    def flip_r1(t):
+        i = t.index('(property "Reference" "R1"')
+        a = t.rfind("(footprint", 0, i)
+        e = t.index("(footprint", i) if "(footprint" in t[i:] else len(t)
+        blk = t[a:e].replace('"F.Cu"', '"B.Cu"').replace('"F.Paste"', '"B.Paste"').replace('"F.Mask"', '"B.Mask"')
+        return lcsc("R1")(t[:a] + blk + t[e:])
+    d, c, f = checked("m5_cpl_bottom", 'fp("R1", 10, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "A", 1.0, 1.0)])\ntrack("A", 10, 10, 12, 10, 0.25, pcbnew.B_Cu)\n', toml='\n[assembly]\nmachine_sides = ["top", "bottom"]\n', edit=flip_r1)
+    want("m5a cpl_bottom", ("cpl-bottom", "rotation") in f, f"a part assembled on the bottom is reported ({sorted(f)})", c)
+
+    # source: badge carrier 0.8.0 (Gate 2 fab): pour 0.299 mm from the edge at rounded corners. An outline with an arc
+    # and a zone: the board's copper-to-edge setting must be the fab file's value for arcs
+    arc = ('s = pcbnew.PCB_SHAPE(b); s.SetShape(pcbnew.SHAPE_T_CIRCLE); s.SetCenter(P(30, 20)); s.SetEnd(P(31.5, 20)); s.SetLayer(pcbnew.Edge_Cuts); s.SetWidth(mm(0.05)); b.Add(s)\n'
+           'fp("R1", 10, 10, [("1", 0, 0, "GND", 1.0, 1.0), ("2", 2, 0, "GND", 1.0, 1.0)])\nzone("GND", pcbnew.F_Cu, 2, 2, 25, 28)\n')
+    d = F.synth(M3, "m5_edge_setting", arc, fill=True)
+
+    def edge_setting(name, value):
+        pro = P.board(d).replace(".kicad_pcb", ".kicad_pro")
+        j = json.load(open(pro))
+        j["board"]["design_settings"]["rules"]["min_copper_edge_clearance"] = value
+        json.dump(j, open(pro, "w"))
+        c = P.pcb("check", "--project", d, "--work", W(name + "_c"))
+        return c, {(x["check"], x["item"]) for x in c["data"].get("findings", [])}
+    c, f = edge_setting("m5_edge_03", 0.3)
+    c2, f2 = edge_setting("m5_edge_035", 0.35)
+    want("m5a edge_setting", ("edge-setting", "copper-to-edge") in f and ("edge-setting", "copper-to-edge") not in f2, f"0.3 mm with arcs found, 0.35 mm not ({sorted(f)} {sorted(f2)})", c, c2)
+
+    # pcb check --fab: the read-back without a release. A 0.10 mm track is pcb check's own DRC finding and, with --fab,
+    # also the read-back's; same-net vias 0.1 mm apart and silkscreen over an open hole are the read-back's alone, and
+    # silkscreen over the tented vias is a warning
+    code = (two + 'fp("R3", 10, 20, [("1", 0, 0, "N", 1.0, 1.0), ("2", 6, 0, "N", 1.0, 1.0)])\ntrack("N", 10, 20, 16, 20, 0.10)\n'
+            'via("A", 15, 10)\nvia("A", 15.4, 10)\nline(pcbnew.F_SilkS, 14, 10, 16, 10, 0.3)\n'
+            'fp("H1", 30, 20, [("", 0, 0, None, 1.0, 1.0, "npth")])\nline(pcbnew.F_SilkS, 29, 20, 31, 20, 0.3)\n')
+    d, c, f = checked("m5_check_fab", code, fab=True)
+    d, c0, f0 = checked("m5_check_nofab", code)
+    fabs = sorted(k[1] for k in f if k[0] == "fab")
+    want("m5a check_fab", out_(c, "rejected") and "dfm trace F.Cu" in fabs and "dfm hole_hole_same drill" in fabs and "dfm silk_on_hole F.Silk" in fabs and not any(k[0] == "fab" for k in f0)
+         and "silk-on-via" in c["warnings"] and not os.path.exists(os.path.join(d, "order")), f"--fab reports the read-back's findings and makes no release ({fabs}; without --fab {sorted(k for k in f0 if k[0] == 'fab')})", c, c0)
+
+
+for group in (g_golden, g_check, g_gate, g_stale, g_release, g_readback, g_paste_art, g_badge, g_m5a):
     t0 = time.time()
     group()
     print(f"-- {group.__name__}: {time.time() - t0:.0f} s")

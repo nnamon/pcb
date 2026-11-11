@@ -96,7 +96,13 @@
               "testpoint",
               "silk",
               "ring",
-              "stale"
+              "stale",
+              "spec",
+              "via-in-pad",
+              "paste-unassembled",
+              "cpl-bottom",
+              "edge-setting",
+              "fab"
              ]
             },
             "item": {
@@ -125,6 +131,16 @@
           "type": "array",
           "items": {
            "type": "string"
+          }
+         },
+         "warnings": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "required": [
+            "code",
+            "message"
+           ]
           }
          }
         }

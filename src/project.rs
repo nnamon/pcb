@@ -338,6 +338,9 @@ pub struct Assembly {
     pub designators: BTreeMap<String, String>,
     /// Boards ordered assembled, for the stock check (`pcb parts`); default 5, JLCPCB's smallest order.
     pub boards: Option<u32>,
+    /// The assembly service ordered: "economic" (the default) or "standard". `pcb check` holds the board spec
+    /// (layers and `[finish]`) against what the Economic service takes.
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -793,8 +796,9 @@ pub fn check(p: &Project) -> Vec<String> {
         }
     }
     for w in &p.waiver {
-        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm") {
-            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring or dfm", w.item));
+        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting") {
+            // `spec` takes no waiver: a board the Economic service refuses is ordered with service = "standard"
+            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom or edge-setting", w.item));
         }
         if w.item.trim().is_empty() || w.why.trim().is_empty() {
             e.push(format!("waiver {:?}: needs an item and a why", w.item));
@@ -822,6 +826,10 @@ pub fn check(p: &Project) -> Vec<String> {
         if t.pads.len() < 2 {
             e.push(format!("net_tie {}: needs two or more pads", t.footprint));
         }
+    }
+    if let Some(sv) = p.assembly.as_ref().and_then(|a| a.service.as_deref())
+        && !matches!(sv, "economic" | "standard") {
+        e.push(format!("assembly.service {sv:?} is not economic or standard"));
     }
     if let Some(f) = &p.finish {
         if !MASK_COLOURS.contains(&f.mask.as_str()) {

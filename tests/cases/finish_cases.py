@@ -146,7 +146,8 @@ expect("usage_huge", v.get("outcome") == "refused" and (v.get("error") or {}).ge
 
 # 3. release prints the order options, or warns that there are none (the synthetic board's own read-back rejects it,
 # an open GND and silkscreen on its pads; the order options are reported either way)
-for name, extra, want in [("release_finish", finish("black", "white", "enig"), "PCB Color Black, Silkscreen White, Surface Finish ENIG"), ("release_unset", "", None)]:
+# black ENIG is a spec Economic assembly refuses (M5a `spec`), so this board is ordered with the standard service
+for name, extra, want in [("release_finish", finish("black", "white", "enig") + '\n[assembly]\nservice = "standard"\n', "PCB Color Black, Silkscreen White, Surface Finish ENIG"), ("release_unset", "", None)]:
     d = build(name, extra)
     v = run(name, "gate", "pass", "layout", "--project", d, "--work", os.path.join(d, "gw"))
     expect(name, v.get("outcome") == "done", f"gate passed ({v.get('outcome')} {v.get('error')})")

@@ -84,6 +84,35 @@ def find_layers(paths):
     return found
 
 
+def region_shape(pts):
+    """A Gerber region by the nonzero winding rule. A valid ring is itself. KiCad writes a plane with holes as one
+    contour with cut-in lines, and a contour may overlap itself; shapely's buffer(0) or make_valid can drop or invent
+    area there (GUIDELINES check 12), so the faces of the ring's own linework are kept where the winding number is
+    not zero."""
+    from shapely.geometry import LineString, Polygon
+    from shapely.ops import polygonize, unary_union
+    ring = list(pts)
+    if ring[0] == ring[-1]:
+        ring = ring[:-1]
+    if len(ring) < 3:
+        return None
+    poly = Polygon(ring)
+    if poly.is_valid:
+        return poly
+
+    def winding(x, y):
+        w = 0
+        for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+            if y1 <= y:
+                if y2 > y and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) > 0:
+                    w += 1
+            elif y2 <= y and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) < 0:
+                w -= 1
+        return w
+    faces = [f for f in polygonize(unary_union(LineString(ring + [ring[0]]))) if winding(*f.representative_point().coords[0]) != 0]
+    return unary_union(faces) if faces else None
+
+
 def prim_shape(p):
     from gerbonara.graphic_primitives import Arc, ArcPoly, Circle, Line, Rectangle
     from shapely.affinity import rotate
@@ -105,7 +134,7 @@ def prim_shape(p):
         except ZeroDivisionError:
             # an arc of no radius (KiCad writes one for a zero-length arc): its end points are the shape
             pts = [tuple(q) for q in p.outline]
-        return Polygon(pts).buffer(0) if len(pts) >= 3 else None
+        return region_shape(pts) if len(pts) >= 3 else None
     raise TypeError(f"gerber primitive {type(p).__name__}")
 
 
@@ -387,7 +416,16 @@ def compare(a_src, b_src, explain_path=None, board=None, align=False):
 
 
 # DFM limits from GUIDELINES.md's JLCPCB table (mm)
-DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, silk_line=0.15, npth_copper=0.1, inner_hole_comp=0.3, inner_hole_via=0.2)
+# the limits pcb gives from the fab file (fab/*.toml); these are the 2-layer file's, for a call without them
+DFM = dict(trace=0.15, gap=0.15, cu_edge=0.3, hole_hole=0.5, hole_hole_same=0.254, silk_line=0.15, npth_copper=0.2, inner_hole_comp=0.3, inner_hole_via=0.2, mask_dam=0.2)
+FAB_KEYS = dict(track_mm="trace", gap_mm="gap", cu_edge_mm="cu_edge", hole_hole_mm="hole_hole", hole_hole_same_net_mm="hole_hole_same", silk_line_mm="silk_line", npth_copper_mm="npth_copper", inner_hole_comp_mm="inner_hole_comp", inner_hole_via_mm="inner_hole_via", mask_dam_mm="mask_dam")
+
+
+def set_limits(text):
+    """Take the fab file's limits (JSON, as pcb passes them)."""
+    for k, v in (json.loads(text) if text else {}).items():
+        if k in FAB_KEYS and v is not None:
+            DFM[FAB_KEYS[k]] = float(v)
 # a feature counts as narrow when an opening this much under half the limit removes it: rounding in the plot. Copper
 # 0.0005 (review 16, 32: 0.005 let 0.14 mm through); silkscreen 0.005, as the art grown for print on the ordered
 # paddle-keyer has pieces of 0.14 to 0.15 mm, which printed
@@ -532,20 +570,24 @@ def verify(folder, board_path):
     for i in range(len(hl)):
         for jj in ht.query(hs[i].buffer(DFM["hole_hole"])):
             j = int(jj)
-            if j <= i or (hg[i] is not None and hg[i] == hg[j]):
+            if j <= i:
                 continue
+            # holes in one copper group may sit closer, down to the fab's same-net spacing (a drill breaks into its
+            # neighbour whatever the net)
+            same = hg[i] is not None and hg[i] == hg[j]
+            lim = DFM["hole_hole_same"] if same else DFM["hole_hole"]
             gap = hs[i].distance(hs[j])
-            if gap < DFM["hole_hole"] - 1e-3:
-                findings.append({"rule": "hole_hole", "layer": "drill", "at": [round(hl[i][0], 3), round(hl[i][1], 3)], "detail": f"{gap:.3f} mm edge to edge from the hole at ({hl[j][0]:.3f}, {hl[j][1]:.3f})"})
+            if gap < lim - 1e-3:
+                findings.append({"rule": "hole_hole_same" if same else "hole_hole", "layer": "drill", "at": [round(hl[i][0], 3), round(hl[i][1], 3)], "detail": f"{gap:.3f} mm edge to edge from the hole at ({hl[j][0]:.3f}, {hl[j][1]:.3f}){', same net' if same else ''} (limit {lim} mm)"})
     # copper over or beside an unplated hole: a fill made before the hole, or plotted stale (review 16, 30)
     for i, h in enumerate(hl):
         if h[3]:
             continue
         near = hs[i].buffer(DFM["npth_copper"])
         for k in cu:
-            if shapes[k].intersects(near):
-                gap = shapes[k].distance(hs[i])
-                findings.append({"rule": "npth_copper", "layer": k, "at": [round(h[0], 3), round(h[1], 3)], "detail": f"copper {gap:.3f} mm from an unplated hole of {h[2]:.3f} mm"})
+            gap = shapes[k].distance(hs[i]) if shapes[k].intersects(near) else None
+            if gap is not None and gap < DFM["npth_copper"] - 1e-3:
+                findings.append({"rule": "npth_copper", "layer": k, "at": [round(h[0], 3), round(h[1], 3)], "detail": f"copper {gap:.3f} mm from an unplated hole of {h[2]:.3f} mm (limit {DFM['npth_copper']} mm)"})
     # inner copper of another net beside a plated hole: JLCPCB's multilayer limit, 0.3 mm from a component hole and
     # 0.2 mm from a via (GUIDELINES.md; review 17, 40). A hole at a plated pad of the board is a component hole
     pth = [(pcbnew.ToMM(p.GetPosition().x) - cx, cy - pcbnew.ToMM(p.GetPosition().y)) for f in b.GetFootprints() for p in f.Pads() if p.GetDrillSize().x > 0]
@@ -575,7 +617,48 @@ def verify(folder, board_path):
                 for q in getattr(over, "geoms", [over]):
                     if not q.is_empty and q.area > 0.005:
                         findings.append({"rule": "silk_on_copper", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen on exposed copper"})
-    return {"layers": cu, "islands": len(islands), "plated_holes": sum(1 for h in hl if h[3]), "nets": len(by_net), "opens": opens, "shorts": shorts, "unplaced_pads": unplaced, "dfm": findings}
+    # silkscreen over a drilled hole (GUIDELINES check 13). Over a hole the mask leaves open, the ink goes into the
+    # hole: a finding. Over a tented via the ink sits on mask and only dips: counted and reported, not a problem
+    silk_on_vias = {}
+    for side in ("F", "B"):
+        sk, mk = f"{side}.Silk", f"{side}.Mask"
+        if sk not in lay or not hs:
+            continue
+        silk = layer_shape(lay[sk])
+        opened = layer_shape(lay[mk]) if mk in lay else None
+        for h in hs:
+            if not silk.intersects(h):
+                continue
+            q = silk.intersection(h)
+            if q.is_empty or q.area <= 0.005:
+                continue
+            if opened is not None and opened.intersects(h):
+                findings.append({"rule": "silk_on_hole", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen over a hole the mask leaves open"})
+            else:
+                silk_on_vias[sk] = silk_on_vias.get(sk, 0) + 1
+    # mask dams: two mask openings closer than the fab's solder mask bridge. The fab opens the mask across such a
+    # gap, so it is counted and reported, not a problem: fine-pitch pads lose their dams by design
+    dams = {}
+    for side in ("F", "B"):
+        mk = f"{side}.Mask"
+        if mk not in lay:
+            continue
+        ops = [q for q in getattr(layer_shape(lay[mk]), "geoms", []) if not q.is_empty]
+        if not ops:
+            continue
+        mt, n, narrowest = STRtree(ops), 0, None
+        for i, q in enumerate(ops):
+            for jj in mt.query(q.buffer(DFM["mask_dam"])):
+                j = int(jj)
+                if j <= i:
+                    continue
+                d = q.distance(ops[j])
+                if 0 < d < DFM["mask_dam"] - 1e-3:
+                    n += 1
+                    narrowest = d if narrowest is None else min(narrowest, d)
+        if n:
+            dams[mk] = {"count": n, "narrowest_mm": round(narrowest, 3), "limit_mm": DFM["mask_dam"]}
+    return {"layers": cu, "islands": len(islands), "plated_holes": sum(1 for h in hl if h[3]), "nets": len(by_net), "opens": opens, "shorts": shorts, "unplaced_pads": unplaced, "dfm": findings, "mask_dams": dams, "silk_on_tented_vias": silk_on_vias, "limits": dict(DFM)}
 
 
 def make_zip(folder, dest):
@@ -593,6 +676,7 @@ def make_zip(folder, dest):
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "verify":
+        set_limits(sys.argv[4] if len(sys.argv) > 4 else "")
         print(json.dumps(verify(sys.argv[2], sys.argv[3])))
     elif cmd == "zip":
         print(json.dumps(make_zip(sys.argv[2], sys.argv[3])))

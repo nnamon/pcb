@@ -142,4 +142,17 @@ findings = [
   "drc silk_over_copper <no net> GND", "drc silk_over_copper <no net> VBOOST", "drc silk_overlap <no net>",
   "drc starved_thermal GND", "drc unconnected_items GND", "drc unconnected_items PMUX_ILM", "drc unconnected_items VBUS_F",
   "drc via_dangling GND", "silk lines 0.1 mm", "silk lines 0.12 mm", "ring L601.3", "ring L601.4",
+  # M5a: paste on parts the CPL leaves out, as this early board had (test pads and unfitted parts)
+  "paste-unassembled C602", "paste-unassembled L601", "paste-unassembled R201", "paste-unassembled R202",
+  "paste-unassembled R502", "paste-unassembled TP101", "paste-unassembled TP103", "paste-unassembled TP104",
+  "paste-unassembled TP105", "paste-unassembled TP106", "paste-unassembled TP107", "paste-unassembled TP108",
+  "paste-unassembled TP109", "paste-unassembled TP110", "paste-unassembled TP111", "paste-unassembled TP112",
+  "paste-unassembled TP113", "paste-unassembled TP114", "paste-unassembled TP115", "paste-unassembled TP201",
+  "paste-unassembled TP202", "paste-unassembled TP203", "paste-unassembled TP204", "paste-unassembled TP301",
+  "paste-unassembled TP302", "paste-unassembled TP303", "paste-unassembled TP304", "paste-unassembled TP401",
+  "paste-unassembled TP402", "paste-unassembled TP403", "paste-unassembled TP404", "paste-unassembled TP405",
+  "paste-unassembled TP406", "paste-unassembled TP501", "paste-unassembled TP502", "paste-unassembled TP503",
+  "paste-unassembled TP504", "paste-unassembled TP505", "paste-unassembled TP506", "paste-unassembled TP507",
+  "paste-unassembled TP508", "paste-unassembled TP509", "paste-unassembled TP510", "paste-unassembled TP511",
+  "paste-unassembled TP601", "paste-unassembled TP602",
 ]

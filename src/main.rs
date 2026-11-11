@@ -8,6 +8,7 @@ mod diff;
 mod drawing;
 mod doctor;
 mod easyeda;
+mod fab;
 mod edit;
 mod footprint;
 mod freerouting;
@@ -208,6 +209,10 @@ enum Cmd {
         project: String,
         #[arg(long, default_value = "pcb_work/check")]
         work: String,
+        /// Also plot the Gerbers and drill files and read them back, as `pcb release` does: connectivity against
+        /// the board's nets and DFM against the fab file's limits, without making a release.
+        #[arg(long)]
+        fab: bool,
     },
     /// Process gates: `status` lists each recorded gate and whether its inputs have changed since; `pass NAME`
     /// records one, only when pcb check finds nothing unwaived
@@ -643,14 +648,15 @@ fn run(cli: Cli) -> Result<Reply> {
             })
         }
         Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
-        Cmd::Check { project: proj, work } => {
+        Cmd::Check { project: proj, work, fab } => {
             let l = project::load(&project::locate(&proj))?;
-            let r = check::run(&l, std::path::Path::new(&work))?;
+            let r = check::run_with(&l, std::path::Path::new(&work), fab)?;
             let mut h = format!("{} findings against {}, {} unwaived", r.findings.len(), r.fab, r.unwaived);
             for f in &r.findings {
                 h += &format!("\n  {} {}: {}", if f.waived.is_some() { "waived" } else { "FAIL  " }, f.check, f.message);
             }
-            let warnings: Vec<contract::Warning> = r.unused_waivers.iter().map(|w| contract::warn("waiver-unused", format!("waiver {w}"))).collect();
+            let mut warnings: Vec<contract::Warning> = r.unused_waivers.iter().map(|w| contract::warn("waiver-unused", format!("waiver {w}"))).collect();
+            warnings.extend(r.warnings.iter().cloned());
             Ok(Reply { outcome: if r.unwaived == 0 { Outcome::Done } else { Outcome::Rejected }, error: None, written: None, warnings, human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Sync { project: proj, rip, work, out } => {

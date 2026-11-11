@@ -85,6 +85,14 @@ item = "silk_on_copper F.Silk"
 max = 3
 why = "neighbouring parts' outlines cross pads (the silk_over_copper findings above); JLCPCB clips silkscreen off exposed copper"
 
+# Two unplated 0.7 mm holes at Gerber (±2.89, 24.755): the board was ordered and made as v1.0.0 with this copper. JLCPCB's page
+# gives 0.2 mm from an unplated hole to copper and says its engineers cut copper back where it is closer
+[[waiver]]
+check = "dfm"
+item = "npth_copper F.Cu"
+max = 2
+why = "0.171 mm at two unplated 0.7 mm holes; made as v1.0.0, JLCPCB cuts the copper back"
+
 [nets.VBUS]
 current_a = 0.5
 [nets.V3V3]

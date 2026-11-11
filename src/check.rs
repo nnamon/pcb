@@ -8,6 +8,13 @@
 //! - **side:** an assembled part on a side the assembler does not place (`[assembly] machine_sides`).
 //! - **paste:** an SMD pad of an assembled part with no paste opening and no paste window in its footprint.
 //! - **testpoint:** a `[bringup] test_points` reference that is not on the board, or has no exposed outer pad.
+//! - **spec** (M5a): the board spec (layers, `[finish]`) is one the Economic assembly service takes, unless
+//!   `[assembly] service = "standard"`.
+//! - **via-in-pad** (M5a): a via's hole on a pasted SMD pad of an assembled part; open, it wicks the solder away.
+//! - **paste-unassembled** (M5a): paste on a part the CPL leaves out (test pads, hand-fitted and DNP parts), on a side
+//!   that gets a stencil.
+//! - **cpl-bottom** (M5a): parts assembled on the bottom; their CPL rotation is not verified against JLCPCB's.
+//! - **edge-setting** (M5a): an outline with arcs and a board copper-to-edge setting under the fab file's value for it.
 //!
 //! A finding a `[[waiver]]` names (check, item, up to `max`) is listed with the waiver's reason and does not fail.
 
@@ -19,32 +26,8 @@ use anyhow::Result;
 use serde::Serialize;
 use std::path::Path;
 
-/// JLCPCB's limits as KiCad custom rules (GUIDELINES.md, "JLCPCB rules and part selection").
-const RULES_2LAYER: &str = r#"
-(rule "pcb fab: track width" (severity error) (constraint track_width (min 0.15mm)))
-(rule "pcb fab: clearance" (severity error) (constraint clearance (min 0.15mm)))
-(rule "pcb fab: via drill" (severity error) (condition "A.Type == 'Via'") (constraint hole_size (min 0.3mm)))
-(rule "pcb fab: via pad" (severity error) (condition "A.Type == 'Via'") (constraint via_diameter (min 0.6mm)))
-(rule "pcb fab: hole to hole, other nets" (severity error) (condition "A.Net != B.Net") (constraint hole_to_hole (min 0.5mm)))
-(rule "pcb fab: copper to edge" (severity error) (constraint edge_clearance (min 0.3mm)))
-"#;
-const RULES_4LAYER_INNER: &str = r#"
-(rule "pcb fab: inner copper to via holes" (severity error) (layer inner) (condition "B.Type == 'Via' && A.Net != B.Net") (constraint hole_clearance (min 0.2mm)))
-(rule "pcb fab: inner copper to component holes" (severity error) (layer inner) (condition "B.Type == 'Pad' && B.Pad_Type == 'Through-hole' && A.Net != B.Net") (constraint hole_clearance (min 0.3mm)))
-"#;
-
-/// The fab's rules and the copper layer count they are for.
 /// The DRC kinds the fab rules report under.
 const FAB_KINDS: &[&str] = &["track_width", "clearance", "hole_size", "via_diameter", "hole_to_hole", "copper_edge_clearance", "hole_clearance"];
-
-pub fn fab_rules(fab: &str) -> Option<(String, u32)> {
-    match fab {
-        "jlcpcb-2layer-1.6mm" => Some((RULES_2LAYER.to_string(), 2)),
-        "jlcpcb-4layer-1.6mm" => Some((format!("{RULES_2LAYER}{RULES_4LAYER_INNER}"), 4)),
-        "jlcpcb-6layer-1.6mm" => Some((format!("{RULES_2LAYER}{RULES_4LAYER_INNER}"), 6)),
-        _ => None,
-    }
-}
 
 #[derive(Serialize, Clone)]
 pub struct Finding {
@@ -63,6 +46,9 @@ pub struct Report {
     pub unwaived: usize,
     /// Waivers that matched nothing: stale, or misspelt.
     pub unused_waivers: Vec<String>,
+    /// From the read-back (`--fab`): things to look at that do not fail the check.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<crate::contract::Warning>,
 }
 
 /// IPC-2221 track width (mm) for a current at a 10 °C rise, outer or inner layer.
@@ -130,15 +116,26 @@ fn content(text: &str) -> Result<Vec<String>> {
     Ok(v)
 }
 
+/// mm from a point to a pad's copper (its turned bounding rectangle); 0 inside it.
+fn pad_gap(p: &crate::board::Pad, q: (f64, f64)) -> f64 {
+    let (lx, ly) = crate::board::rotate(q.0 - p.x, q.1 - p.y, -p.rot);
+    (lx.abs() - p.w / 2.0).max(0.0).hypot((ly.abs() - p.h / 2.0).max(0.0))
+}
+
 /// `pcb check`: see the module documentation.
 pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
+    run_with(l, work, false)
+}
+
+/// As `run`; with `fab`, the Gerbers are plotted and read back too (`pcb check --fab`), each problem a `fab` finding.
+pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> {
     let p = &l.project;
     let problems = crate::project::check(p);
     if !problems.is_empty() {
         return Err(refused("config", format!("{} problem(s) in {}: {}", problems.len(), l.path.display(), problems.join("; "))));
     }
-    let rules = fab_rules(&p.project.fab).ok_or_else(|| refused("config", format!("project.fab {:?} is not a rule set pcb has (jlcpcb-2layer-1.6mm, jlcpcb-4layer-1.6mm, jlcpcb-6layer-1.6mm)", p.project.fab)))?;
-    let (rules, fab_layers) = rules;
+    let fab = crate::fab::load(&p.project.fab).ok_or_else(|| refused("config", format!("project.fab {:?} is not a rule set pcb has ({})", p.project.fab, crate::fab::names().join(", "))))?;
+    let (rules, fab_layers, lim) = (fab.kicad_rules(), fab.layers, fab.limits.clone());
     crate::gate::check_work(work)?;
     crate::gate::make_work(work)?;
     let board_path = l.board_path();
@@ -237,18 +234,42 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     }
 
     // side, paste
+    let mut bottom_assembled = 0usize;
     let asm = p.assembly.as_ref();
     let sides: Vec<String> = asm.map(|x| x.machine_sides.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| vec!["top".into()]);
     let hand: Vec<String> = asm.map(|x| x.hand_fit.clone()).unwrap_or_default();
+    let mut is_assembled = vec![];
     for fp in &b.footprints {
         let node = sexpr::parse(&b.src[fp.span.0..fp.span.1])?;
         let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
         let attrs: Vec<String> = node.find("attr").map(|a| a.items()[1..].iter().filter_map(|x| x.atom().map(String::from)).collect()).unwrap_or_default();
-        let assembled = !prop("LCSC").is_empty() && !hand.contains(&fp.reference) && !attrs.iter().any(|a| a == "exclude_from_bom" || a == "exclude_from_pos_files" || a == "dnp");
+        is_assembled.push(!prop("LCSC").is_empty() && !hand.contains(&fp.reference) && !attrs.iter().any(|a| a == "exclude_from_bom" || a == "exclude_from_pos_files" || a == "dnp"));
+    }
+    // a board with no assembled part gets no stencil
+    let stencil = is_assembled.iter().any(|a| *a);
+    for (fp, assembled) in b.footprints.iter().zip(is_assembled) {
+        let side = if fp.layer == "B.Cu" { "bottom" } else { "top" };
         if !assembled {
+            // paste on a part the CPL leaves out, on a side that gets a stencil: JLCPCB prints and reflows it into
+            // solder bumps (GUIDELINES check 14; the badge carrier 0.7.0 missed a new test pad)
+            let pasted = fp.pads.iter().filter(|q| q.layers.iter().any(|x| (x == "F.Paste" && sides.iter().any(|s| s == "top")) || (x == "B.Paste" && sides.iter().any(|s| s == "bottom")))).count();
+            if pasted > 0 && stencil {
+                add("paste-unassembled", fp.reference.clone(), pasted, format!("{} is left out of the CPL but {pasted} of its pads carry paste; give it [[paste]] no_paste = true", fp.reference));
+            }
             continue;
         }
-        let side = if fp.layer == "B.Cu" { "bottom" } else { "top" };
+        if side == "bottom" && sides.iter().any(|s| s == "bottom") {
+            bottom_assembled += 1;
+        }
+        // a via's hole on a pasted pad (GUIDELINES, Layout: vias out of printed SMD pads; the badge carrier 0.6.0's
+        // router and 0.8.0's ground-join script each left one)
+        for q in fp.pads.iter().filter(|q| q.kind == "smd" && q.layers.iter().any(|x| x.ends_with(".Paste"))) {
+            let on = if q.layers.iter().any(|x| x == "B.Cu") { "B.Cu" } else { "F.Cu" };
+            let n = b.vias.iter().filter(|v| v.layers.iter().any(|x| x == on) && pad_gap(q, (v.x, v.y)) < v.drill / 2.0 - 1e-6).count();
+            if n > 0 {
+                add("via-in-pad", format!("{}.{}", fp.reference, q.number), n, format!("{}.{}: {n} via hole(s) on the pad; an open hole wicks the solder from the joint. Move the via off the pad, or waive it if the vias are plugged or the pad is a thermal pad", fp.reference, q.number));
+            }
+        }
         if !sides.iter().any(|s| s == side) {
             add("side", fp.reference.clone(), 1, format!("{} is assembled on the {side}, a side the assembler does not place ({})", fp.reference, sides.join(", ")));
         }
@@ -260,6 +281,27 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
             if !q.layers.iter().any(|x| x == paste) && !windowed {
                 add("paste", format!("{}.{}", fp.reference, q.number), 1, format!("{}.{} is an SMD pad of an assembled part with no paste opening", fp.reference, q.number));
             }
+        }
+    }
+
+    // the CPL's rotations are solved against JLCPCB's footprints for the top only; JLCPCB mirrors the bottom's, and
+    // has changed how more than once (M5 proposal, assumption 1)
+    if bottom_assembled > 0 {
+        add("cpl-bottom", "rotation".into(), bottom_assembled, format!("{bottom_assembled} part(s) are assembled on the bottom; pcb does not solve or convert bottom-side CPL rotations. Check each in JLCPCB's placement preview, then waive this with the date"));
+    }
+    // the board spec against the assembly service (GUIDELINES check 16; the badge carrier 0.7.2 was 4-layer black
+    // ENIG with Economic assembly)
+    if let (Some(fin), true) = (&p.finish, asm.and_then(|a| a.service.as_deref()).unwrap_or("economic") == "economic")
+        && let Some(why) = fab.economic_refusal(p.project.layers, &fin.mask, &fin.copper) {
+        add("spec", "economic".into(), 1, format!("{} layers, {} mask, {}: {why} (fab file read {}). Change the spec, or set [assembly] service = \"standard\"", p.project.layers, fin.mask, fin.copper, fab.checked));
+    }
+    // an outline with arcs: pours fill to chords of a rounded corner and read back under the limit, so the board's
+    // own copper-to-edge setting carries the margin (GUIDELINES; the badge carrier 0.8.0 read back 0.299 mm)
+    let arcs = b.root.items().iter().any(|g| matches!(g.head(), Some("gr_arc" | "gr_circle")) && g.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts"));
+    if arcs && !b.zones.is_empty() {
+        let set = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.pointer("/board/design_settings/rules/min_copper_edge_clearance").and_then(|x| x.as_f64()));
+        if set.is_none_or(|v| v + 1e-9 < lim.cu_edge_arcs_mm) {
+            add("edge-setting", "copper-to-edge".into(), 1, format!("the outline has arcs and the board's copper-to-edge setting is {}; set min_copper_edge_clearance to {} mm in the .kicad_pro so pours clear {} mm in the Gerbers", set.map(|v| format!("{v} mm")).unwrap_or_else(|| "not set".into()), lim.cu_edge_arcs_mm, lim.cu_edge_mm));
         }
     }
 
@@ -278,12 +320,12 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
         }
     }
 
-    // silkscreen and holes against GUIDELINES.md's JLCPCB table: lines 0.15 mm, text 0.6 mm cap height; annular
-    // rings 0.13 mm on vias and 0.2 mm on plated pads (check 13)
+    // silkscreen and holes against the fab file's limits: line width, text cap height, annular rings on vias and
+    // plated pads (check 13)
     // one finding per width: a footprint library draws its silkscreen at one width, so the width names the fault
     let mut thin: std::collections::BTreeMap<String, (usize, std::collections::BTreeSet<String>)> = std::collections::BTreeMap::new();
     for (w, what) in b.silk_widths() {
-        if w + 1e-6 < 0.15 && w > 0.0 {
+        if w + 1e-6 < lim.silk_line_mm && w > 0.0 {
             let e = thin.entry(format!("lines {} mm", sexpr::fmt_num(w))).or_default();
             e.0 += 1;
             e.1.insert(what);
@@ -291,28 +333,43 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
     }
     for (item, (n, owners)) in thin {
         let list: Vec<&String> = owners.iter().take(8).collect();
-        add("silk", item.clone(), n, format!("{n} silkscreen {item} wide, under 0.15 mm, on {} ({}{})", owners.len(), list.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", "), if owners.len() > 8 { ", ..." } else { "" }));
+        add("silk", item.clone(), n, format!("{n} silkscreen {item} wide, under {} mm, on {} ({}{})", lim.silk_line_mm, owners.len(), list.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", "), if owners.len() > 8 { ", ..." } else { "" }));
     }
     for t in &p.text {
-        if t.layer.ends_with("SilkS") && t.cap_mm + 1e-9 < 0.6 {
-            add("silk", format!("text {}", t.name), 1, format!("text {:?} is {} mm cap height, under 0.6 mm", t.text, t.cap_mm));
+        if t.layer.ends_with("SilkS") && t.cap_mm + 1e-9 < lim.silk_text_mm {
+            add("silk", format!("text {}", t.name), 1, format!("text {:?} is {} mm cap height, under {} mm", t.text, t.cap_mm, lim.silk_text_mm));
         }
     }
     for v in &b.vias {
         let ring = (v.size - v.drill) / 2.0;
-        if ring + 1e-6 < 0.13 {
-            add("ring", format!("via {} {} {}", v.net, sexpr::fmt_num(v.x), sexpr::fmt_num(v.y)), 1, format!("via of {} at ({}, {}): annular ring {ring:.3} mm, under 0.13 mm", v.net, sexpr::fmt_num(v.x), sexpr::fmt_num(v.y)));
+        if ring + 1e-6 < lim.ring_via_mm {
+            add("ring", format!("via {} {} {}", v.net, sexpr::fmt_num(v.x), sexpr::fmt_num(v.y)), 1, format!("via of {} at ({}, {}): annular ring {ring:.3} mm, under {} mm", v.net, sexpr::fmt_num(v.x), sexpr::fmt_num(v.y), lim.ring_via_mm));
         }
     }
     for fp in &b.footprints {
         for q in fp.pads.iter().filter(|q| q.kind == "thru_hole") {
             if let Some((dw, dh)) = q.drill {
                 let ring = ((q.w - dw).min(q.h - dh)) / 2.0;
-                if ring + 1e-6 < 0.2 {
-                    add("ring", format!("{}.{}", fp.reference, q.number), 1, format!("{}.{}: annular ring {ring:.3} mm, under 0.2 mm", fp.reference, q.number));
+                if ring + 1e-6 < lim.ring_pth_mm {
+                    add("ring", format!("{}.{}", fp.reference, q.number), 1, format!("{}.{}: annular ring {ring:.3} mm, under {} mm", fp.reference, q.number, lim.ring_pth_mm));
                 }
             }
         }
+    }
+
+    // the files as the fab will read them (M5a): what pcb release would refuse, found before a release is made
+    let mut warnings = vec![];
+    if fab_read_back {
+        let rb = crate::release::read_back(l, &b, &work.join("fab"))?;
+        let mut groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        for pr in rb.problems {
+            let (item, detail) = pr.split_once(": ").map(|(a, c)| (a.to_string(), c.to_string())).unwrap_or((pr.clone(), String::new()));
+            groups.entry(item).or_default().push(detail);
+        }
+        for (item, list) in groups {
+            add("fab", item.clone(), list.len(), format!("{item}: {}{}", list.iter().take(3).cloned().collect::<Vec<_>>().join("; "), if list.len() > 3 { format!("; and {} more", list.len() - 3) } else { String::new() }));
+        }
+        warnings = rb.warnings;
     }
 
     // waivers
@@ -335,7 +392,7 @@ pub fn run(l: &Loaded, work: &Path) -> Result<Report> {
             None => format!("{} {} matched nothing", w.check, w.item),
         })
         .collect();
-    Ok(Report { fab: p.project.fab.clone(), findings: f, unwaived, unused_waivers })
+    Ok(Report { fab: p.project.fab.clone(), findings: f, unwaived, unused_waivers, warnings })
 }
 
 #[cfg(test)]

@@ -76,6 +76,8 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `waiver-unused` | check | A `[[waiver]]` matched no finding (stale or misspelt), or its finding counts more than its `max` |
 | `stale` | check | A finding, not a warning: `pcb zone`, `pcb paste` or `pcb art` has not run since pcb.toml's settings for it, or a file they name, changed. Run it again; no waiver covers it |
 | `bottom-cpl-unverified` | release | The CPL has bottom-side parts, whose rotation convention pcb has not checked against JLCPCB's |
+| `silk-on-via` | release, check --fab | Silkscreen crosses tented via holes; the ink dips into each. Move the text or the via if the text matters |
+| `mask-dam` | release, check --fab | Mask openings closer together than the fab's solder mask bridge (fab file `mask_dam_mm`): the fab opens the mask across the gap. Inspect those pads for solder bridges |
 | `version-not-on-board` | release | No `[[text]]` entry prints the project version on the board (`{version}`) |
 | `finish-unset` | release, render | pcb.toml has no `[finish]`: release has no order options to print, and `render --look` falls back to green mask, white silkscreen, lead-free HASL |
 | `drc-allowed` | zone | A DRC kind grew within its `pcb.toml [[drc_allow]]` allowance; the message names it |

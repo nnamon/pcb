@@ -1,0 +1,48 @@
+# JLCPCB, 4 layers, 1.6 mm, 1 oz outer, 0.5 oz inner
+#
+# One file per fab process. `pcb check` turns [limits] into KiCad rules; the release read-back measures the Gerbers
+# against the same numbers. Each limit is the project's design value (GUIDELINES.md, "JLCPCB rules and part
+# selection"), never under the fab's own, which is given beside it.
+#
+# Fab's figures: JLCPCB PCB capabilities, https://api.jlcpcb.com/capabilities/Capabilities, read 10 Nov 2026.
+# Inner-layer and assembly figures: GUIDELINES.md (multilayer capabilities, 30 Oct 2026; assembly capabilities, 8 Nov 2026).
+
+name = "jlcpcb-4layer-1.6mm"
+layers = 4
+checked = "2026-11-10"
+
+[limits]
+track_mm = 0.15                 # fab 0.127
+gap_mm = 0.15                   # fab 0.127
+via_drill_mm = 0.3              # fab 0.3 on 2 layers, 0.2 on more
+via_pad_mm = 0.6                # fab 0.5 on 2 layers, 0.45 on more
+hole_hole_mm = 0.5              # holes of different nets, edge to edge; fab 0.5
+hole_hole_same_net_mm = 0.254   # fab: via to via, same net (api. page; a later page gives via hole-to-hole 0.2)
+cu_edge_mm = 0.3                # fab 0.2 to a routed edge
+cu_edge_arcs_mm = 0.35          # an outline with arcs: pours fill to chords and read back under 0.3 (badge carrier 0.8.0)
+npth_copper_mm = 0.2            # fab: NPTH to track 0.2 (jlcpcb.com capabilities, read at Gate 2 0.8.1, 9 Nov 2026; the api. page says 0.254). paddle-keyer v1.0.0 was made with 0.2
+ring_via_mm = 0.13              # fab 0.13 (1 oz)
+ring_pth_mm = 0.2               # fab 0.13; the project's value for hand-soldered parts
+silk_line_mm = 0.15             # fab 0.153; 0.15 printed on the adapter A test (Oct 2026)
+silk_text_mm = 0.6              # fab 1.0; the project's floor in a bold font
+mask_dam_mm = 0.2               # fab: solder mask bridge, green
+mask_dam_other_mm = 0.254       # fab: solder mask bridge, other colours
+inner_hole_via_mm = 0.2         # inner copper of another net to a via hole
+inner_hole_comp_mm = 0.3        # inner copper of another net to a component hole
+
+# Board specs JLCPCB's Economic assembly does not take (assembly capabilities page, 8 Nov 2026). A spec not listed
+# here is not known to be refused: check the page on order day (GUIDELINES check 16).
+[[economic_refuses]]
+when = { layers = 4 }
+unless_mask = ["green"]
+why = "Economic assembly takes 4-layer boards in green only"
+
+[[economic_refuses]]
+when = { copper = "enig" }
+unless_mask = ["green"]
+why = "Economic assembly takes ENIG on green boards only"
+
+[[economic_refuses]]
+when = { layers = 2, mask = "black" }
+unless_copper = ["hasl", "hasl-lead-free"]
+why = "Economic assembly takes black 2-layer boards with HASL only"

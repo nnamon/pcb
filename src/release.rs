@@ -127,68 +127,17 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
     }
     rep.version_on_board = p.text.iter().any(|t| t.text.contains("{version}") || t.text.contains(&p.project.version));
 
-    // 1. Gerbers and drill files
-    let gdir = work.join("gerbers");
-    if gdir.exists() {
-        std::fs::remove_dir_all(&gdir)?;
-    }
-    std::fs::create_dir_all(&gdir)?;
-    let mut layers: Vec<String> = b.copper_layers.clone();
-    layers.extend(["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"].iter().map(|s| s.to_string()));
-    // paste only for the sides the assembler places (no stencil for test pads on a side nobody assembles)
+    // 1. Gerbers and drill files, and the files as the fab will read them
+    let rb = read_back(l, &b, work)?;
+    rep.gerber_layers = rb.layers;
+    let zip = out.join(format!("{stem}_gerbers.zip"));
+    crate::gerber::helper(work, &["zip", &rb.folder, zip.to_str().unwrap()])?;
+    rep.problems.extend(rb.problems);
+    rep.warnings.extend(rb.warnings);
+    let (cx, cy) = rb.centre;
     let asm = p.assembly.as_ref();
     let sides: Vec<String> = asm.map(|a| a.machine_sides.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| vec!["top".into()]);
-    layers.retain(|l| match l.as_str() {
-        "F.Paste" => sides.iter().any(|s| s == "top"),
-        "B.Paste" => sides.iter().any(|s| s == "bottom"),
-        _ => true,
-    });
-    let lj = layers.join(",");
-    let g = gdir.to_string_lossy().to_string();
-    // one frame for every file: the outline's centre at the origin, y up, as the CPL (GUIDELINES checks 11 and 16).
-    // KiCad plots from the drill/place origin when asked, so a copy of the board gets it at the outline's centre
-    let (bx0, by0, bx1, by1) = b.bbox();
-    let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
-    let plot = work.join("plot.kicad_pcb");
-    let mut plot_text = with_aux_origin(&b, cx, cy)?;
-    // the fills as KiCad makes them now, not as the board stored them: pcb check judges fresh fills, so release plots
-    // them too (review 16, 30). KiCad fills a marked copy; only the fills come back, so the plotted file keeps the
-    // board's own order and a second release gives the same files
-    if !b.zones.is_empty() {
-        let filled = work.join("plot_filled.kicad_pcb");
-        std::fs::write(&filled, crate::gate::mark_zones(&plot_text)?)?;
-        crate::kicad::copy_rules(Path::new(&board_path), &filled)?;
-        crate::kicad::helper(work, &["fill", filled.to_str().unwrap()])?;
-        plot_text = crate::gate::splice_fills(&plot_text, &std::fs::read_to_string(&filled)?)?;
-    }
-    std::fs::write(&plot, plot_text)?;
-    crate::kicad::copy_rules(Path::new(&board_path), &plot)?;
-    let pb = plot.to_string_lossy().to_string();
-    kicad_cli(&["pcb", "export", "gerbers", "--layers", &lj, "--no-protel-ext", "--use-drill-file-origin", "-o", &format!("{g}/"), &pb])?;
-    kicad_cli(&["pcb", "export", "drill", "--excellon-separate-th", "--excellon-units", "mm", "--drill-origin", "plot", "-o", &format!("{g}/"), &pb])?;
-    rep.gerber_layers = layers;
-    let zip = out.join(format!("{stem}_gerbers.zip"));
-    crate::gerber::helper(work, &["zip", &g, zip.to_str().unwrap()])?;
-    // the files as the fab will read them
-    let v = crate::gerber::helper(work, &["verify", &g, &board_path])?;
-    for (k, what) in [("opens", "open"), ("shorts", "short"), ("unplaced_pads", "pad in no copper")] {
-        for x in v[k].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
-            rep.problems.push(format!("{what}: {x}"));
-        }
-    }
-    let mut counts: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for f in v["dfm"].as_array().into_iter().flatten() {
-        let item = format!("{} {}", f["rule"].as_str().unwrap_or("?"), f["layer"].as_str().unwrap_or("?"));
-        counts.entry(item).or_default().push(format!("{} at {}", f["detail"].as_str().unwrap_or(""), f["at"]));
-    }
-    for (item, list) in counts {
-        // inner copper too close to a hole is outside what JLCPCB will make: no waiver covers it (owner, 5 Nov 2026;
-        // review 17, 40)
-        let waived = !item.starts_with("inner_hole ") && p.waiver.iter().any(|w| w.check == "dfm" && w.item == item && list.len() <= w.max.unwrap_or(1));
-        if !waived {
-            rep.problems.extend(list.iter().map(|d| format!("dfm {item}: {d}")));
-        }
-    }
+    let v = rb.verify;
     rep.verify = v;
 
     // the board as the circuit and the places say (review 20, 61): what check calls stale sync or place is a problem
@@ -291,6 +240,98 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
         rep.written = aside;
     }
     Ok(rep)
+}
+
+/// What the fab will read: the Gerbers and drill files plotted into `<work>/gerbers`, read back as shapes.
+pub struct ReadBack {
+    pub folder: String,
+    pub layers: Vec<String>,
+    /// The outline's centre: the files' origin.
+    pub centre: (f64, f64),
+    pub verify: serde_json::Value,
+    pub problems: Vec<String>,
+    pub warnings: Vec<crate::contract::Warning>,
+}
+
+/// Plot the board as `pcb release` does and read the files back: connectivity against the board's nets, and DFM
+/// against the fab file's limits. `pcb check --fab` runs this without making a release (M5a).
+pub fn read_back(l: &Loaded, b: &Board, work: &Path) -> Result<ReadBack> {
+    let p = &l.project;
+    let board_path = l.board_path().to_string_lossy().to_string();
+    let mut problems: Vec<String> = vec![];
+    let mut warnings = vec![];
+    let gdir = work.join("gerbers");
+    if gdir.exists() {
+        std::fs::remove_dir_all(&gdir)?;
+    }
+    std::fs::create_dir_all(&gdir)?;
+    let mut layers: Vec<String> = b.copper_layers.clone();
+    layers.extend(["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"].iter().map(|s| s.to_string()));
+    // paste only for the sides the assembler places (no stencil for test pads on a side nobody assembles)
+    let asm = p.assembly.as_ref();
+    let sides: Vec<String> = asm.map(|a| a.machine_sides.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| vec!["top".into()]);
+    layers.retain(|l| match l.as_str() {
+        "F.Paste" => sides.iter().any(|s| s == "top"),
+        "B.Paste" => sides.iter().any(|s| s == "bottom"),
+        _ => true,
+    });
+    let lj = layers.join(",");
+    let g = gdir.to_string_lossy().to_string();
+    // one frame for every file: the outline's centre at the origin, y up, as the CPL (GUIDELINES checks 11 and 16).
+    // KiCad plots from the drill/place origin when asked, so a copy of the board gets it at the outline's centre
+    let (bx0, by0, bx1, by1) = b.bbox();
+    let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
+    let plot = work.join("plot.kicad_pcb");
+    let mut plot_text = with_aux_origin(&b, cx, cy)?;
+    // the fills as KiCad makes them now, not as the board stored them: pcb check judges fresh fills, so release plots
+    // them too (review 16, 30). KiCad fills a marked copy; only the fills come back, so the plotted file keeps the
+    // board's own order and a second release gives the same files
+    if !b.zones.is_empty() {
+        let filled = work.join("plot_filled.kicad_pcb");
+        std::fs::write(&filled, crate::gate::mark_zones(&plot_text)?)?;
+        crate::kicad::copy_rules(Path::new(&board_path), &filled)?;
+        crate::kicad::helper(work, &["fill", filled.to_str().unwrap()])?;
+        plot_text = crate::gate::splice_fills(&plot_text, &std::fs::read_to_string(&filled)?)?;
+    }
+    std::fs::write(&plot, plot_text)?;
+    crate::kicad::copy_rules(Path::new(&board_path), &plot)?;
+    let pb = plot.to_string_lossy().to_string();
+    kicad_cli(&["pcb", "export", "gerbers", "--layers", &lj, "--no-protel-ext", "--use-drill-file-origin", "-o", &format!("{g}/"), &pb])?;
+    kicad_cli(&["pcb", "export", "drill", "--excellon-separate-th", "--excellon-units", "mm", "--drill-origin", "plot", "-o", &format!("{g}/"), &pb])?;
+    // the files as the fab will read them
+    // the fab file's limits, the ones pcb check made its rules from (M5a)
+    let fab = crate::fab::load(&p.project.fab).ok_or_else(|| refused("config", format!("project.fab {:?} is not a rule set pcb has ({})", p.project.fab, crate::fab::names().join(", "))))?;
+    let green = l.project.finish.as_ref().is_none_or(|f| f.mask == "green");
+    let mut limits = serde_json::to_value(&fab.limits)?;
+    limits["mask_dam_mm"] = serde_json::json!(if green { fab.limits.mask_dam_mm } else { fab.limits.mask_dam_other_mm });
+    let v = crate::gerber::helper(work, &["verify", &g, &board_path, &limits.to_string()])?;
+    for (k, what) in [("opens", "open"), ("shorts", "short"), ("unplaced_pads", "pad in no copper")] {
+        for x in v[k].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+            problems.push(format!("{what}: {x}"));
+        }
+    }
+    let mut counts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for f in v["dfm"].as_array().into_iter().flatten() {
+        let item = format!("{} {}", f["rule"].as_str().unwrap_or("?"), f["layer"].as_str().unwrap_or("?"));
+        counts.entry(item).or_default().push(format!("{} at {}", f["detail"].as_str().unwrap_or(""), f["at"]));
+    }
+    for (item, list) in counts {
+        // inner copper too close to a hole is outside what JLCPCB will make: no waiver covers it (owner, 5 Nov 2026;
+        // review 17, 40)
+        let waived = !item.starts_with("inner_hole ") && p.waiver.iter().any(|w| w.check == "dfm" && w.item == item && list.len() <= w.max.unwrap_or(1));
+        if !waived {
+            problems.extend(list.iter().map(|d| format!("dfm {item}: {d}")));
+        }
+    }
+    if let Some(d) = v["mask_dams"].as_object().filter(|d| !d.is_empty()) {
+        let list: Vec<String> = d.iter().map(|(k, x)| format!("{k}: {} under {} mm, narrowest {} mm", x["count"], x["limit_mm"], x["narrowest_mm"])).collect();
+        warnings.push(crate::contract::warn("mask-dam", format!("mask openings closer than the fab's solder mask bridge ({}); the fab opens the mask across them, so check those pads for solder bridges at inspection", list.join("; "))));
+    }
+    if let Some(d) = v["silk_on_tented_vias"].as_object().filter(|d| !d.is_empty()) {
+        let list: Vec<String> = d.iter().map(|(k, x)| format!("{k}: {x}")).collect();
+        warnings.push(crate::contract::warn("silk-on-via", format!("silkscreen crosses tented via holes ({}); the ink dips into each, so text there may break", list.join(", "))));
+    }
+    Ok(ReadBack { folder: g, layers, centre: (cx, cy), verify: v, problems, warnings })
 }
 
 /// The board's text with its drill/place origin at (x, y).
