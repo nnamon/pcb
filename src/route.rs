@@ -54,6 +54,8 @@ pub struct Opts {
     /// Leave the copper zones out of what the router sees, so it routes their nets as tracks (`--no-zones`): a net
     /// whose pads its pours cannot reach. The zones stay on the board.
     pub no_zones: bool,
+    /// Nets of class "critical" in pcb.toml (`--project`): never ripped, never laid; all must be connected first.
+    pub critical: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +79,12 @@ impl Rip {
 
 #[derive(Serialize, Default)]
 pub struct Report {
+    /// Critical nets (`[nets.X] class = "critical"`) the router was kept off.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub critical_kept: Vec<String>,
+    /// Vias this run laid whose hole is on a pasted SMD pad, as REF.PAD: `pcb check` reports each as via-in-pad.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vias_in_pads: Vec<String>,
     /// The prewire operations applied before routing, one line each.
     pub prewired: Vec<String>,
     pub ripped_segments: usize,
@@ -674,6 +682,30 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             Board::from_str(text)?
         }
     };
+    // critical nets (M5a): laid by hand or by the prewire, complete before the router runs, and then left alone
+    let critical: Vec<String> = o.critical.iter().filter(|n| start.nets.contains(*n)).cloned().collect();
+    if !critical.is_empty() {
+        let named: Vec<&String> = o.nets.iter().chain(match &o.rip {
+            Rip::Nets(v) => v.iter(),
+            _ => [].iter(),
+        }).filter(|n| critical.contains(n)).collect();
+        if !named.is_empty() {
+            return Err(refused("critical-net", format!("{} {} class critical in pcb.toml: the router does not rip or lay critical nets. Lay them with pcb edit or --prewire", named.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), if named.len() == 1 { "is" } else { "are" })));
+        }
+        let at = if o.prewire.is_empty() { board_path.to_string() } else { o.work.join("prewired.kicad_pcb").to_string_lossy().to_string() };
+        let mut open: Vec<String> = vec![];
+        for (k, v) in kicad::drc_counts(&o.work, &at, "critical_before")? {
+            let (kind, nets) = kicad::key_parts(&k);
+            if kind == "unconnected_items" && v > 0 {
+                open.extend(nets.iter().filter(|n| critical.iter().any(|c| c == *n)).map(|n| n.to_string()));
+            }
+        }
+        open.sort();
+        open.dedup();
+        if !open.is_empty() {
+            return Err(refused("critical-open", format!("critical net(s) {} are not fully connected. Lay them first, by hand, with pcb edit or with --prewire: the router gets the board only once its critical nets are done", open.join(", "))));
+        }
+    }
     // names checked before `--rip all` clears the list (review 4, R3)
     {
         let b0 = &start;
@@ -685,12 +717,20 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     }
     // a ripped net has to be routed again, so its new copper is always kept; ripping all keeps all
     let mut nets = o.nets.clone();
+    let mut rip = o.rip.clone();
     match &o.rip {
         Rip::Nets(v) if !nets.is_empty() => nets.extend(v.iter().filter(|x| !nets.contains(x)).cloned().collect::<Vec<_>>()),
         Rip::All => nets.clear(),
         _ => {}
     }
-    let o = &Opts { nets, ..o.clone() };
+    // "every net" leaves the critical ones out, for keeping and for ripping
+    if !critical.is_empty() && nets.is_empty() {
+        nets = start.nets.iter().filter(|n| !n.is_empty() && !critical.contains(n)).cloned().collect();
+        if matches!(rip, Rip::All) {
+            rip = Rip::Nets(nets.clone());
+        }
+    }
+    let o = &Opts { nets, rip, ..o.clone() };
     {
         let b0 = &start;
         let known: std::collections::BTreeSet<&str> = b0.nets.iter().map(|s| s.as_str()).collect();
@@ -1208,6 +1248,23 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         }
     }
     let dest = g.written;
+    // vias this run laid on pasted SMD pads: the router may change layer at a pad it starts from (badge carrier 0.6.0)
+    if let Ok(after) = Board::load(&dest) {
+        let had: std::collections::BTreeSet<(i64, i64)> = b.vias.iter().map(|v| ((v.x * 1e4).round() as i64, (v.y * 1e4).round() as i64)).collect();
+        for v in after.vias.iter().filter(|v| !had.contains(&((v.x * 1e4).round() as i64, (v.y * 1e4).round() as i64))) {
+            for fp in &after.footprints {
+                for q in fp.pads.iter().filter(|q| q.kind == "smd" && q.layers.iter().any(|x| x.ends_with(".Paste"))) {
+                    let (lx, ly) = crate::board::rotate(v.x - q.x, v.y - q.y, -q.rot);
+                    if (lx.abs() - q.w / 2.0).max(0.0).hypot((ly.abs() - q.h / 2.0).max(0.0)) < v.drill / 2.0 - 1e-6 {
+                        rep.vias_in_pads.push(format!("{}.{}", fp.reference, q.number));
+                    }
+                }
+            }
+        }
+        rep.vias_in_pads.sort();
+        rep.vias_in_pads.dedup();
+    }
+    rep.critical_kept = critical;
     rep.written = dest;
     rep.seconds = t0.elapsed().as_secs_f64();
     Ok(rep)

@@ -115,6 +115,17 @@ enum Cmd {
         /// Freerouting runs; the one that leaves fewest nets open is kept (Freerouting does not repeat itself)
         #[arg(long, default_value_t = 1)]
         attempts: u32,
+        /// pcb.toml, or the folder holding it: its `[nets.X] class = "critical"` nets are never ripped or laid by
+        /// the router, and all must be fully connected before it runs.
+        #[arg(long)]
+        project: Option<String>,
+        /// Route in two stages: the first copper layer of --layers alone, then every layer for the nets still open.
+        /// On two layers this keeps the bottom for ground and short crossings.
+        #[arg(long)]
+        staged: bool,
+        /// With --staged: the longest run a net may take on the other layers, in mm; a longer one rejects the result.
+        #[arg(long)]
+        max_cross_mm: Option<f64>,
         /// Output board (default: overwrite the input).
         #[arg(long, short)]
         out: Option<String>,
@@ -545,7 +556,7 @@ fn run(cli: Cli) -> Result<Reply> {
                 data: json!({ "footprints": st.footprints, "pads": st.pads, "nets": st.nets, "segments": st.segments, "vias": st.vias, "origin_margin_mm": import_tscircuit::MARGIN }),
             })
         }
-        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, width, prewire, no_zones, attempts, out } => {
+        Cmd::Route { board, region, nets, passes, freerouting, java, work, rip, layers, timeout, width, prewire, no_zones, attempts, project: proj, staged, max_cross_mm, out } => {
             let prewire = match &prewire {
                 Some(p) if !std::path::Path::new(p).is_file() => return Err(contract::refused("usage", format!("--prewire {p}: no such file"))),
                 Some(p) => edit::parse_ops(&std::fs::read_to_string(p).map_err(|e| contract::failed("io", format!("reading {p}: {e}")))?)?,
@@ -577,14 +588,103 @@ fn run(cli: Cli) -> Result<Reply> {
                 prewire,
                 no_zones,
                 attempts,
+                critical: match &proj {
+                    Some(pp) => project::load(&project::locate(pp))?.project.nets.iter().filter(|(_, r)| r.class.as_deref() == Some("critical")).map(|(n, _)| n.clone()).collect(),
+                    None => vec![],
+                },
             };
             let out = out.unwrap_or_else(|| board.clone());
-            let rep = route::run(&board, &out, &o)?;
+            if max_cross_mm.is_some() && !staged {
+                return Err(contract::refused("usage", "--max-cross-mm goes with --staged"));
+            }
+            let mut stage_note = String::new();
+            let mut cross: Vec<String> = vec![];
+            let rep = if staged {
+                if o.layers.len() < 2 {
+                    return Err(contract::refused("usage", "--staged needs two or more --layers: the first is routed alone, then the rest are opened"));
+                }
+                // a rejected stage 2 puts the output back as it was before stage 1 wrote it
+                let orig = std::fs::read(&out).ok();
+                // stage 1: the first layer alone
+                let first = route::Opts { layers: vec![o.layers[0].clone()], work: o.work.join("stage1"), ..o.clone() };
+                let r1 = route::run(&board, &out, &first)?;
+                if !r1.regressions.is_empty() || r1.still_open.is_empty() {
+                    stage_note = format!("\nstaged: {} alone {}", o.layers[0], if r1.regressions.is_empty() { "connected every net" } else { "was rejected" });
+                    r1
+                } else {
+                    // stage 2: every layer, for the nets the first left open; the prewire is in the board already
+                    let before = board::Board::load(&out)?;
+                    let second = route::Opts { nets: r1.still_open.clone(), rip: route::Rip::None, prewire: vec![], work: o.work.join("stage2"), ..o.clone() };
+                    let mut r2 = route::run(&out, &out, &second)?;
+                    stage_note = format!("\nstaged: {} alone left {:?} open; stage 2 on {:?} added {} segments and {} vias", o.layers[0], r1.still_open, o.layers, r2.added_segments, r2.added_vias);
+                    // what stage 2 laid off the first layer, per net: the longest connected run
+                    if r2.regressions.is_empty() {
+                        let after = board::Board::load(&r2.written)?;
+                        let key = |t: &board::Track| ((t.x0 * 1e4).round() as i64, (t.y0 * 1e4).round() as i64, (t.x1 * 1e4).round() as i64, (t.y1 * 1e4).round() as i64, t.layer.clone());
+                        let had: std::collections::BTreeSet<_> = before.tracks.iter().map(key).collect();
+                        let new: Vec<&board::Track> = after.tracks.iter().filter(|t| t.layer != o.layers[0] && !had.contains(&key(t))).collect();
+                        let mut runs: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+                        // segments of one net and layer that share an end form a run
+                        let mut group: Vec<usize> = (0..new.len()).collect();
+                        fn root(g: &mut [usize], mut i: usize) -> usize {
+                            while g[i] != i {
+                                g[i] = g[g[i]];
+                                i = g[i];
+                            }
+                            i
+                        }
+                        let near = |a: (f64, f64), c: (f64, f64)| (a.0 - c.0).hypot(a.1 - c.1) < 1e-3;
+                        for i in 0..new.len() {
+                            for j in i + 1..new.len() {
+                                let (a, c) = (new[i], new[j]);
+                                if a.net == c.net && a.layer == c.layer && (near((a.x0, a.y0), (c.x0, c.y0)) || near((a.x0, a.y0), (c.x1, c.y1)) || near((a.x1, a.y1), (c.x0, c.y0)) || near((a.x1, a.y1), (c.x1, c.y1))) {
+                                    let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                                    group[ri] = rj;
+                                }
+                            }
+                        }
+                        let mut len: std::collections::BTreeMap<usize, f64> = std::collections::BTreeMap::new();
+                        for (i, t) in new.iter().enumerate() {
+                            let r = root(&mut group, i);
+                            *len.entry(r).or_default() += (t.x1 - t.x0).hypot(t.y1 - t.y0);
+                        }
+                        for (r, l) in len {
+                            let e = runs.entry(new[r].net.clone()).or_default();
+                            *e = e.max(l);
+                        }
+                        cross = runs.iter().map(|(n, l)| format!("{n} {l:.1} mm")).collect();
+                        if let Some(cap) = max_cross_mm {
+                            let over: Vec<String> = runs.iter().filter(|(_, l)| **l > cap + 1e-6).map(|(n, l)| format!("crossing {n}: {l:.1} mm off {}, over {cap} mm", o.layers[0])).collect();
+                            if !over.is_empty() {
+                                // the result stands aside like any rejected write
+                                let rej = std::path::Path::new(&out).with_extension("rejected.kicad_pcb");
+                                std::fs::rename(&r2.written, &rej).map_err(|e| contract::failed("io", format!("moving the result aside: {e}")))?;
+                                r2.written = rej.to_string_lossy().to_string();
+                                r2.regressions = over;
+                            }
+                        }
+                    }
+                    if !r2.regressions.is_empty() {
+                        match &orig {
+                            Some(bytes) => std::fs::write(&out, bytes).map_err(|e| contract::failed("io", format!("restoring {out}: {e}")))?,
+                            None => {
+                                let _ = std::fs::remove_file(&out);
+                                for ext in ["kicad_pro", "kicad_prl", "kicad_dru"] {
+                                    let _ = std::fs::remove_file(std::path::Path::new(&out).with_extension(ext));
+                                }
+                            }
+                        }
+                    }
+                    r2
+                }
+            } else {
+                route::run(&board, &out, &o)?
+            };
             let h = format!(
                 "wrote {} in {:.0} s: removed {} segments and {} vias inside the region, added {} segments and {} vias {:?}; dropped {} outside, {} other nets, {} duplicates\nstill open: {:?}\nDRC {} -> {}\nfixed:\n  {}\nregressions:\n  {}",
                 rep.written, rep.seconds, rep.ripped_segments, rep.ripped_vias, rep.added_segments, rep.added_vias, rep.nets_routed, rep.dropped_outside, rep.dropped_other_nets, rep.dropped_duplicates,
                 rep.still_open, rep.drc_total_before, rep.drc_total_after, rep.fixed.join("\n  "), rep.regressions.join("\n  ")
-            );
+            ) + &stage_note + &if cross.is_empty() { String::new() } else { format!("\nlongest run off the first layer: {}", cross.join(", ")) };
             let mut warnings: Vec<Warning> = rep.still_open.iter().map(|n| contract::warn("still-open", format!("{n} is still not fully connected"))).collect();
             warnings.extend(rep.declared_pinless_nets.iter().map(|n| contract::warn("pinless-net", format!("{n} has copper but no pads; declared to Freerouting"))));
             if let Some(e) = &rep.attempt_error {
@@ -592,6 +692,9 @@ fn run(cli: Cli) -> Result<Reply> {
             }
             if !rep.plane_split.is_empty() {
                 warnings.push(contract::warn("plane-split", format!("the new tracks cut zone fills apart ({}); run pcb zone again, with stitching vias for the net", rep.plane_split.join("; "))));
+            }
+            if !rep.vias_in_pads.is_empty() {
+                warnings.push(contract::warn("via-in-pad", format!("the router laid vias on pasted pads ({}); pcb check reports each. Move them off with pcb edit, or route again with the pad's net pre-wired away from the pad", rep.vias_in_pads.join(", "))));
             }
             if rep.joins_outside_region > 0 {
                 warnings.push(contract::warn("join-outside-region", format!("{} joins in the middle of tracks wholly outside the region were left unsplit", rep.joins_outside_region)));

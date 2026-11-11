@@ -143,6 +143,18 @@
        "string",
        "null"
       ]
+     },
+     "critical_kept": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "vias_in_pads": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
      }
     }
    }

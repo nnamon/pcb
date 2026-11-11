@@ -17,6 +17,8 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `edit-mismatch` | refused | The item is there but not as the operation expects (another net, width or position): the board has changed under the edit | Read the board again and rewrite the operation |
 | `edit-locked` | refused | The item is locked | Add `"unlock": true` to the operation if changing it is meant |
 | `edit-unjoined` | refused | New copper touches no copper of its net at an end | Fix the point, or mark the end free (`free_start`, `free_end`, `free`) |
+| `critical-net` | refused | A net named in `--nets` or `--rip` is class `critical` in `pcb.toml` | Lay it with `pcb edit` or `--prewire`; the router never rips or lays critical nets |
+| `critical-open` | refused | With `--project`: a net of class `critical` is not fully connected before the router runs | Lay the critical nets first, by hand, with `pcb edit` or with `--prewire` |
 | `unknown-net` | refused | A net named in `--nets` or `--rip` is not on the board | Check the name with `pcb info --net` |
 | `non-ascii-net` | refused | A net name has non-ASCII characters, which Freerouting cannot take | Rename the net |
 | `arc-unsupported` | refused | The board has track arcs, which `pcb route` does not handle yet, or a net `pcb zone` absorbs into a net tie has arcs | Replace the arcs with segments, or route by hand |
@@ -77,6 +79,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `stale` | check | A finding, not a warning: `pcb zone`, `pcb paste` or `pcb art` has not run since pcb.toml's settings for it, or a file they name, changed. Run it again; no waiver covers it |
 | `bottom-cpl-unverified` | release | The CPL has bottom-side parts, whose rotation convention pcb has not checked against JLCPCB's |
 | `silk-on-via` | release, check --fab | Silkscreen crosses tented via holes; the ink dips into each. Move the text or the via if the text matters |
+| `via-in-pad` | route | The router laid a via on a pasted SMD pad; `pcb check` reports it as a `via-in-pad` finding. Move the via with `pcb edit`, or pre-wire the net away from the pad |
 | `mask-dam` | release, check --fab | Mask openings closer together than the fab's solder mask bridge (fab file `mask_dam_mm`): the fab opens the mask across the gap. Inspect those pads for solder bridges |
 | `version-not-on-board` | release | No `[[text]]` entry prints the project version on the board (`{version}`) |
 | `finish-unset` | release, render | pcb.toml has no `[finish]`: release has no order options to print, and `render --look` falls back to green mask, white silkscreen, lead-free HASL |

@@ -390,6 +390,10 @@ pub struct NetRule {
     pub fill_grow_mm: Option<f64>,
     /// This net's fill priority, above `fill.priority`'s default, where two fills meet.
     pub fill_priority: Option<u32>,
+    /// How the net is routed (M5a): "critical" nets (switching loops, decoupling, crystals, pairs) are laid by hand
+    /// or with `--prewire` and the router never rips or lays them; "power" and "signal" (the default) are the
+    /// router's.
+    pub class: Option<String>,
 }
 
 /// A part that must sit close to a pin: `pcb check` measures from the pin's pad to the part's nearest pad on the same
@@ -830,6 +834,11 @@ pub fn check(p: &Project) -> Vec<String> {
         }
         if t.layer.ends_with(".Cu") && t.net.is_none() {
             e.push(format!("text {:?}: copper needs a net", t.name));
+        }
+    }
+    for (name, r) in &p.nets {
+        if r.class.as_deref().is_some_and(|c| !matches!(c, "critical" | "power" | "signal")) {
+            e.push(format!("nets.{name}: class is critical, power or signal"));
         }
     }
     for n in &p.near {

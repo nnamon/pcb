@@ -4,7 +4,7 @@ The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M
 
 ## 0.5.0 (in progress): M5a, the checks the badge's reviews did by hand
 
-Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). Steps 1 to 4 of M5a so far.
+Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). Steps 1 to 5 of M5a so far.
 
 - **Fab processes are data:** `fab/<name>.toml`, built into the binary. `pcb check` makes its KiCad rules from the file and the release read-back measures against the same numbers; the rule text in `check.rs` and the `DFM` table in `gerber_helper.py` had drifted. Limits changed with it, from JLCPCB's capabilities page (read 10 Nov 2026): copper to an unplated hole 0.2 mm (was 0.1; paddle-keyer v1.0.0 was made at 0.2); holes of one net no longer exempt from spacing, 0.254 mm (`hole_hole_same`, and a KiCad rule).
 - `pcb check`, new findings:
@@ -16,6 +16,10 @@ Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). Steps 1 
 - Placement constraints in `pcb.toml`, judged by `pcb check`:
   - `[[near]]`: a part within `max_mm` of a pin (`to = "REF.PAD"`), measured from the pin's pad to the part's nearest pad on the same net. For decoupling and regulator capacitors; the badge carrier 0.6.0 had output capacitors 14 to 18 mm from VOUT.
   - `[[edge]]`: parts within `max_mm` of a named edge of the outline, and with `min_web_mm`, that much board between each of their holes and the edge. The badge carrier 0.8.0 left edge parts 10 mm inside a new outline and its lanyard holes 1.4 mm from the edge.
+- Routing by importance and by layer (`pcb route`):
+  - `[nets.X] class = "critical"` in `pcb.toml`, read with `--project`: the router never rips or lays a critical net (`critical-net`), and does not run while one is open (`critical-open`). Lay them by hand, with `pcb edit` or with `--prewire`.
+  - `--staged`: the first layer of `--layers` alone, then every layer for the nets still open. `--max-cross-mm` rejects a result whose longest run off the first layer is over the cap, and puts the output back as it was.
+  - A via the router lays on a pasted pad is reported (`via-in-pad` warning, `data.vias_in_pads`); `pcb check` fails on it.
 - `pcb check --fab`: plots the Gerbers and reads them back as `pcb release` does, without making a release. Each problem is a `fab` finding.
 - Read-back: `silk_on_hole` (silkscreen over a hole the mask leaves open); silkscreen over tented vias (`silk-on-via`) and mask openings closer than the fab's solder mask bridge (`mask-dam`) are counted and warned, not refused; Gerber regions are filled by the nonzero winding rule, not repaired with `buffer(0)`.
 - The released badge carriers through `pcb check --fab` (from their tags): 0.6.0 to 0.7.2 report `spec`; 0.6.0 and 0.7.0 have silkscreen over drilled holes in 33 and 30 places (measured before tented vias were split off as a warning); 0.6.0 to 0.7.2 report `edge-setting`; 0.8.0 and 0.8.1 report nothing.

@@ -44,18 +44,34 @@ CASES = {
     # a prewired track on a ripped net is the owner's choice: --rip removes the input's copper, never the prewire's
     "prewire_kept_through_rip": ("base", ["--rip", "N", "--nets", "N", "--prewire", "PREWIRE:stub_n"], "done", None, ("N", "N")),
     "prewire_bad_target_refused": ("base", ["--nets", "N", "--prewire", "PREWIRE:bad"], "refused", "N2 is at", None),
+    # M5a (proposal R1): N is class critical in pcb.toml. The router does not take it by name; it does not run while
+    # N is open; with N pre-wired it routes S and leaves N's track as laid
+    "critical_named_refused": ("base", ["--nets", "N", "--project", "PROJECT:crit_n"], "refused", "class critical", None),
+    "critical_open_refused": ("base", ["--nets", "S", "--project", "PROJECT:crit_n"], "refused", "not fully connected", None),
+    "critical_prewired_kept": ("base", ["--nets", "S", "--prewire", "PREWIRE:wire_n", "--project", "PROJECT:crit_n"], "done", None, ("", "S")),
+    # M5a (proposal R2): --staged. On the base board F.Cu alone connects N: one stage. On the four-layer board Q
+    # walls F.Cu and B.Cu, so stage 1 leaves N open and stage 2 crosses on an inner layer; a 1 mm cap on runs off the
+    # first layer rejects that crossing and leaves no output
+    "staged_first_layer_enough": ("base", ["--nets", "N", "--staged"], "done", None, ("", "N")),
+    "staged_second_stage": ("four", ["--nets", "N", "--staged", "--layers", "F.Cu,In1.Cu,In2.Cu,B.Cu"], "done", None, ("", "N")),
+    "staged_cross_capped": ("four", ["--nets", "N", "--staged", "--layers", "F.Cu,In1.Cu,In2.Cu,B.Cu", "--max-cross-mm", "1"], "rejected", None, None),
+    "staged_one_layer_refused": ("base", ["--nets", "N", "--staged", "--layers", "F.Cu"], "refused", "two or more", None),
 }
 PREWIRE = {
     "move_n2": [{"op": "move_footprint", "ref": "N2", "from": [40, 15], "to": [40, 17]}],
     "stub_n": [{"op": "add_track", "net": "N", "layer": "F.Cu", "width": 0.2, "points": [[20, 15], [30, 15]], "free_end": True}],
     "bad": [{"op": "move_footprint", "ref": "N2", "from": [41, 15], "to": [40, 17]}],
+    "wire_n": [{"op": "add_track", "net": "N", "layer": "F.Cu", "width": 0.2, "points": [[20, 15], [40, 15]]}],
 }
+# pcb.toml files for --project
+PROJECT = {"crit_n": 'schema = 1\n\n[project]\nname = "r"\nversion = "0.1.0"\nboard = "board.kicad_pcb"\nlayers = 2\nfab = "jlcpcb-2layer-1.6mm"\n\n[nets.N]\nclass = "critical"\n'}
 # custom rules files (.kicad_dru) written beside a case's board
 DRU = {"custom_rules_kept": '(version 1)\n(rule "N wide"\n  (condition "A.NetName == \'N\'")\n  (constraint track_width (min 0.5mm)))\n'}
 # case: (copper layers new N tracks may use, whether N must end connected)
 LAYER_CHECKS = {
     "layers_outer_only": ({"F.Cu", "B.Cu"}, False),
     "layers_inner_allowed": ({"F.Cu", "In1.Cu", "In2.Cu", "B.Cu"}, True),
+    "staged_second_stage": ({"F.Cu", "In1.Cu", "In2.Cu", "B.Cu"}, True),
 }
 LAYER_PROBE = """
 import json, sys, pcbnew
@@ -259,6 +275,11 @@ if __name__ == "__main__":
                 pf = os.path.join(work, f"{name}.prewire.json")
                 json.dump(PREWIRE[a.split(":")[1]], open(pf, "w"))
                 args[k] = pf
+            if a.startswith("PROJECT:"):
+                pd = os.path.join(work, f"{name}_project")
+                os.makedirs(pd, exist_ok=True)
+                open(os.path.join(pd, "pcb.toml"), "w").write(PROJECT[a.split(":")[1]])
+                args[k] = pd
         before = sha(board)
         out = os.path.join(work, f"{name}.out.kicad_pcb")
         r = subprocess.run([pcb, "--json", "route", board, "--region", REGION, "--freerouting", jar, "--work", os.path.join(work, name + "_w"), "-o", out, *args], capture_output=True, text=True)
@@ -295,6 +316,18 @@ if __name__ == "__main__":
                 new = [x for x in src.find_all("segment") if x.find("net").arg(1) == net and abs(x.nums("width")[0] - float(mm)) < 1e-6]
                 if not new:
                     results[name] = f"no {net} track at {mm} mm in the result"
+            if results[name] == "ok" and name == "staged_first_layer_enough":
+                p = subprocess.run([sys.executable, "-c", LAYER_PROBE, out], capture_output=True, text=True)
+                got_l = json.loads(p.stdout.strip().splitlines()[-1])
+                if set(got_l["layers"]) != {"F.Cu"}:
+                    results[name] = f"N should be routed on F.Cu alone: {got_l}"
+            if results[name] == "ok" and name == "critical_prewired_kept":
+                sys.path.insert(0, os.path.join(here, "..", "lib"))
+                import kisexp
+                src = kisexp.parse(open(out).read())
+                n_segs = [sorted([tuple(x.nums("start")), tuple(x.nums("end"))]) for x in src.find_all("segment") if x.find("net").arg(1) == "N"]
+                if n_segs != [[(20.0, 15.0), (40.0, 15.0)]] or d["data"].get("critical_kept") != ["N"]:
+                    results[name] = f"N must be the pre-wired track alone, and reported kept: {n_segs} {d['data'].get('critical_kept')}"
             if results[name] == "ok" and name == "prewire_kept_through_rip":
                 sys.path.insert(0, os.path.join(here, "..", "lib"))
                 import kisexp
