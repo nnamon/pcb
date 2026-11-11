@@ -282,7 +282,7 @@ pub fn read_back(l: &Loaded, b: &Board, work: &Path) -> Result<ReadBack> {
     let (bx0, by0, bx1, by1) = b.bbox();
     let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
     let plot = work.join("plot.kicad_pcb");
-    let mut plot_text = with_aux_origin(&b, cx, cy)?;
+    let mut plot_text = with_aux_origin(b, cx, cy)?;
     // the fills as KiCad makes them now, not as the board stored them: pcb check judges fresh fills, so release plots
     // them too (review 16, 30). KiCad fills a marked copy; only the fills come back, so the plotted file keeps the
     // board's own order and a second release gives the same files

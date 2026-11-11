@@ -1045,6 +1045,10 @@ else:
     s0 = segs(d)
     s = P("sync", "--project", d, "--work", os.path.join(work, "dnp_flags_s"))
     a = attrs(d, REFS)
+    # C2 and C3 keep their paste, which pcb check now reports (M5a paste-unassembled); this case is about the BOM and CPL
+    with open(os.path.join(d, "pcb.toml"), "a") as tf:
+        for ref in ("C2", "C3"):
+            tf.write(f'\n[[waiver]]\ncheck = "paste-unassembled"\nitem = "{ref}"\nmax = 2\nwhy = "case: left out of the CPL, paste kept"\n')
     th = through(d, "dnp_flags")
     want("sync: DNP and not-in-BOM flags reach the board, copper kept (review 20, 49)", out(s, "done") and a["C2"] == ["not_in_bom"]
          and set(a["C3"]) == {"dnp", "not_in_bom", "not_in_pos"} and a["C6"] == [] and segs(d) == s0, (s.get("outcome"), a))

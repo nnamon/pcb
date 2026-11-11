@@ -14,6 +14,9 @@
 //! - **paste-unassembled** (M5a): paste on a part the CPL leaves out (test pads, hand-fitted and DNP parts), on a side
 //!   that gets a stencil.
 //! - **cpl-bottom** (M5a): parts assembled on the bottom; their CPL rotation is not verified against JLCPCB's.
+//! - **near** (M5a): a `[[near]]` part farther from its pin than `max_mm`, or with no pad on the pin's net.
+//! - **edge** (M5a): an `[[edge]]` part farther from its edge than `max_mm`, or one of its holes with less board to
+//!   the edge than `min_web_mm`.
 //! - **edge-setting** (M5a): an outline with arcs and a board copper-to-edge setting under the fab file's value for it.
 //!
 //! A finding a `[[waiver]]` names (check, item, up to `max`) is listed with the waiver's reason and does not fail.
@@ -302,6 +305,54 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         let set = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.pointer("/board/design_settings/rules/min_copper_edge_clearance").and_then(|x| x.as_f64()));
         if set.is_none_or(|v| v + 1e-9 < lim.cu_edge_arcs_mm) {
             add("edge-setting", "copper-to-edge".into(), 1, format!("the outline has arcs and the board's copper-to-edge setting is {}; set min_copper_edge_clearance to {} mm in the .kicad_pro so pours clear {} mm in the Gerbers", set.map(|v| format!("{v} mm")).unwrap_or_else(|| "not set".into()), lim.cu_edge_arcs_mm, lim.cu_edge_mm));
+        }
+    }
+
+    // placement constraints (M5a): what the datasheet or the enclosure asks of where a part sits
+    for n in &p.near {
+        let item = format!("{} {}", n.part, n.to);
+        let (tr, tp) = n.to.split_once('.').unwrap_or((&n.to, ""));
+        let target = b.footprints.iter().find(|x| x.reference == tr).and_then(|x| x.pads.iter().find(|q| q.number == tp));
+        let part = b.footprints.iter().find(|x| x.reference == n.part);
+        match (target, part) {
+            (Some(t), Some(pt)) => {
+                let d = pt.pads.iter().filter(|q| !t.net.is_empty() && q.net == t.net).map(|q| (q.x - t.x).hypot(q.y - t.y)).fold(f64::MAX, f64::min);
+                if d == f64::MAX {
+                    add("near", item, 1, format!("{} has no pad on {}'s net ({}); {}", n.part, n.to, if t.net.is_empty() { "none" } else { &t.net }, n.why));
+                } else if d > n.max_mm + 1e-6 {
+                    add("near", item, 1, format!("{} is {d:.2} mm from {}, over {} mm, pad centre to pad centre ({})", n.part, n.to, sexpr::fmt_num(n.max_mm), n.why));
+                }
+            }
+            _ => add("near", item, 1, format!("{} or {} is not on the board", n.part, n.to)),
+        }
+    }
+    let (ex0, ey0, ex1, ey1) = b.bbox();
+    for g in &p.edge {
+        for r in &g.parts {
+            let Some(fp) = b.footprints.iter().find(|x| &x.reference == r) else {
+                add("edge", r.clone(), 1, format!("{r} is bound to the {} edge and is not on the board", g.side));
+                continue;
+            };
+            // mm from a point to the named edge of the outline's bounding box
+            let to_edge = |x: f64, y: f64| match g.side.as_str() {
+                "top" => y - ey0,
+                "bottom" => ey1 - y,
+                "left" => x - ex0,
+                _ => ex1 - x,
+            };
+            let d = to_edge(fp.x, fp.y);
+            if d > g.max_mm + 1e-6 {
+                add("edge", r.clone(), 1, format!("{r} is {d:.2} mm from the {} edge, over {} mm ({})", g.side, sexpr::fmt_num(g.max_mm), g.why));
+            }
+            if let Some(web) = g.min_web_mm {
+                for q in fp.pads.iter().filter(|q| q.drill.is_some()) {
+                    let (dw, dh) = q.drill.unwrap();
+                    let left = to_edge(q.x, q.y) - dw.max(dh) / 2.0;
+                    if left + 1e-6 < web {
+                        add("edge", r.clone(), 1, format!("{r}: {left:.2} mm of board between its hole and the {} edge, under {} mm ({})", g.side, sexpr::fmt_num(web), g.why));
+                    }
+                }
+            }
         }
     }
 

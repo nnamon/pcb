@@ -32,6 +32,12 @@ pub struct Project {
     pub nets: BTreeMap<String, NetRule>,
     #[serde(default)]
     pub keepout: Vec<Keepout>,
+    /// Parts that must sit close to a pin (M5a): decoupling and regulator capacitors.
+    #[serde(default)]
+    pub near: Vec<Near>,
+    /// Parts and holes bound to an edge of the outline (M5a).
+    #[serde(default)]
+    pub edge: Vec<Edge>,
     #[serde(default)]
     pub zone: Vec<ZoneRule>,
     #[serde(default)]
@@ -384,6 +390,37 @@ pub struct NetRule {
     pub fill_grow_mm: Option<f64>,
     /// This net's fill priority, above `fill.priority`'s default, where two fills meet.
     pub fill_priority: Option<u32>,
+}
+
+/// A part that must sit close to a pin: `pcb check` measures from the pin's pad to the part's nearest pad on the same
+/// net, centre to centre, on the board as placed. The badge carrier 0.6.0 had a boost converter's output capacitors
+/// 14 to 18 mm from VOUT, and only Gate 2 caught it.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Near {
+    /// The part's reference.
+    pub part: String,
+    /// The pin it serves, as REF.PAD.
+    pub to: String,
+    pub max_mm: f64,
+    /// Where the distance comes from: the datasheet's layout section, usually.
+    pub why: String,
+}
+
+/// Parts and holes that belong on an edge of the outline's bounding box. When the outline changes, `pcb check` finds
+/// the ones left behind (the badge carrier 0.8.0's square outline left a switch, the IR parts and the lanyard holes
+/// 10 mm inside the edge), and a hole that carries load keeps `min_web_mm` of board to the edge (GUIDELINES: 3 mm).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Edge {
+    /// "top", "bottom", "left" or "right", as the board is drawn (KiCad: y grows downward).
+    pub side: String,
+    pub parts: Vec<String>,
+    /// Each part's position within this of the edge.
+    pub max_mm: f64,
+    /// Board left between each of the parts' holes and the edge, at least.
+    pub min_web_mm: Option<f64>,
+    pub why: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -795,10 +832,20 @@ pub fn check(p: &Project) -> Vec<String> {
             e.push(format!("text {:?}: copper needs a net", t.name));
         }
     }
+    for n in &p.near {
+        if !(n.max_mm > 0.0) || n.why.trim().is_empty() || n.to.split_once('.').is_none_or(|(r, q)| r.is_empty() || q.is_empty()) {
+            e.push(format!("near {:?}: needs to = \"REF.PAD\", max_mm over 0 and a why", n.part));
+        }
+    }
+    for g in &p.edge {
+        if !matches!(g.side.as_str(), "top" | "bottom" | "left" | "right") || !(g.max_mm > 0.0) || g.parts.is_empty() || g.why.trim().is_empty() || g.min_web_mm.is_some_and(|w| !(w > 0.0)) {
+            e.push(format!("edge {:?}: side is top, bottom, left or right; needs parts, max_mm over 0 and a why", g.side));
+        }
+    }
     for w in &p.waiver {
-        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting") {
+        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting" | "near" | "edge") {
             // `spec` takes no waiver: a board the Economic service refuses is ordered with service = "standard"
-            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom or edge-setting", w.item));
+            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom, edge-setting, near or edge", w.item));
         }
         if w.item.trim().is_empty() || w.why.trim().is_empty() {
             e.push(format!("waiver {:?}: needs an item and a why", w.item));

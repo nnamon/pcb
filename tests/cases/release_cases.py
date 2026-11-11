@@ -811,6 +811,9 @@ print("ORACLE", json.dumps(res))
     d = P.paddle(M3, "dnp")
     P.post(P.board(d), 'b.FindFootprintByReference("R14").SetDNP(True)\nb.FindFootprintByReference("R15").SetExcludedFromBOM(True)\nb.FindFootprintByReference("R16").SetExcludedFromPosFiles(True)')
     P.toml_sub(d, "[assembly]\n", '[assembly]\nhand_fit = ["R17"]\n')
+    # the four keep their paste here, which pcb check now reports (M5a paste-unassembled); this case is about the CPL
+    for ref in ("R14", "R15", "R16", "R17"):
+        P.toml_add(d, f'[[waiver]]\ncheck = "paste-unassembled"\nitem = "{ref}"\nmax = 2\nwhy = "case: left out of the CPL, paste kept"')
     g, r = P.gate_release(d, M3, "dnp")
     four = ("R14", "R15", "R16", "R17")
     c = P.cpl(os.path.join(r["written"], f"{P.STEM}_CPL.csv")) if out_(r, "done") else {}
@@ -1188,7 +1191,7 @@ def g_m5a():
         c = P.pcb("check", "--project", d, "--work", W(name + "_c"), *(["--fab"] if fab else []))
         return d, c, {(f["check"], f["item"]): f for f in c["data"].get("findings", []) if not f["waived"]}
 
-    two = 'fp("R1", 10, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\nfp("R2", 20, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\ntrack("A", 10, 10, 20, 10, 0.25)\ntrack("B", 12, 10, 12, 12, 0.25)\ntrack("B", 12, 12, 22, 12, 0.25)\ntrack("B", 22, 12, 22, 10, 0.25)\n'
+    two = 'fp("R1", 10, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\nfp("R2", 20, 10, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\ntrack("A", 10, 10, 10, 8, 0.25)\ntrack("A", 10, 8, 20, 8, 0.25)\ntrack("A", 20, 8, 20, 10, 0.25)\ntrack("B", 12, 10, 12, 12, 0.25)\ntrack("B", 12, 12, 22, 12, 0.25)\ntrack("B", 22, 12, 22, 10, 0.25)\n'
 
     # source: badge carrier 0.8.0 (Gate 2 fab, C320.2): a via's hole on a pasted pad of an assembled part. R1.1 has a
     # via at its centre; R2.1 one whose ring touches the pad and whose hole is 0.1 mm clear of it
@@ -1247,6 +1250,32 @@ def g_m5a():
     c, f = edge_setting("m5_edge_03", 0.3)
     c2, f2 = edge_setting("m5_edge_035", 0.35)
     want("m5a edge_setting", ("edge-setting", "copper-to-edge") in f and ("edge-setting", "copper-to-edge") not in f2, f"0.3 mm with arcs found, 0.35 mm not ({sorted(f)} {sorted(f2)})", c, c2)
+
+    # source: badge carrier 0.6.0 (Gate 2): a converter's output capacitors 14 to 18 mm from VOUT. C1 sits 2 mm from
+    # U1.1 and C2 16 mm; C3 has no pad on the pin's net; a part that is not on the board is reported too
+    reg = ('fp("U1", 10, 10, [("1", 0, 0, "VOUT", 0.6, 0.6), ("2", 0, 1, "GND", 0.6, 0.6)])\n'
+           'fp("C1", 12, 10, [("1", 0, 0, "VOUT", 0.8, 0.8), ("2", 1.5, 0, "GND", 0.8, 0.8)])\n'
+           'fp("C2", 26, 10, [("1", 0, 0, "VOUT", 0.8, 0.8), ("2", 1.5, 0, "GND", 0.8, 0.8)])\n'
+           'fp("C3", 12, 14, [("1", 0, 0, "OTHER", 0.8, 0.8), ("2", 1.5, 0, "GND", 0.8, 0.8)])\n')
+    near = lambda part, to="U1.1": f'\n[[near]]\npart = "{part}"\nto = "{to}"\nmax_mm = 3.0\nwhy = "datasheet layout: output capacitor at VOUT"\n'
+    d, c, f = checked("m5_near", reg, toml=near("C1") + near("C2") + near("C3") + near("C9"))
+    msg = (f.get(("near", "C2 U1.1")) or {}).get("message", "")
+    want("m5a near", ("near", "C1 U1.1") not in f and "16.00 mm" in msg and ("near", "C3 U1.1") in f and ("near", "C9 U1.1") in f,
+         f"C1 at 2 mm passes, C2 at 16 mm, C3 off the net and a missing C9 are found ({sorted(k for k in f if k[0] == 'near')} {msg[:60]})", c)
+    d, c, f = checked("m5_near_bad", reg, toml='\n[[near]]\npart = "C1"\nto = "U1"\nmax_mm = 3.0\nwhy = "x"\n')
+    want("m5a near_config", c.get("code") == "config", f"to without a pad refused ({c.get('code')})", c)
+
+    # source: badge carrier 0.8.0 (Gate 2 fab; external review F5): parts left inside a new outline, and lanyard holes
+    # 1.4 mm from the edge. The outline is 40 x 30 mm: SW1 2 mm from the top edge, SW2 12 mm; H1 a 4 mm hole with
+    # 1.4 mm of board to the top edge, H2 one with 3.4 mm
+    edge = ('fp("SW1", 10, 2, [("1", 0, 0, "A", 1.0, 1.0)])\nfp("SW2", 20, 12, [("1", 0, 0, "A", 1.0, 1.0)])\ntrack("A", 10, 2, 20, 12, 0.25)\n'
+            'fp("H1", 30, 3.4, [("", 0, 0, None, 4.0, 4.0, "npth")])\nfp("H2", 36, 5.4, [("", 0, 0, None, 4.0, 4.0, "npth")])\n')
+    et = ('\n[[edge]]\nside = "top"\nparts = ["SW1", "SW2"]\nmax_mm = 3.0\nwhy = "the slider is worked from the top edge"\n'
+          '\n[[edge]]\nside = "top"\nparts = ["H1", "H2"]\nmax_mm = 8.0\nmin_web_mm = 3.0\nwhy = "lanyard holes carry the badge"\n')
+    d, c, f = checked("m5_edge", edge, toml=et)
+    msg = (f.get(("edge", "H1")) or {}).get("message", "")
+    want("m5a edge", ("edge", "SW1") not in f and ("edge", "SW2") in f and "1.40 mm of board" in msg and ("edge", "H2") not in f,
+         f"SW2 left 12 mm inside and H1's 1.4 mm web are found; SW1 and H2 pass ({sorted(k for k in f if k[0] == 'edge')} {msg[:50]})", c)
 
     # pcb check --fab: the read-back without a release. A 0.10 mm track is pcb check's own DRC finding and, with --fab,
     # also the read-back's; same-net vias 0.1 mm apart and silkscreen over an open hole are the read-back's alone, and

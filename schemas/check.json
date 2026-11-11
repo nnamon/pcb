@@ -64,7 +64,9 @@
           "paste-unassembled",
           "cpl-bottom",
           "edge-setting",
-          "fab"
+          "fab",
+          "near",
+          "edge"
          ]
         },
         "item": {
