@@ -104,7 +104,8 @@
               "edge-setting",
               "fab",
               "near",
-              "edge"
+              "edge",
+              "quality"
              ]
             },
             "item": {

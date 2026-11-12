@@ -1,0 +1,93 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:quality",
+ "title": "pcb quality output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/quality/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "nets",
+     "pours",
+     "broadside",
+     "total_track_mm",
+     "vias",
+     "over"
+    ],
+    "properties": {
+     "nets": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "net",
+        "pads",
+        "length_mm",
+        "tree_mm",
+        "vias",
+        "segments",
+        "widths_mm",
+        "power",
+        "narrow_mm",
+        "narrowest_mm"
+       ]
+      }
+     },
+     "pours": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "net",
+        "layer",
+        "pieces",
+        "small",
+        "largest_mm2"
+       ]
+      }
+     },
+     "broadside": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "top",
+        "bottom",
+        "mm"
+       ]
+      }
+     },
+     "total_track_mm": {
+      "type": "number"
+     },
+     "vias": {
+      "type": "integer"
+     },
+     "over": {
+      "type": "array",
+      "items": {
+       "type": "array"
+      }
+     }
+    }
+   }
+  }
+ }
+}

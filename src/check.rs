@@ -17,6 +17,9 @@
 //! - **near** (M5a): a `[[near]]` part farther from its pin than `max_mm`, or with no pad on the pin's net.
 //! - **edge** (M5a): an `[[edge]]` part farther from its edge than `max_mm`, or one of its holes with less board to
 //!   the edge than `min_web_mm`.
+//! - **quality** (M5): a route quality measure over its limit in `[quality]` (`quality.rs`): a power net as a thin
+//!   trace, a detour, vias on a two-pad net, a route in slivers, a net of many widths, a top track over a bottom one,
+//!   a pour in small pieces.
 //! - **edge-setting** (M5a): an outline with arcs and a board copper-to-edge setting under the fab file's value for it.
 //!
 //! A finding a `[[waiver]]` names (check, item, up to `max`) is listed with the waiver's reason and does not fail.
@@ -353,6 +356,13 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
                     }
                 }
             }
+        }
+    }
+
+    // route quality against the project's own limits
+    if p.quality.is_some() {
+        for (item, msg) in crate::quality::run(&b, p).over {
+            add("quality", item, 1, msg);
         }
     }
 

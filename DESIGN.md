@@ -316,6 +316,8 @@ The fab's limits are one TOML file per process in `fab/`, built into the binary 
 
 Routing (M5a): `pcb route --project` reads net classes. A `critical` net is the designer's: the command refuses to name one in `--nets` or `--rip`, checks with KiCad's DRC that every critical net is connected on the board the router starts from (after the prewire), and leaves them out of "every net". `--staged` is two `route::run` calls from `main.rs`: the first layer alone into the output, then all layers for `still_open`, with its own work folders (`stage1`, `stage2`); the runs laid off the first layer are measured per net from the segments stage 2 added, and a run over `--max-cross-mm` moves the result to `.rejected` and restores the output. What staged routing cannot do yet is prefer the first layer within one run, or measure ground under a track; both are M5b.
 
+Route quality (`src/quality.rs`) works from the board's lists of tracks, vias, pads and zone fills; it needs no copper graph. What it cannot see without one: whether a track has ground beneath it, and whether tracks sit at minimum spacing where there was room to spread.
+
 `pcb check --fab` runs `release::read_back` in `<work>/fab` and lists each problem as a `fab` finding; `[[waiver]] check = "dfm"` entries apply to it as they do to a release.
 
 ### `pcb gate status|pass NAME`
@@ -484,6 +486,8 @@ The original six phases became five milestones in the proposal ("pcb tool: propo
 | M4 Netlist and placement | `pcb sync` with pin-name checks, `pcb parts`, `pcb place`, `pcb drawing`, locks | paddle-keyer from netlist to order with no per-board code (see "Netlist and placement") |
 
 **M5, proposed 10 Nov 2026** ("pcb tool: review and M5 proposal", Claude doc, https://claude.ai/artifact/2CZ7UCHgbVxiMMJH7Yfwjk; owner: write it up and prepare to implement). M5a: one fab data file, the checks the badge's reviews did by hand, placement and edge constraints, net classes and top-first routing. M5b: a copper graph, current paths, route quality limits. Branch `pcb-0.5.0`.
+
+**Repository split, decided 13 Nov 2026** (owner). `claude-pcb` is split after pcb 0.5.0 lands: this tool, its fab files, tests and the standards (`GUIDELINES.md`, `STYLE.md`) go to a repo `pcb`; each project gets its own repo with its history kept (`paddle-keyer`, `quansheng-paddle-adapter`, `nightjar`, `nn-dcsg-2027-carrier` for the badge carrier as ordered); the final badge is a new repo, `nn-dcsg-2027-badge`, made by `pcb new`; `claude-pcb` is archived. Each project pins the pcb version it was checked with, and tags become `v<x.y.z>`.
 
 **The tool before the boards** (owner, 4 Nov 2026). Every gate is judged on the tool alone. Real boards serve as fixtures, and their hard spots become cases, but no board's design work (the badge's ILM, VBUS_F and J102 fixes, its release) is done until M4 closes.
 

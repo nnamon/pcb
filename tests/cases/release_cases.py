@@ -1277,6 +1277,33 @@ def g_m5a():
     want("m5a edge", ("edge", "SW1") not in f and ("edge", "SW2") in f and "1.40 mm of board" in msg and ("edge", "H2") not in f,
          f"SW2 left 12 mm inside and H1's 1.4 mm web are found; SW1 and H2 pass ({sorted(k for k in f if k[0] == 'edge')} {msg[:50]})", c)
 
+    # source: review of the badge carrier 0.8.1's routing (11 Nov 2026): a rail routed as a 0.15 mm trace, a 2.6x
+    # detour, four vias on a two-pad hop, a route in slivers, a top track over a bottom one. One board with each, and
+    # limits in [quality]; without [quality] the same board has no quality finding
+    q = ('fp("U1", 5, 5, [("1", 0, 0, "RAIL", 0.6, 0.6)])\nfp("U2", 35, 5, [("1", 0, 0, "RAIL", 0.6, 0.6)])\ntrack("RAIL", 5, 5, 35, 5, 0.15)\n'
+         'fp("A1", 5, 10, [("1", 0, 0, "DET", 0.6, 0.6)])\nfp("A2", 15, 10, [("1", 0, 0, "DET", 0.6, 0.6)])\n'
+         'track("DET", 5, 10, 5, 18, 0.2)\ntrack("DET", 5, 18, 15, 18, 0.2)\ntrack("DET", 15, 18, 15, 10, 0.2)\n'
+         'fp("B1", 20, 10, [("1", 0, 0, "HOP", 0.6, 0.6)])\nfp("B2", 36, 10, [("1", 0, 0, "HOP", 0.6, 0.6)])\n'
+         'track("HOP", 20, 10, 23, 10, 0.2)\nvia("HOP", 23, 10)\ntrack("HOP", 23, 10, 26, 10, 0.2, pcbnew.B_Cu)\nvia("HOP", 26, 10)\ntrack("HOP", 26, 10, 30, 10, 0.2)\n'
+         'via("HOP", 30, 10)\ntrack("HOP", 30, 10, 33, 10, 0.2, pcbnew.B_Cu)\nvia("HOP", 33, 10)\ntrack("HOP", 33, 10, 36, 10, 0.2)\n'
+         'fp("C1", 5, 22, [("1", 0, 0, "SLIV", 0.6, 0.6)])\nfp("C2", 17, 22, [("1", 0, 0, "SLIV", 0.6, 0.6)])\n'
+         + "".join(f'track("SLIV", {5 + 0.5 * i}, 22, {5.5 + 0.5 * i}, 22, 0.2)\n' for i in range(24)) +
+         'fp("D1", 20, 24, [("1", 0, 0, "TOPN", 0.6, 0.6)])\nfp("D2", 34, 24, [("1", 0, 0, "TOPN", 0.6, 0.6)])\ntrack("TOPN", 20, 24, 34, 24, 0.2)\n'
+         'fp("E1", 22, 26, [("1", 0, 0, "BOTN", 0.6, 0.6)])\nfp("E2", 32, 26, [("1", 0, 0, "BOTN", 0.6, 0.6)])\n'
+         'track("BOTN", 22, 26, 22, 24.6, 0.2)\nvia("BOTN", 22, 24.6)\ntrack("BOTN", 22, 24.6, 23, 24, 0.2, pcbnew.B_Cu)\ntrack("BOTN", 23, 24, 31, 24, 0.2, pcbnew.B_Cu)\n'
+         'track("BOTN", 31, 24, 32, 24.6, 0.2, pcbnew.B_Cu)\nvia("BOTN", 32, 24.6)\ntrack("BOTN", 32, 24.6, 32, 26, 0.2)\n')
+    qt = ('\n[nets.RAIL]\nclass = "power"\n\n[quality]\npower_width_mm = 0.4\nmax_detour = 1.5\nmax_vias_two_pad = 2\nmax_segments_per_10mm = 6\nmax_broadside_mm = 5\n')
+    d, c, f = checked("m5_quality", q, toml=qt)
+    d0, c0, f0 = checked("m5_quality_nolimits", q)
+    got = sorted(k[1] for k in f if k[0] == "quality")
+    want("m5a quality", got == ["broadside TOPN BOTN", "detour DET", "segments SLIV", "vias HOP", "width RAIL"] and not any(k[0] == "quality" for k in f0),
+         f"each oddity is a finding under its limit, and none without [quality] ({got})", c, c0)
+    rq = P.pcb("quality", "--project", d)
+    rail = next((n for n in rq["data"]["nets"] if n["net"] == "RAIL"), {})
+    det = next((n for n in rq["data"]["nets"] if n["net"] == "DET"), {})
+    want("m5a quality_report", rq["outcome"] == "done" and rail.get("narrow_mm") == 30.0 and det.get("detour") == 2.6 and len(rq["data"]["over"]) == 5,
+         f"pcb quality reports the measures (RAIL narrow {rail.get('narrow_mm')} mm, DET detour {det.get('detour')}, over {len(rq['data']['over'])})", rq)
+
     # pcb check --fab: the read-back without a release. A 0.10 mm track is pcb check's own DRC finding and, with --fab,
     # also the read-back's; same-net vias 0.1 mm apart and silkscreen over an open hole are the read-back's alone, and
     # silkscreen over the tented vias is a warning

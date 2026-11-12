@@ -38,6 +38,8 @@ pub struct Project {
     /// Parts and holes bound to an edge of the outline (M5a).
     #[serde(default)]
     pub edge: Vec<Edge>,
+    /// Route quality limits (`pcb quality`; `quality` findings in `pcb check`).
+    pub quality: Option<crate::quality::Limits>,
     #[serde(default)]
     pub zone: Vec<ZoneRule>,
     #[serde(default)]
@@ -852,9 +854,9 @@ pub fn check(p: &Project) -> Vec<String> {
         }
     }
     for w in &p.waiver {
-        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting" | "near" | "edge") {
+        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting" | "near" | "edge" | "quality") {
             // `spec` takes no waiver: a board the Economic service refuses is ordered with service = "standard"
-            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom, edge-setting, near or edge", w.item));
+            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom, edge-setting, near, edge or quality", w.item));
         }
         if w.item.trim().is_empty() || w.why.trim().is_empty() {
             e.push(format!("waiver {:?}: needs an item and a why", w.item));

@@ -21,6 +21,7 @@ mod parts;
 mod paste;
 mod place;
 mod project;
+mod quality;
 mod release;
 mod import_tscircuit;
 mod render;
@@ -270,6 +271,16 @@ enum Cmd {
         #[arg(long, default_value = "pcb_work/compare")]
         work: String,
     },
+    /// Route quality: what a person reading the layout would call odd, measured per net (detours, vias, slivers,
+    /// thin power nets, broadside runs) and per pour (small pieces). Limits in `[quality]` make `pcb check` findings.
+    Quality {
+        /// pcb.toml, or the folder holding it.
+        #[arg(long, default_value = ".")]
+        project: String,
+        /// Nets listed under each heading in the text report.
+        #[arg(long, default_value_t = 8)]
+        top: usize,
+    },
     /// The project at a glance: version against VERSION and TAGS.tsv, gates, decisions, the board, its DRC, and
     /// anything in pcb.toml that is wrong or does not match the board. The first command to run in a session.
     Status {
@@ -417,6 +428,7 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Edit { .. } => "edit",
         Cmd::Diff { .. } => "diff",
         Cmd::Status { .. } => "status",
+        Cmd::Quality { .. } => "quality",
         Cmd::Zone { .. } => "zone",
         Cmd::CompareGerbers { .. } => "compare-gerbers",
         Cmd::Art { .. } => "art",
@@ -751,6 +763,40 @@ fn run(cli: Cli) -> Result<Reply> {
             })
         }
         Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
+        Cmd::Quality { project: proj, top } => {
+            let l = project::load(&project::locate(&proj))?;
+            let b = board::Board::load(&l.board_path().to_string_lossy())?;
+            let r = quality::run(&b, &l.project);
+            let mut h = format!("{} mm of track on {} nets, {} vias\n", r.total_track_mm, r.nets.len(), r.vias);
+            let mut list = |title: &str, rows: Vec<String>| {
+                if !rows.is_empty() {
+                    h += &format!("{title}\n  {}\n", rows.into_iter().take(top).collect::<Vec<_>>().join("\n  "));
+                }
+            };
+            let mut d: Vec<&quality::NetStats> = r.nets.iter().filter(|n| n.detour.is_some()).collect();
+            d.sort_by(|a, c| c.detour.unwrap().total_cmp(&a.detour.unwrap()));
+            list("longest detours (routed length over shortest path):", d.iter().filter(|n| n.detour.unwrap() > 1.2).map(|n| format!("{} {}x: {} mm for {} mm", n.net, n.detour.unwrap(), n.length_mm, n.tree_mm)).collect());
+            let mut v: Vec<&quality::NetStats> = r.nets.iter().filter(|n| n.pads == 2 && n.vias > 2).collect();
+            v.sort_by_key(|n| std::cmp::Reverse(n.vias));
+            list("two-pad nets with more than 2 vias:", v.iter().map(|n| format!("{} {} vias", n.net, n.vias)).collect());
+            let mut sg: Vec<&quality::NetStats> = r.nets.iter().filter(|n| n.segments_per_10mm.is_some_and(|x| x > 6.0)).collect();
+            sg.sort_by(|a, c| c.segments_per_10mm.unwrap().total_cmp(&a.segments_per_10mm.unwrap()));
+            list("routes in slivers (segments per 10 mm):", sg.iter().map(|n| format!("{} {}: {} segments in {} mm", n.net, n.segments_per_10mm.unwrap(), n.segments, n.length_mm)).collect());
+            let mut w: Vec<&quality::NetStats> = r.nets.iter().filter(|n| !n.poured && n.widths_mm.len() > 3).collect();
+            w.sort_by_key(|n| std::cmp::Reverse(n.widths_mm.len()));
+            list("nets of more than 3 widths:", w.iter().map(|n| format!("{} {:?} mm", n.net, n.widths_mm)).collect());
+            let mut pw: Vec<&quality::NetStats> = r.nets.iter().filter(|n| !n.poured && n.pads >= 8 && n.narrowest_mm <= 0.2 && n.length_mm > 100.0).collect();
+            pw.sort_by(|a, c| c.length_mm.total_cmp(&a.length_mm));
+            list("long thin nets with 8 or more pads (a rail routed as a signal?):", pw.iter().map(|n| format!("{} {} mm, narrowest {} mm, {} pads{}", n.net, n.length_mm, n.narrowest_mm, n.pads, if n.power { "" } else { "; not marked power in pcb.toml" })).collect());
+            list("top tracks directly over a bottom track of another net:", r.broadside.iter().filter(|x| x.mm >= 3.0).map(|x| format!("{} over {}: {} mm", x.top, x.bottom, x.mm)).collect());
+            list("pours:", r.pours.iter().map(|x| format!("{} {}: {} pieces, {} small, largest {} mm²", x.net, x.layer, x.pieces, x.small, x.largest_mm2)).collect());
+            if l.project.quality.is_none() {
+                h += "no [quality] limits in pcb.toml: nothing here fails pcb check\n";
+            } else {
+                list(&format!("over a [quality] limit ({}):", r.over.len()), r.over.iter().map(|(_, m)| m.clone()).collect());
+            }
+            Ok(Reply { outcome: Outcome::Done, human: h.trim_end().to_string(), data: serde_json::to_value(&r)?, warnings: vec![], error: None, written: None })
+        }
         Cmd::Check { project: proj, work, fab } => {
             let l = project::load(&project::locate(&proj))?;
             let r = check::run_with(&l, std::path::Path::new(&work), fab)?;
