@@ -2,7 +2,7 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
-## 0.5.0 (in progress): M5a, the checks the badge's reviews did by hand
+## 0.5.0 (13 Nov 2026): M5a, the checks the badge's reviews did by hand
 
 Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). M5a as built; what was left for M5b is listed in `DESIGN.md`.
 
