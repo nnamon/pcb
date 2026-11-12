@@ -20,6 +20,8 @@
 //! - **quality** (M5): a route quality measure over its limit in `[quality]` (`quality.rs`): a power net as a thin
 //!   trace, a detour, vias on a two-pad net, a route in slivers, a net of many widths, a top track over a bottom one,
 //!   a pour in small pieces.
+//! - **silk-owner** (M5a): a footprint's reference, shown on the silkscreen, sits nearer another part's pads than
+//!   its own (GUIDELINES check 15). Designators drawn as artwork (`[[text]]`, a project's own legend) are not read.
 //! - **edge-setting** (M5a): an outline with arcs and a board copper-to-edge setting under the fab file's value for it.
 //!
 //! A finding a `[[waiver]]` names (check, item, up to `max`) is listed with the waiver's reason and does not fail.
@@ -356,6 +358,77 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
                     }
                 }
             }
+        }
+    }
+
+    // silkscreen ownership (GUIDELINES check 15; the badge carrier 0.7.1 had about fifteen designators beside the
+    // wrong part): each visible reference is nearer its own part's pads than any other part's on that side
+    {
+        let mut refs: Vec<(usize, f64, f64, bool)> = vec![];
+        for (i, fp) in b.footprints.iter().enumerate() {
+            let node = sexpr::parse(&b.src[fp.span.0..fp.span.1])?;
+            let Some(pr) = node.find_all("property").find(|q| q.arg(1) == Some("Reference")) else { continue };
+            let layer = pr.find("layer").and_then(|l| l.arg(1)).unwrap_or("");
+            let hidden = pr.find("hide").is_some_and(|h| h.arg(1) != Some("no")) || pr.find("effects").is_some_and(|e| e.find("hide").is_some_and(|h| h.arg(1) != Some("no")));
+            if hidden || !(layer.ends_with(".SilkS") || layer.ends_with(".Silkscreen")) {
+                continue;
+            }
+            let at = pr.find("at");
+            let (lx, ly) = (at.and_then(|a| a.arg(1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0), at.and_then(|a| a.arg(2)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0));
+            let (dx, dy) = crate::board::rotate(lx, ly, fp.rot);
+            refs.push((i, fp.x + dx, fp.y + dy, layer.starts_with('B')));
+        }
+        let gap = |fp: &crate::board::Footprint, x: f64, y: f64| fp.pads.iter().map(|q| pad_gap(q, (x, y))).fold(f64::MAX, f64::min);
+        for (i, x, y, back) in refs {
+            let own = &b.footprints[i];
+            let d_own = gap(own, x, y);
+            if d_own == f64::MAX {
+                continue;
+            }
+            let nearer = b.footprints.iter().enumerate().filter(|(k, o)| *k != i && (o.layer == "B.Cu") == back).map(|(_, o)| (gap(o, x, y), &o.reference)).filter(|(d, _)| *d + 0.05 < d_own).min_by(|a, c| a.0.total_cmp(&c.0));
+            if let Some((d, other)) = nearer {
+                add("silk-owner", own.reference.clone(), 1, format!("{}'s designator at ({}, {}) is {d:.2} mm from {other} and {d_own:.2} mm from {}; move it nearer its own part", own.reference, sexpr::fmt_num(x), sexpr::fmt_num(y), own.reference));
+            }
+        }
+    }
+
+    // KiCad's own text on the silkscreen (visible footprint fields, footprint and board text): height and stroke
+    // against the fab file, as [[text]] artwork is judged above
+    {
+        let mut small: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        let judge = |t: &sexpr::Node, owner: &str, small: &mut std::collections::BTreeMap<String, Vec<String>>| {
+            let layer = t.find("layer").and_then(|l| l.arg(1)).unwrap_or("");
+            let hidden = t.find("hide").is_some_and(|h| h.arg(1) != Some("no")) || t.find("effects").is_some_and(|e| e.find("hide").is_some_and(|h| h.arg(1) != Some("no")));
+            if hidden || !(layer.ends_with(".SilkS") || layer.ends_with(".Silkscreen")) {
+                return;
+            }
+            let Some(font) = t.find("effects").and_then(|e| e.find("font")) else { return };
+            if font.find("face").is_some() {
+                return;
+            }
+            let h = font.find("size").and_then(|z| z.arg(1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+            let th = font.find("thickness").and_then(|z| z.arg(1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+            if h > 0.0 && h + 1e-9 < lim.silk_text_mm {
+                small.entry(format!("text height {} mm", sexpr::fmt_num(h))).or_default().push(owner.to_string());
+            }
+            if th > 0.0 && th + 1e-9 < lim.silk_line_mm {
+                small.entry(format!("text stroke {} mm", sexpr::fmt_num(th))).or_default().push(owner.to_string());
+            }
+        };
+        for fp in &b.footprints {
+            let node = sexpr::parse(&b.src[fp.span.0..fp.span.1])?;
+            for t in node.items().iter().filter(|t| t.is("property") || t.is("fp_text")) {
+                judge(t, &fp.reference, &mut small);
+            }
+        }
+        for t in b.root.items().iter().filter(|t| t.is("gr_text")) {
+            judge(t, "board text", &mut small);
+        }
+        for (item, mut owners) in small {
+            owners.sort();
+            owners.dedup();
+            let n = owners.len();
+            add("silk", item.clone(), n, format!("silkscreen {item}, under the fab file's {} mm height or {} mm stroke, on {} ({}{})", lim.silk_text_mm, lim.silk_line_mm, n, owners.iter().take(8).map(|x| x.as_str()).collect::<Vec<_>>().join(", "), if n > 8 { ", ..." } else { "" }));
         }
     }
 

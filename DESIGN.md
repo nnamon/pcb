@@ -3,7 +3,7 @@
 One Rust command-line tool, `pcb`, that takes a board from a readable design file to a JLCPCB order and a bench test sheet. KiCad files are the source of truth for the layout. Freerouting does the routing, only inside regions the tool unlocks. Every command prints JSON with `--json`, so an agent reads results instead of scraping logs.
 
 Owner decisions, 30 Oct 2026:
-- KiCad files plus a Rust tool.
+- KiCad files plus a Rust tool; new projects start from a KiCad schematic.
 - Freerouting, region-locked.
 - nandynarwhals-defcon-sg-2027-badge 0.5.0 is the first board ported.
 - Outputs:
@@ -27,121 +27,55 @@ The badge carrier 0.5.0 cost a day on tooling, not circuit:
 
 ## Workflow
 
+As built (0.5.0). The first plan, a `design.toml` the tool turned into a board, was replaced on 30 Oct 2026 by a KiCad schematic for the circuit and `pcb.toml` for everything else; the sections below record each milestone as it was built.
+
 ```
-design.toml ──pcb sync──▶ board.kicad_pcb ◀──pcb place / route / zone──
-                               │
-                         pcb check (DRC, DFM, connectivity, currents, fit)
-                               │
-                         pcb release ──▶ order/  docs/  bench/
+schematic ──kicad-cli──▶ project.netlist ─┐
+pcb.toml (placement, zones, rules) ───────┼─▶ board.kicad_pcb ──pcb check──▶ pcb gate pass ──▶ pcb release ──▶ order/
+parts/ (JLCPCB footprints and data) ──────┘        ▲
+                                    pcb sync, place, route, zone, paste, art, edit
 ```
 
-1. **Design.** The agent writes `design.toml`: parts, values, LCSC codes, connections by datasheet pin names, power nets with their currents, and test points with expected values.
-2. **Sync.** `pcb sync`:
-   - fetches footprints from EasyEDA by LCSC code, converts them to KiCad footprints and caches them;
-   - adds, removes or updates footprints and nets in `board.kicad_pcb`;
-   - writes a net-label schematic (`board.kicad_sch`) that opens in KiCad.
+1. **Circuit.** A KiCad schematic, exported as a netlist. `pcb parts --live` fetches JLCPCB's footprint, symbol, stock and library type for each LCSC code into `parts/`.
+2. **Sync.** `pcb sync` adds, replaces and removes footprints so the board matches the netlist, and checks each connected pin's name against JLCPCB's symbol.
+3. **Place.** `pcb place` puts parts where `[[place]]` says. `[[near]]` and `[[edge]]` state what the placement must keep (a capacitor by its pin, a connector at its edge); `pcb check` judges them.
+4. **Route.** Critical nets are laid by hand (`pcb edit`, `--prewire`). `pcb route --region` gives the rest to Freerouting with everything outside the region locked; `--staged` tries one layer first. `pcb quality` measures the result.
+5. **Copper and surface.** `pcb zone` (pours, planes, fills, stitching), `pcb paste`, `pcb art`.
+6. **Check.** `pcb check`: KiCad DRC under the fab file's rules, then the project's own checks. `--fab` also plots the Gerbers and reads them back. A finding fails unless a `[[waiver]]` with a reason names it.
+7. **Gate and release.** `pcb gate pass` records a gate when nothing is unwaived. `pcb release` writes the order files, reads the Gerbers back against the board's nets and the fab file's limits, and writes checksums.
 
-   Existing placement and routing are kept. A removed part's tracks are deleted, never left dangling.
-3. **Place.** `pcb place` moves named parts, by datum or relative to a pin. `pcb check --place` reports overlaps, through-hole pads under parts on the other side, keep-outs and decoupling distances.
-4. **Route.**
-   - `pcb route --region x0,y0,x1,y1 [--nets ...]` locks every track and via outside the region and exports a Specctra DSN; locked copper goes out as protected wiring.
-   - It runs Freerouting headless, imports the session, and unlocks only the new copper.
-   - `pcb route --prewire file` adds fixed tracks first, for power loops and escapes.
-5. **Copper.** `pcb zone` adds GND pours and planes as KiCad zones, and power-net fills as zones bounded by a net's own region. `pcb fill` runs KiCad's zone filler.
-6. **Check.** `pcb check` runs:
-   - KiCad DRC against a JLCPCB rule file;
-   - connectivity and DFM rebuilt from the exported Gerbers and drills (GUIDELINES checks 11–13);
-   - paste coverage;
-   - current paths: the narrowest copper between two pads for each power net, against its rated current;
-   - mechanical keep-outs.
-
-   It returns one report with one entry per check.
-7. **Release.** `pcb release`:
-   - sets the version on the silkscreen;
-   - exports Gerbers, drills, BOM, CPL, the assembly page, the bring-up sheet and the fit print;
-   - writes checksums and the README's verification table rows.
+Every command that writes the board goes through the write gate: KiCad DRC before and after, and a result with a new violation goes to `<out>.rejected.kicad_pcb` instead. From 0.5.0 that DRC leaves out silkscreen and mask artwork, except for `pcb art`, the one command that changes it.
 
 ## Board model
 
 | File | Owner | Content |
 | --- | --- | --- |
-| `design.toml` | agent | Parts, nets, power currents, test points, bring-up limits, keep-outs, board outline and stackup |
-| `board.kicad_pcb` | `pcb` and KiCad | Placement, tracks, vias, zones, silkscreen. Hand edits in KiCad are allowed; `pcb sync` keeps them |
-| `board.kicad_sch` | `pcb` | Generated net-label schematic for viewing; not edited |
-| `rules.kicad_dru` | `pcb` | JLCPCB rules, generated from the GUIDELINES table |
-| `parts/` | `pcb` | Cached footprints (`.kicad_mod`), symbols and parts-database entries |
-
-`design.toml` sketch:
-
-```toml
-[board]
-name = "nandynarwhals-defcon-sg-2027-badge"
-outline = { width = 160.0, height = 110.0, corner_radius = 3.0 }
-layers = 4                     # L2, L3 GND planes
-version = "0.5.0"
-
-[[part]]
-ref = "U101"
-lcsc = "C919459"               # TPS61023DRLR
-pins = { VIN = "VBAT", EN = "BOOST_EN", SW = "SW_BOOST", VOUT = "VBOOST", FB = "BOOST_FB", GND = "GND" }
-note = "5 V boost; valley limit 2.7 A minimum"
-
-[[part]]
-ref = "R105"
-value = "20.5k"
-package = "0402"               # LCSC code resolved by `pcb parts resolve`
-pins = ["BOOST_FB", "GND"]
-
-[net.VBAT]
-current = 2.2                  # A at the design corner; `pcb check` sizes copper from it
-[net.VBOOST]
-current = 1.2
-
-[[testpoint]]
-ref = "TP104"
-net = "VBOOST"
-expect = { min = 4.74, max = 5.16, unit = "V", when = "SW101 on, cells" }
-```
+| schematic, `project.netlist` | person or agent, in KiCad | Parts, values, LCSC codes, connections |
+| `pcb.toml` | agent | What the board file cannot hold: fab, finish, assembly service, net currents and classes, placement, zones, paste, artwork, constraints, waivers, gates (table under "Project file") |
+| `board.kicad_pcb` | `pcb` and KiCad | Placement, tracks, vias, zones, silkscreen. The source of truth for the layout |
+| `fab/<name>.toml` | the tool, built in | A fab process's limits and what its Economic assembly refuses |
+| `parts/` | `pcb parts` | JLCPCB's footprint, symbol and parts record per LCSC code, committed with the project |
 
 ## Commands
 
-Every command:
-- takes `--board <dir>`;
-- prints a short human summary;
-- with `--json`, prints one JSON object: `{ "ok": bool, "findings": [...], "data": {...} }`;
-- exits non-zero when a check fails.
+Every command takes `--json` and then prints one object, `{ schema, ok, outcome, data, error, warnings }`; `schemas/<command>.json` describes each, and `docs/codes.md` lists every error and warning code. `pcb --help` is the list of commands; the ones a session uses most:
 
 | Command | Does |
 | --- | --- |
-| `pcb parts resolve` | Picks LCSC codes for passives (Basic first, Economic only, stock ≥ 20 × need) |
-| `pcb parts sync` | Refreshes the cache: library type, Economic flag, stock, price, footprint, rotation offset |
-| `pcb sync` | Applies `design.toml` to the KiCad files |
-| `pcb info [REF\|NET]` | Pads, positions, connected copper, nearest neighbours |
-| `pcb place REF x y [rot] [side]` | Moves a part; `--near REF.PIN dx dy` places relative to a pin |
-| `pcb lock / unlock` | Locks parts, tracks or a region |
-| `pcb route` | Region-locked Freerouting run, with prewires |
-| `pcb zone`, `pcb fill` | Pours and planes as KiCad zones; fills them |
-| `pcb check [--place\|--route\|--fab\|--all]` | Runs the checks; one report |
-| `pcb render [--region]` | PNG of a region with nets labelled, for an agent to look at; `--look`: the board as it will look made, in `[finish]` colours |
-| `pcb release` | Order pack, docs, bench outputs, checksums |
-| `pcb order-check` | Check 21: stock and price of every line today |
+| `pcb doctor` | Checks the pinned KiCad, Freerouting and Java, and the behaviours the tool relies on. Run first on a new machine |
+| `pcb status` | The project at a glance. Run first in a session |
+| `pcb parts`, `sync`, `place` | Netlist to a placed board |
+| `pcb route`, `edit`, `zone`, `paste`, `art` | Copper and surface, each through the write gate |
+| `pcb check [--fab]`, `pcb quality` | Findings and measures |
+| `pcb gate status\|pass`, `pcb release`, `pcb compare-gerbers` | Gates and the order files |
+| `pcb info`, `diff`, `render`, `drawing` | Looking at a board |
 
 ## Outputs
 
-- **`order/`:**
-  - Gerber zip (`kicad-cli`, X2, every layer present, outline closed);
-  - BOM and CPL in JLCPCB's format, with each CPL rotation solved against JLCPCB's EasyEDA footprint so pad 1 lands on pin 1.
-- **`docs/`:**
-  - the net-label schematic PDF;
-  - the full BOM with a source for every hand-fitted part;
-  - the 1:1 fit print, both sides as PDF at true scale, with holder and module outlines.
-- **`bench/assembly.html`:** a self-contained page showing both sides. Clicking a part or a BOM line highlights its pads. Hand-fitted parts have a tick-off list kept in the browser.
-- **`bench/bringup.html` and `bringup.csv`:**
-  - the meter checks before first power, generated from the test points and their limits;
-  - the first-power steps;
-  - the acceptance tests;
-  - one column per unit for results.
-- **`CHECKSUMS.txt`** and the verification-record rows for the README.
+- **`order/`:** the Gerber and drill zip (`kicad-cli`), and JLCPCB's BOM and CPL with each rotation solved against JLCPCB's own footprint.
+- **`CHECKSUMS.txt`:** SHA-256 of every file in `order/`.
+- **Drawings and renders:** `pcb drawing placement` (A3 sheets and a PDF), `pcb render` (nets labelled, or `--look` in the finish colours).
+- **Not built:** the interactive assembly page, the generated bring-up sheet and the 1:1 fit print of the first plan. Projects write these by hand for now.
 - **Scratch files** go to the command's `--work` folder, `pcb_work/<command>` beside the project by default. The highest folder a run creates, and any `pcb_work` above the work folder, gets a `.gitignore` of `*` (0.4.4), so scratch files never reach a commit.
 
 ## Testing and contract (milestone M0)
@@ -166,7 +100,7 @@ Reviews 8 to 20's probe folders were audited on 5 Nov 2026 and removed: each ver
 
 ## Project file and explicit edits (milestone M1)
 
-The commands table above is the plan. Built so far: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1); `zone` (M2); `paste`, `art`, `check`, `gate`, `release`, `compare-gerbers` (M3, in progress).
+Built by the end of M3: `roundtrip`, `info`, `import-tscircuit`, `render`, `doctor` (M0); `route` (spike 2, hardened in M0 and M1); `init`, `status`, `edit`, `diff` (M1); `zone` (M2); `paste`, `art`, `check`, `gate`, `release`, `compare-gerbers` (M3, in progress).
 
 ### Project file
 
@@ -317,6 +251,12 @@ The fab's limits are one TOML file per process in `fab/`, built into the binary 
 Routing (M5a): `pcb route --project` reads net classes. A `critical` net is the designer's: the command refuses to name one in `--nets` or `--rip`, checks with KiCad's DRC that every critical net is connected on the board the router starts from (after the prewire), and leaves them out of "every net". `--staged` is two `route::run` calls from `main.rs`: the first layer alone into the output, then all layers for `still_open`, with its own work folders (`stage1`, `stage2`); the runs laid off the first layer are measured per net from the segments stage 2 added, and a run over `--max-cross-mm` moves the result to `.rejected` and restores the output. What staged routing cannot do yet is prefer the first layer within one run, or measure ground under a track; both are M5b.
 
 Route quality (`src/quality.rs`) works from the board's lists of tracks, vias, pads and zone fills; it needs no copper graph. What it cannot see without one: whether a track has ground beneath it, and whether tracks sit at minimum spacing where there was room to spread.
+
+Silkscreen (M5a): `silk-owner` takes each footprint's visible Reference on a silkscreen layer, at the footprint's position plus the field's offset turned by the footprint's angle, and compares the gap to its own pads with the gap to every other part's pads on that side; 0.05 mm nearer another part is a finding. Hidden references are skipped, so a board whose designators are artwork gets no judgement here: its reviewer still checks them by eye. KiCad's own text is also held to the fab file's height and stroke.
+
+The write gate (`src/gate.rs`) judges a copy of the board without the non-copper shapes of `pcb:art:` groups (`art::without_surface_art`), before and after. `pcb art` uses `Gate::begin_with_art` and judges the board as it is. Copper artwork always stays, since other copper is judged against it.
+
+Left for M5b: `[[near]]` is not yet required for each regulator (the tool does not know which parts are regulators without a part class in the netlist); the copper graph and what depends on it.
 
 `pcb check --fab` runs `release::read_back` in `<work>/fab` and lists each problem as a `fab` finding; `[[waiver]] check = "dfm"` entries apply to it as they do to a release.
 

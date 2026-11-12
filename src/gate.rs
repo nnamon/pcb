@@ -18,6 +18,8 @@ pub struct Gate {
     work: PathBuf,
     input: PathBuf,
     pub before: BTreeMap<String, usize>,
+    /// The gate's DRC judges the silkscreen and mask artwork too (`pcb art` only).
+    art: bool,
 }
 
 pub struct GateResult {
@@ -96,9 +98,35 @@ impl Gate {
     /// Starts the gate: checks the output and work paths first, so a wrong path is refused before any DRC runs
     /// (review 12, R6), then runs DRC on the input.
     pub fn begin(work: &Path, board: &str) -> Result<Gate> {
+        Self::begin_with(work, board, false)
+    }
+
+    /// As `begin`, judging the silkscreen and mask artwork too: for `pcb art`, the one command that changes it.
+    pub fn begin_with_art(work: &Path, board: &str) -> Result<Gate> {
+        Self::begin_with(work, board, true)
+    }
+
+    fn begin_with(work: &Path, board: &str, art: bool) -> Result<Gate> {
         check_work(work)?;
-        let before = kicad::drc_counts(work, board, "drc_before")?;
-        Ok(Gate { work: work.to_path_buf(), input: PathBuf::from(board), before })
+        let gate = Gate { work: work.to_path_buf(), input: PathBuf::from(board), before: Default::default(), art };
+        let text = std::fs::read_to_string(board).map_err(|e| crate::contract::failed("io", format!("{board}: {e}")))?;
+        let before = match gate.without_art(&text, "drc_before_board")? {
+            Some(copy) => kicad::drc_counts(work, &copy, "drc_before")?,
+            None => kicad::drc_counts(work, board, "drc_before")?,
+        };
+        Ok(Gate { before, ..gate })
+    }
+
+    /// A copy of the board for DRC without its silkscreen and mask artwork (M5a), or None when the gate judges the
+    /// artwork or the board has none.
+    fn without_art(&self, text: &str, name: &str) -> Result<Option<String>> {
+        if self.art || !text.contains(crate::art::PREFIX) {
+            return Ok(None);
+        }
+        let copy = self.work.join(format!("{name}.kicad_pcb"));
+        std::fs::write(&copy, crate::art::without_surface_art(text)?)?;
+        kicad::copy_rules(&self.input, &copy)?;
+        Ok(Some(copy.to_string_lossy().to_string()))
     }
 
     pub fn finish(&self, candidate: &str, out_path: &str, has_zones: bool) -> Result<GateResult> {
@@ -123,7 +151,10 @@ impl Gate {
         std::fs::write(&cand, &text)?;
         // the design rules travel with the board: without them KiCad falls back to its defaults
         kicad::copy_rules(&self.input, &cand)?;
-        let after = kicad::drc_counts(&self.work, cand.to_str().unwrap(), "drc_after")?;
+        let after = match self.without_art(&text, "candidate_drc")? {
+            Some(copy) => kicad::drc_counts(&self.work, &copy, "drc_after")?,
+            None => kicad::drc_counts(&self.work, cand.to_str().unwrap(), "drc_after")?,
+        };
         let (fixed, worse) = compare(&self.before, &after);
         let (mut regressions, mut allowed) = (vec![], vec![]);
         for w in worse {

@@ -4,7 +4,7 @@ The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M
 
 ## 0.5.0 (in progress): M5a, the checks the badge's reviews did by hand
 
-Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). Steps 1 to 5 of M5a so far.
+Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). M5a as built; what was left for M5b is listed in `DESIGN.md`.
 
 - **Fab processes are data:** `fab/<name>.toml`, built into the binary. `pcb check` makes its KiCad rules from the file and the release read-back measures against the same numbers; the rule text in `check.rs` and the `DFM` table in `gerber_helper.py` had drifted. Limits changed with it, from JLCPCB's capabilities page (read 10 Nov 2026): copper to an unplated hole 0.2 mm (was 0.1; paddle-keyer v1.0.0 was made at 0.2); holes of one net no longer exempt from spacing, 0.254 mm (`hole_hole_same`, and a KiCad rule).
 - `pcb check`, new findings:
@@ -13,6 +13,9 @@ Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). Steps 1 
   - `paste-unassembled`: paste on a part the CPL leaves out, on a side that gets a stencil.
   - `cpl-bottom`: parts assembled on the bottom; their CPL rotations are not solved or converted.
   - `edge-setting`: an outline with arcs, zones, and a board copper-to-edge setting under 0.35 mm.
+  - `silk-owner`: a footprint's designator on the silkscreen nearer another part's pads than its own (GUIDELINES check 15). The badge carrier 0.7.1 had about fifteen. Only KiCad's own reference text is read: designators drawn as `[[text]]` or `[[art]]`, as on the carrier, are not, so a new board should show its footprints' references.
+  - `silk`: KiCad's own silkscreen text (visible footprint fields, footprint and board text) under the fab file's text height or stroke, as `[[text]]` already was.
+- The write gate's DRC leaves out silkscreen and mask artwork (`pcb:art:` groups), except in `pcb art`. Heavy artwork took every gated command past KiCad's listing limit (`drc-truncated`), though only `pcb art` changes it. `pcb check` and `pcb release` still judge the whole board.
 - Placement constraints in `pcb.toml`, judged by `pcb check`:
   - `[[near]]`: a part within `max_mm` of a pin (`to = "REF.PAD"`), measured from the pin's pad to the part's nearest pad on the same net. For decoupling and regulator capacitors; the badge carrier 0.6.0 had output capacitors 14 to 18 mm from VOUT.
   - `[[edge]]`: parts within `max_mm` of a named edge of the outline, and with `min_web_mm`, that much board between each of their holes and the edge. The badge carrier 0.8.0 left edge parts 10 mm inside a new outline and its lanyard holes 1.4 mm from the edge.

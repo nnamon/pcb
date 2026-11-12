@@ -210,6 +210,40 @@ fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64), v
         .collect())
 }
 
+/// The board's text without the artwork that is not copper: the shapes of every `pcb:art:` group on silkscreen and
+/// mask layers, and those groups. For the gate's DRC: heavy silkscreen art takes KiCad past its listing limit
+/// (`drc-truncated`) on every gated command, though no command but `pcb art` changes it. Copper art stays: other
+/// copper is judged against it.
+pub fn without_surface_art(src: &str) -> Result<String> {
+    if !src.contains(PREFIX) {
+        return Ok(src.to_string());
+    }
+    let b = Board::from_str(src.to_string())?;
+    let mut members: Vec<String> = vec![];
+    for g in b.root.items().iter().filter(|g| g.is("group") && g.arg(1).is_some_and(|nm| nm.starts_with(PREFIX))) {
+        if let Some(m) = g.find("members") {
+            members.extend(m.items()[1..].iter().filter_map(|x| x.atom().map(String::from)));
+        }
+    }
+    let mut e = Edits::default();
+    let mut gone: Vec<&str> = vec![];
+    for s in b.root.items().iter().filter(|s| s.is("gr_poly")) {
+        let id = s.find("uuid").and_then(|u| u.arg(1)).unwrap_or("");
+        let copper = s.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".Cu"));
+        if !copper && members.iter().any(|m| m == id) {
+            crate::route::remove(&mut e, &b.src, s.span);
+            gone.push(id);
+        }
+    }
+    // a group that lost a member goes too: on this copy the groups are only bookkeeping
+    for g in b.root.items().iter().filter(|g| g.is("group") && g.arg(1).is_some_and(|nm| nm.starts_with(PREFIX))) {
+        if g.find("members").is_some_and(|m| m.items()[1..].iter().filter_map(|x| x.atom()).any(|x| gone.contains(&x))) {
+            crate::route::remove(&mut e, &b.src, g.span);
+        }
+    }
+    e.apply(&b.src)
+}
+
 fn uuid(name: &str) -> String {
     crate::zone::name_uuid(name)
 }
@@ -343,7 +377,7 @@ fn run_inner(l: &Loaded, out_path: &str, work: &Path, dry: bool) -> Result<(Repo
     }
     // 3. the gate
     let has_zones = !b.zones.is_empty();
-    let gate = Gate::begin(work, &board_path)?;
+    let gate = Gate::begin_with_art(work, &board_path)?;
     let g = gate.finish_allowing(&candidate, out_path, has_zones, &p.drc_allow)?;
     rep.fixed = g.fixed;
     rep.regressions = g.regressions;

@@ -1304,6 +1304,40 @@ def g_m5a():
     want("m5a quality_report", rq["outcome"] == "done" and rail.get("narrow_mm") == 30.0 and det.get("detour") == 2.6 and len(rq["data"]["over"]) == 5,
          f"pcb quality reports the measures (RAIL narrow {rail.get('narrow_mm')} mm, DET detour {det.get('detour')}, over {len(rq['data']['over'])})", rq)
 
+    # source: badge carrier 0.7.1 (Gate 2 visual): about fifteen designators beside the wrong part. R1's reference is
+    # shown 0.3 mm from R2's pad and 8 mm from its own; R2's is beside R2; R3 is turned 90 degrees with its reference
+    # beyond its own pad 2, and R4's pad sits where that reference would be were the turn applied the wrong way round
+    so = (two + 'fp("R3", 40, 20, [("1", 0, 0, "A", 1.0, 1.0), ("2", 2, 0, "B", 1.0, 1.0)])\n'
+          'def ref(name, x=None, y=None):\n    f = b.FindFootprintByReference(name); t = f.Reference(); t.SetVisible(True); t.SetLayer(pcbnew.F_SilkS)\n    if x is not None: t.SetPosition(P(x, y))\n    return f\n'
+          'ref("R1", 18.5, 10)\nref("R2", 21, 8.5)\n'
+          'f3 = b.FindFootprintByReference("R3"); f3.SetOrientationDegrees(90)\n'
+          'p2 = [p for p in f3.Pads() if p.GetNumber() == "2"][0].GetPosition(); o = f3.GetPosition()\n'
+          'k = 2.0\nf3.Reference().SetVisible(True); f3.Reference().SetLayer(pcbnew.F_SilkS); f3.Reference().SetPosition(pcbnew.VECTOR2I(int(o.x + (p2.x - o.x) * k), int(o.y + (p2.y - o.y) * k)))\n'
+          'mx = pcbnew.ToMM(o.x - (p2.x - o.x) * k); my = pcbnew.ToMM(o.y - (p2.y - o.y) * k)\n'
+          'fp("R4", mx, my, [("1", 0, 0, "A", 1.0, 1.0)])\n')
+    so += 't = b.FindFootprintByReference("R2").Reference(); t.SetTextSize(pcbnew.VECTOR2I(mm(0.5), mm(0.5))); t.SetTextThickness(mm(0.1))\n'
+    d, c, f = checked("m5_silk_owner", so)
+    got = sorted(k[1] for k in f if k[0] == "silk-owner")
+    want("m5a silk_text", ("silk", "text height 0.5 mm") in f and ("silk", "text stroke 0.1 mm") in f and "R2" in f[("silk", "text height 0.5 mm")]["message"] and f[("silk", "text height 0.5 mm")]["count"] == 1,
+         f"R2's 0.5 mm designator with a 0.1 mm stroke is under the fab file's text limits ({sorted(k for k in f if k[0] == 'silk')})", c)
+    d, c2, f2 = checked("m5_silk_owner_waived", so, toml='\n[[waiver]]\ncheck = "silk-owner"\nitem = "R1"\nmax = 1\nwhy = "probe"\n')
+    want("m5a silk_owner", got == ["R1"] and "R2" in f[("silk-owner", "R1")]["message"] and not any(k[0] == "silk-owner" for k in f2),
+         f"R1's designator beside R2 is found, R2's and the turned R3's are not, and a waiver takes it ({got})", c, c2)
+
+    # source: M5 review, gate: heavy silkscreen artwork took every gated command past KiCad's listing limit. The gate
+    # of pcb zone judges a copy without the silkscreen and mask artwork; pcb art's gate judges the board itself; the
+    # board keeps its artwork either way
+    d = P.paddle(M3, "m5_gate_art")
+    n_art = open(P.board(d)).read().count('"pcb:art:')
+    z = P.pcb("zone", "--project", d, "--work", W("m5_gate_art_zw"))
+    a = P.pcb("art", "--project", d, "--work", W("m5_gate_art_aw"))
+    zc = os.path.join(W("m5_gate_art_zw"), "drc_before_board.kicad_pcb")
+    zt = open(zc).read() if os.path.exists(zc) else None
+    silk_polys = lambda t: len(re.findall(r'\(gr_poly(?:(?!\(gr_poly).)*?\(layer "[FB]\.(?:SilkS|Mask)"\)', t, re.S))
+    want("m5a gate_without_art", n_art > 0 and out_(z, "done") and out_(a, "done") and zt is not None and silk_polys(zt) < silk_polys(open(P.board(d)).read())
+         and not os.path.exists(os.path.join(W("m5_gate_art_aw"), "drc_before_board.kicad_pcb")) and open(P.board(d)).read().count('"pcb:art:') == n_art,
+         f"pcb zone's gate judged a copy without the surface artwork, pcb art's the board ({n_art} groups; copy {silk_polys(zt) if zt else None} silkscreen and mask polygons, board {silk_polys(open(P.board(d)).read())})", z, a)
+
     # pcb check --fab: the read-back without a release. A 0.10 mm track is pcb check's own DRC finding and, with --fab,
     # also the read-back's; same-net vias 0.1 mm apart and silkscreen over an open hole are the read-back's alone, and
     # silkscreen over the tented vias is a warning
