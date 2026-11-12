@@ -210,10 +210,10 @@ fn text_polygons(t: &crate::project::TextArt, base: &Path, centre: (f64, f64), v
         .collect())
 }
 
-/// The board's text without the artwork that is not copper: the shapes of every `pcb:art:` group on silkscreen and
-/// mask layers, and those groups. For the gate's DRC: heavy silkscreen art takes KiCad past its listing limit
-/// (`drc-truncated`) on every gated command, though no command but `pcb art` changes it. Copper art stays: other
-/// copper is judged against it.
+/// The board's text without its silkscreen artwork: the silkscreen shapes of every `pcb:art:` group, and the groups
+/// that held them. For the gate's DRC: heavy silkscreen art takes KiCad past its listing limit
+/// (`drc-truncated`) on every gated command, though no command but `pcb art` changes it. Mask and copper art
+/// stay: new copper is judged against both.
 pub fn without_surface_art(src: &str) -> Result<String> {
     if !src.contains(PREFIX) {
         return Ok(src.to_string());
@@ -229,8 +229,9 @@ pub fn without_surface_art(src: &str) -> Result<String> {
     let mut gone: Vec<&str> = vec![];
     for s in b.root.items().iter().filter(|s| s.is("gr_poly")) {
         let id = s.find("uuid").and_then(|u| u.arg(1)).unwrap_or("");
-        let copper = s.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".Cu"));
-        if !copper && members.iter().any(|m| m == id) {
+        // silkscreen only: mask and copper artwork stay, since new copper is judged against them (review 21, 1)
+        let silk = s.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| l.ends_with(".SilkS") || l.ends_with(".Silkscreen"));
+        if silk && members.iter().any(|m| m == id) {
             crate::route::remove(&mut e, &b.src, s.span);
             gone.push(id);
         }

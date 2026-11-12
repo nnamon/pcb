@@ -1325,7 +1325,7 @@ def g_m5a():
          f"R1's designator beside R2 is found, R2's and the turned R3's are not, and a waiver takes it ({got})", c, c2)
 
     # source: M5 review, gate: heavy silkscreen artwork took every gated command past KiCad's listing limit. The gate
-    # of pcb zone judges a copy without the silkscreen and mask artwork; pcb art's gate judges the board itself; the
+    # of pcb zone judges a copy without the silkscreen artwork; pcb art's gate judges the board itself; the
     # board keeps its artwork either way
     d = P.paddle(M3, "m5_gate_art")
     n_art = open(P.board(d)).read().count('"pcb:art:')
@@ -1336,7 +1336,35 @@ def g_m5a():
     silk_polys = lambda t: len(re.findall(r'\(gr_poly(?:(?!\(gr_poly).)*?\(layer "[FB]\.(?:SilkS|Mask)"\)', t, re.S))
     want("m5a gate_without_art", n_art > 0 and out_(z, "done") and out_(a, "done") and zt is not None and silk_polys(zt) < silk_polys(open(P.board(d)).read())
          and not os.path.exists(os.path.join(W("m5_gate_art_aw"), "drc_before_board.kicad_pcb")) and open(P.board(d)).read().count('"pcb:art:') == n_art,
-         f"pcb zone's gate judged a copy without the surface artwork, pcb art's the board ({n_art} groups; copy {silk_polys(zt) if zt else None} silkscreen and mask polygons, board {silk_polys(open(P.board(d)).read())})", z, a)
+         f"pcb zone's gate judged a copy without the silkscreen artwork, pcb art's the board ({n_art} groups; copy {silk_polys(zt) if zt else None} silkscreen and mask polygons, board {silk_polys(open(P.board(d)).read())})", z, a)
+
+    # source: review 21, 2, 9, 10 and 4. Two unplated holes 0.3 mm apart are KiCad's finding without --fab (holes with
+    # no net are not "the same net"); a via just outside a round pad is no via-in-pad; U1 has two pads numbered 1 and
+    # C1 is beside the second; a part beyond the outline is outside its edge
+    r21 = ('fp("H1", 30, 20, [("", 0, 0, None, 1.0, 1.0, "npth")])\nfp("H2", 31.3, 20, [("", 0, 0, None, 1.0, 1.0, "npth")])\n'
+           'fp("U1", 10, 10, [("1", 0, 0, "A", 0.6, 0.6), ("1", 20, 0, "A", 0.6, 0.6), ("2", 0, 1.5, "B", 0.6, 0.6)])\n'
+           'fp("C1", 31.5, 10, [("1", 0, 0, "A", 0.8, 0.8), ("2", 0, 1.5, "B", 0.8, 0.8)])\n'
+           'track("A", 10, 10, 30, 10, 0.25)\ntrack("A", 30, 10, 31.5, 10, 0.25)\ntrack("B", 10, 11.5, 31.5, 11.5, 0.25)\n'
+           'fp("J9", 70, 10, [("1", 0, 0, "A", 0.8, 0.8)])\n')
+    d, c, f = checked("m5_r21", r21, toml='\n[[near]]\npart = "C1"\nto = "U1.1"\nmax_mm = 2.0\nwhy = "probe"\n\n[[edge]]\nside = "right"\nparts = ["J9"]\nmax_mm = 2.0\nwhy = "probe"\n')
+    holes = [k for k in f if k[0] == "drc" and "hole_to_hole" in k[1]]
+    want("m5a r21", holes and not any(k[0] == "near" for k in f) and "outside" in (f.get(("edge", "J9")) or {}).get("message", ""),
+         f"no-net holes 0.3 mm apart found by pcb check, the nearer of two pads numbered 1 measured, a part off the board outside its edge ({sorted(f)})", c)
+
+    # source: repository split (owner, 13 Nov 2026): pcb new writes a project that reads back, pinned to this pcb;
+    # a pin to another version is a config problem every project command refuses on
+    nd = W("m5_new")
+    shutil.rmtree(nd, ignore_errors=True)
+    n = P.pcb("new", "probe-board", "--dir", nd, "--size", "60x40", "--mask", "black")
+    n2 = P.pcb("new", "probe-board", "--dir", nd)
+    n3 = P.pcb("new", "Probe_Board", "--dir", W("m5_new_bad"))
+    st = P.pcb("status", "--project", nd, "--no-drc")
+    toml_new = open(os.path.join(nd, "pcb.toml")).read() if os.path.exists(os.path.join(nd, "pcb.toml")) else ""
+    open(os.path.join(nd, "pcb.toml"), "w").write(re.sub(r'pcb = "[^"]+"', 'pcb = "0.1"', toml_new))
+    st2 = P.pcb("status", "--project", nd, "--no-drc")
+    want("m5a new", out_(n, "done") and all(os.path.exists(os.path.join(nd, f)) for f in n["data"]["files"]) and "AGENTS.md" in n["data"]["files"] and not os.path.exists(os.path.join(nd, "order"))
+         and n2.get("code") == "exists" and n3.get("code") == "config" and "pcb sync" in st["msg"] and "project.pcb" in json.dumps(st2),
+         f"a project is written once, into an empty folder, under a valid name; status names the next step, and another pcb version is a problem ({P.slim(n)} {n2.get('code')} {n3.get('code')})", n, n2, n3, st, st2)
 
     # pcb check --fab: the read-back without a release. A 0.10 mm track is pcb check's own DRC finding and, with --fab,
     # also the read-back's; same-net vias 0.1 mm apart and silkscreen over an open hole are the read-back's alone, and

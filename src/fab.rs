@@ -79,8 +79,8 @@ impl Fab {
 (rule "pcb fab: clearance" (severity error) (constraint clearance (min {}mm)))
 (rule "pcb fab: via drill" (severity error) (condition "A.Type == 'Via'") (constraint hole_size (min {}mm)))
 (rule "pcb fab: via pad" (severity error) (condition "A.Type == 'Via'") (constraint via_diameter (min {}mm)))
-(rule "pcb fab: hole to hole, same net" (severity error) (condition "A.Net == B.Net") (constraint hole_to_hole (min {}mm)))
-(rule "pcb fab: hole to hole, other nets" (severity error) (condition "A.Net != B.Net") (constraint hole_to_hole (min {}mm)))
+(rule "pcb fab: hole to hole, same net" (severity error) (condition "A.Net == B.Net && A.NetName != ''") (constraint hole_to_hole (min {}mm)))
+(rule "pcb fab: hole to hole, other nets" (severity error) (condition "A.Net != B.Net || A.NetName == ''") (constraint hole_to_hole (min {}mm)))
 (rule "pcb fab: copper to edge" (severity error) (constraint edge_clearance (min {}mm)))
 "#,
             l.track_mm,

@@ -26,6 +26,7 @@ mod release;
 mod import_tscircuit;
 mod render;
 mod route;
+mod scaffold;
 mod sexpr;
 mod stamp;
 mod sync;
@@ -175,6 +176,24 @@ enum Cmd {
         #[arg(long, short)]
         out: Option<String>,
     },
+    /// A new project folder, one repository per project: pcb.toml with the fab, finish, assembly service and route
+    /// quality limits set, the records (README, NOTES, CHANGELOG, VERSION, TAGS.tsv, CHECKSUMS), agent instructions,
+    /// the release workflow and the standard folders. No board is made: draw the schematic, then `pcb sync`
+    New {
+        /// Project name: lower-case letters, digits and hyphens. Also the repository's name.
+        name: String,
+        /// Folder to write (default: NAME in the current folder). Must be absent or empty.
+        #[arg(long)]
+        dir: Option<String>,
+        #[arg(long, default_value_t = 2)]
+        layers: u32,
+        /// Board size for a rectangular outline, WxH in mm; edit [outline] for another shape.
+        #[arg(long, default_value = "50x50")]
+        size: String,
+        /// Solder mask colour.
+        #[arg(long, default_value = "green")]
+        mask: String,
+    },
     /// Build the zones pcb.toml describes (keep-outs, planes and pours, power fills, net ties, pad overrides,
     /// stitching vias) and write the board through the gate, with the owner's DRC allowances. Zones an earlier run
     /// made are replaced; others are kept
@@ -214,7 +233,9 @@ enum Cmd {
         out: Option<String>,
     },
     /// The checks before a gate: KiCad DRC with the fab's rule set, track width against current, assembled
-    /// parts' side and paste, test points. Findings a pcb.toml [[waiver]] names do not fail
+    /// parts' side and paste, test points, the board spec against the assembly service, vias in pasted pads,
+    /// [[near]] and [[edge]] placement, silkscreen designators and text, and [quality] limits. Findings a pcb.toml
+    /// [[waiver]] names do not fail
     Check {
         /// pcb.toml, or the folder holding it
         #[arg(long, default_value = ".")]
@@ -425,6 +446,7 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Render { .. } => "render",
         Cmd::Doctor { .. } => "doctor",
         Cmd::Init { .. } => "init",
+        Cmd::New { .. } => "new",
         Cmd::Edit { .. } => "edit",
         Cmd::Diff { .. } => "diff",
         Cmd::Status { .. } => "status",
@@ -760,6 +782,20 @@ fn run(cli: Cli) -> Result<Reply> {
                 warnings: vec![],
                 human: format!("wrote {o}: {name}, {} layers, {} net rules", p.project.layers, p.nets.len()),
                 data: json!({ "name": name, "board": rel, "layers": p.project.layers, "fab": p.project.fab, "nets": p.nets.keys().collect::<Vec<_>>() }),
+            })
+        }
+        Cmd::New { name, dir, layers, size, mask } => {
+            let dir = std::path::PathBuf::from(dir.unwrap_or_else(|| name.clone()));
+            let size_mm = size.split_once(['x', 'X']).and_then(|(w, h)| Some([w.trim().parse::<f64>().ok()?, h.trim().parse::<f64>().ok()?])).ok_or_else(|| contract::refused("config", format!("size {size:?}: WxH in mm, for example 60x40")))?;
+            let files = scaffold::run(&scaffold::Opts { name: &name, dir: &dir, layers, size_mm, mask: &mask })?;
+            let d = dir.display().to_string();
+            Ok(Reply {
+                outcome: Outcome::Done,
+                error: None,
+                written: Some(d.clone()),
+                warnings: vec![],
+                human: format!("wrote {d}: {name}, {layers} layers, {} files. Next: git init, draw hw/{name}.kicad_sch, pcb parts --live, pcb sync", files.len()),
+                data: json!({ "name": name, "dir": d, "layers": layers, "pcb": scaffold::pin(), "files": files }),
             })
         }
         Cmd::Status { project: proj, no_drc, work } => status(&proj, no_drc, &work),
@@ -1110,19 +1146,24 @@ fn status(proj: &str, no_drc: bool, work: &str) -> Result<Reply> {
         }
         None => serde_json::Value::Null,
     };
+    // a project in its own repository tags v<x.y.z>; one in a shared repository <name>-v<x.y.z>
     let tag = format!("{}-v{}", p.project.name, p.project.version);
+    let short_tag = format!("v{}", p.project.version);
     let tags_tsv = std::path::absolute(&dir).ok().and_then(|d| d.ancestors().map(|a| a.join("TAGS.tsv")).find(|f| f.exists()));
     let tag_json = match &tags_tsv {
         Some(f) => {
-            let recorded = std::fs::read_to_string(f).unwrap_or_default().lines().any(|l| l.split('\t').next() == Some(tag.as_str()));
-            json!({ "tag": tag, "file": f.display().to_string(), "recorded": recorded })
+            let text = std::fs::read_to_string(f).unwrap_or_default();
+            let has = |t: &str| text.lines().any(|l| l.split('\t').next() == Some(t));
+            let prefixed = text.lines().any(|l| l.starts_with(&format!("{}-", p.project.name)));
+            let tag = if has(&tag) || (prefixed && !has(&short_tag)) { tag } else { short_tag };
+            json!({ "tag": tag, "file": f.display().to_string(), "recorded": has(&tag) })
         }
         None => json!({ "tag": tag, "file": null, "recorded": false }),
     };
     let bp = l.board_path();
     // a board the file names but that is not there is the file's problem, not a tool failure (review 8, 12)
     if !bp.exists() {
-        let msg = format!("project.board: no file {}", bp.display());
+        let msg = format!("project.board: no file {}{}", bp.display(), if p.project.netlist.is_some() { "; pcb sync makes it from the netlist and [outline]" } else { "" });
         return Ok(Reply { outcome: Outcome::Refused, error: Some(("config".into(), msg.clone())), written: None, warnings, human: format!("refused [config]: {msg}"), data: json!({ "file": path.display().to_string(), "problems": problems.iter().cloned().chain([msg]).collect::<Vec<_>>() }) });
     }
     let b = Board::load(&bp.to_string_lossy())?;

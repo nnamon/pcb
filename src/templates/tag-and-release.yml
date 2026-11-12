@@ -1,0 +1,79 @@
+# Creates the tags listed in TAGS.tsv and a GitHub release for each. Hardware tags (v<x.y.z>) get the package zip,
+# built from the repository at the tagged commit; firmware tags (fw-v<x.y.z>) get the files under firmware/ whose
+# names carry the version. Versions starting with 0. are pre-releases. Existing tags and releases are left alone.
+name: Tag and release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-and-release
+  cancel-in-progress: false
+
+jobs:
+  tag-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create missing tags and releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECT: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force origin
+          mkdir -p "$RUNNER_TEMP/out"
+          grep -v '^#' TAGS.tsv | grep -v '^[[:space:]]*$' | while IFS=$'\t' read -r tag sha msg; do
+            [ -n "$tag" ] || continue
+            if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              echo "::error::$tag: commit $sha is not in the repository"; exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              have=$(git rev-parse "$tag^{commit}")
+              if [ "$have" != "$sha" ]; then
+                echo "::error::$tag already exists on $have, TAGS.tsv says $sha; tags are never moved"; exit 1
+              fi
+            else
+              git tag -a "$tag" "$sha" -m "$msg"
+              git push origin "refs/tags/$tag"
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then continue; fi
+            if [[ "$tag" =~ ^fw-v([0-9].*)$ ]]; then
+              ver="${BASH_REMATCH[1]}"; kind=fw
+            elif [[ "$tag" =~ ^v([0-9].*)$ ]]; then
+              ver="${BASH_REMATCH[1]}"; kind=hw
+            else
+              echo "::error::$tag does not match v<x.y.z> or fw-v<x.y.z>"; exit 1
+            fi
+            out="$RUNNER_TEMP/out/$tag"; mkdir -p "$out"
+            notes="$out/notes.md"
+            { echo "$msg"; echo; echo "Commit: $sha"; } > "$notes"
+            assets=()
+            if [ "$kind" = hw ]; then
+              zip="$out/${PROJECT}_v${ver}.zip"
+              git archive --format=zip --prefix="${PROJECT}_v${ver}/" -o "$zip" "$sha"
+              assets+=("$zip")
+              if git show "$sha:CHECKSUMS.txt" > "$out/CHECKSUMS.txt" 2>/dev/null && [ -s "$out/CHECKSUMS.txt" ]; then
+                { echo; echo "### Order file checksums (SHA-256)"; echo; echo '```'; cat "$out/CHECKSUMS.txt"; echo '```'; } >> "$notes"
+              fi
+            else
+              while IFS= read -r f; do
+                case "$f" in
+                  *v${ver}.uf2|*v${ver}.bin|*/config.html)
+                    git show "$sha:$f" > "$out/$(basename "$f")"; assets+=("$out/$(basename "$f")") ;;
+                esac
+              done < <(git ls-tree -r --name-only "$sha" firmware)
+              if [ "${#assets[@]}" -eq 0 ]; then echo "::error::$tag: no firmware files found"; exit 1; fi
+            fi
+            pre=()
+            [[ "$ver" == 0.* ]] && pre=(--prerelease --latest=false)
+            title="$PROJECT v$ver"; [ "$kind" = fw ] && title="$PROJECT firmware v$ver"
+            gh release create "$tag" --verify-tag --title "$title" --notes-file "$notes" "${pre[@]}" "${assets[@]}"
+          done

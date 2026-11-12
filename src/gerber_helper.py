@@ -626,14 +626,15 @@ def verify(folder, board_path):
             continue
         silk = layer_shape(lay[sk])
         opened = layer_shape(lay[mk]) if mk in lay else None
-        for h in hs:
+        for h, rec in zip(hs, hl):
             if not silk.intersects(h):
                 continue
             q = silk.intersection(h)
             if q.is_empty or q.area <= 0.005:
                 continue
-            if opened is not None and opened.intersects(h):
-                findings.append({"rule": "silk_on_hole", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen over a hole the mask leaves open"})
+            # an unplated hole is open whatever the mask layer draws (review 21, 6)
+            if not rec[3] or (opened is not None and opened.intersects(h)):
+                findings.append({"rule": "silk_on_hole", "layer": sk, "at": at(q), "detail": f"{q.area:.3f} mm² of silkscreen over " + ("an unplated hole" if not rec[3] else "a hole the mask leaves open")})
             else:
                 silk_on_vias[sk] = silk_on_vias.get(sk, 0) + 1
     # mask dams: two mask openings closer than the fab's solder mask bridge. The fab opens the mask across such a

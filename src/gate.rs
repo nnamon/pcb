@@ -18,7 +18,7 @@ pub struct Gate {
     work: PathBuf,
     input: PathBuf,
     pub before: BTreeMap<String, usize>,
-    /// The gate's DRC judges the silkscreen and mask artwork too (`pcb art` only).
+    /// The gate's DRC judges the silkscreen artwork too (`pcb art` only).
     art: bool,
 }
 
@@ -101,7 +101,7 @@ impl Gate {
         Self::begin_with(work, board, false)
     }
 
-    /// As `begin`, judging the silkscreen and mask artwork too: for `pcb art`, the one command that changes it.
+    /// As `begin`, judging the silkscreen artwork too: for `pcb art`, the one command that changes it.
     pub fn begin_with_art(work: &Path, board: &str) -> Result<Gate> {
         Self::begin_with(work, board, true)
     }
@@ -117,7 +117,7 @@ impl Gate {
         Ok(Gate { before, ..gate })
     }
 
-    /// A copy of the board for DRC without its silkscreen and mask artwork (M5a), or None when the gate judges the
+    /// A copy of the board for DRC without its silkscreen artwork (M5a), or None when the gate judges the
     /// artwork or the board has none.
     fn without_art(&self, text: &str, name: &str) -> Result<Option<String>> {
         if self.art || !text.contains(crate::art::PREFIX) {

@@ -694,7 +694,18 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         }
         let at = if o.prewire.is_empty() { board_path.to_string() } else { o.work.join("prewired.kicad_pcb").to_string_lossy().to_string() };
         let mut open: Vec<String> = vec![];
-        for (k, v) in kicad::drc_counts(&o.work, &at, "critical_before")? {
+        // on a copy whose project reports open nets whatever the board's own severities say (review 21, 3)
+        let probe = o.work.join("critical_probe.kicad_pcb");
+        std::fs::copy(&at, &probe)?;
+        kicad::copy_rules(Path::new(&at), &probe)?;
+        let pro = probe.with_extension("kicad_pro");
+        let mut v: serde_json::Value = std::fs::read_to_string(&pro).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| serde_json::json!({}));
+        if v.pointer("/board/design_settings/rule_severities").is_none() {
+            v = serde_json::json!({ "board": { "design_settings": { "rule_severities": {} } } });
+        }
+        v.pointer_mut("/board/design_settings/rule_severities").and_then(|x| x.as_object_mut()).map(|m| m.insert("unconnected_items".into(), serde_json::json!("error")));
+        std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
+        for (k, v) in kicad::drc_counts(&o.work, &probe.to_string_lossy(), "critical_before")? {
             let (kind, nets) = kicad::key_parts(&k);
             if kind == "unconnected_items" && v > 0 {
                 open.extend(nets.iter().filter(|n| critical.iter().any(|c| c == *n)).map(|n| n.to_string()));

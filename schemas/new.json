@@ -1,0 +1,56 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:new",
+ "title": "pcb new output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/new/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "name",
+     "dir",
+     "layers",
+     "pcb",
+     "files"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "dir": {
+      "type": "string"
+     },
+     "layers": {
+      "type": "integer"
+     },
+     "pcb": {
+      "type": "string"
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ }
+}

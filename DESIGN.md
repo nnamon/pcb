@@ -44,7 +44,7 @@ parts/ (JLCPCB footprints and data) ──────┘        ▲
 6. **Check.** `pcb check`: KiCad DRC under the fab file's rules, then the project's own checks. `--fab` also plots the Gerbers and reads them back. A finding fails unless a `[[waiver]]` with a reason names it.
 7. **Gate and release.** `pcb gate pass` records a gate when nothing is unwaived. `pcb release` writes the order files, reads the Gerbers back against the board's nets and the fab file's limits, and writes checksums.
 
-Every command that writes the board goes through the write gate: KiCad DRC before and after, and a result with a new violation goes to `<out>.rejected.kicad_pcb` instead. From 0.5.0 that DRC leaves out silkscreen and mask artwork, except for `pcb art`, the one command that changes it.
+Every command that writes the board goes through the write gate: KiCad DRC before and after, and a result with a new violation goes to `<out>.rejected.kicad_pcb` instead. From 0.5.0 that DRC leaves out silkscreen artwork, except for `pcb art`, the one command that changes it.
 
 ## Board model
 
@@ -254,9 +254,9 @@ Route quality (`src/quality.rs`) works from the board's lists of tracks, vias, p
 
 Silkscreen (M5a): `silk-owner` takes each footprint's visible Reference on a silkscreen layer, at the footprint's position plus the field's offset turned by the footprint's angle, and compares the gap to its own pads with the gap to every other part's pads on that side; 0.05 mm nearer another part is a finding. Hidden references are skipped, so a board whose designators are artwork gets no judgement here: its reviewer still checks them by eye. KiCad's own text is also held to the fab file's height and stroke.
 
-The write gate (`src/gate.rs`) judges a copy of the board without the non-copper shapes of `pcb:art:` groups (`art::without_surface_art`), before and after. `pcb art` uses `Gate::begin_with_art` and judges the board as it is. Copper artwork always stays, since other copper is judged against it.
+The write gate (`src/gate.rs`) judges a copy of the board without the silkscreen shapes of `pcb:art:` groups (`art::without_surface_art`), before and after. `pcb art` uses `Gate::begin_with_art` and judges the board as it is. Mask and copper artwork always stay, since new copper is judged against both (review 21, 1).
 
-Left for M5b: `[[near]]` is not yet required for each regulator (the tool does not know which parts are regulators without a part class in the netlist); the copper graph and what depends on it.
+Left for M5b: review 21's open findings (`docs/reviews/21_m5a.md`: `[[edge]]` on outlines that are not rectangles, a designator's extent, paste drawn as graphics, a KiCad rule for copper to unplated holes); `[[near]]` is not yet required for each regulator (the tool does not know which parts are regulators without a part class in the netlist); the copper graph and what depends on it.
 
 `pcb check --fab` runs `release::read_back` in `<work>/fab` and lists each problem as a `fab` finding; `[[waiver]] check = "dfm"` entries apply to it as they do to a release.
 
@@ -427,7 +427,7 @@ The original six phases became five milestones in the proposal ("pcb tool: propo
 
 **M5, proposed 10 Nov 2026** ("pcb tool: review and M5 proposal", Claude doc, https://claude.ai/artifact/2CZ7UCHgbVxiMMJH7Yfwjk; owner: write it up and prepare to implement). M5a: one fab data file, the checks the badge's reviews did by hand, placement and edge constraints, net classes and top-first routing. M5b: a copper graph, current paths, route quality limits. Branch `pcb-0.5.0`.
 
-**Repository split, decided 13 Nov 2026** (owner). `claude-pcb` is split after pcb 0.5.0 lands: this tool, its fab files, tests and the standards (`GUIDELINES.md`, `STYLE.md`) go to a repo `pcb`; each project gets its own repo with its history kept (`paddle-keyer`, `quansheng-paddle-adapter`, `nightjar`, `nn-dcsg-2027-carrier` for the badge carrier as ordered); the final badge is a new repo, `nn-dcsg-2027-badge`, made by `pcb new`; `claude-pcb` is archived. Each project pins the pcb version it was checked with, and tags become `v<x.y.z>`.
+**Repository split, decided 13 Nov 2026** (owner). `claude-pcb` is split after pcb 0.5.0 lands: this tool, its fab files, tests and the standards (`GUIDELINES.md`, `STYLE.md`) go to a repo `pcb`; each project gets its own repo with its history kept (`paddle-keyer`, `quansheng-paddle-adapter`, `nightjar`, `nn-dcsg-2027-carrier` for the badge carrier as ordered); the final badge is a new repo, `nn-dcsg-2027-badge`, made by `pcb new`; `claude-pcb` is archived. Each project pins the pcb version it was checked with, and tags become `v<x.y.z>`. `pcb new` (`src/scaffold.rs`, with the workflow in `src/templates/`) writes a project in that shape; the pin is `[project] pcb`, checked in `project::check`, so every command that loads a project refuses under another version.
 
 **The tool before the boards** (owner, 4 Nov 2026). Every gate is judged on the tool alone. Real boards serve as fixtures, and their hard spots become cases, but no board's design work (the badge's ILM, VBUS_F and J102 fixes, its release) is done until M4 closes.
 

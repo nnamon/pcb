@@ -149,7 +149,9 @@ pub fn run(b: &Board, p: &Project) -> Report {
     }
     let mut rep = Report { vias: b.vias.len(), ..Default::default() };
     let mut by: BTreeMap<&str, NetStats> = BTreeMap::new();
-    for t in &b.tracks {
+    // a track arc counts as a track along its chord, at its width (review 21, 8): a little short, never missing
+    let arcs: Vec<crate::board::Track> = b.arcs.iter().map(|a| crate::board::Track { x0: a.start.0, y0: a.start.1, x1: a.end.0, y1: a.end.1, width: a.width, layer: a.layer.clone(), net: a.net.clone(), locked: a.locked, uuid: None, span: (0, 0) }).collect();
+    for t in b.tracks.iter().chain(arcs.iter()) {
         let s = by.entry(t.net.as_str()).or_default();
         let l = (t.x1 - t.x0).hypot(t.y1 - t.y0);
         s.length_mm += l;
@@ -186,14 +188,14 @@ pub fn run(b: &Board, p: &Project) -> Report {
             s.segments_per_10mm = Some(r1(10.0 * s.segments as f64 / s.length_mm));
         }
         if let (true, Some(w)) = (s.power, lim.power_width_mm) {
-            s.narrow_mm = r1(b.tracks.iter().filter(|t| t.net == name && t.width + 1e-6 < w).map(|t| (t.x1 - t.x0).hypot(t.y1 - t.y0)).sum());
+            s.narrow_mm = r1(b.tracks.iter().chain(arcs.iter()).filter(|t| t.net == name && t.width + 1e-6 < w).map(|t| (t.x1 - t.x0).hypot(t.y1 - t.y0)).sum());
             if s.narrow_mm > lim.power_neck_mm.unwrap_or(3.0) + 1e-6 {
                 over.push((format!("width {name}"), format!("{name} is a power net with {} mm of track under {w} mm (narrowest {} mm); lay it as a trunk or a pour", s.narrow_mm, s.narrowest_mm)));
             }
         }
         if let (Some(d), Some(max)) = (s.detour, lim.max_detour)
             && d > max + 1e-6 {
-            over.push((format!("detour {name}"), format!("{name} is routed {:.1} mm for pads {:.1} mm apart, {d} times the shortest path (limit {max})", s.length_mm, s.tree_mm)));
+            over.push((format!("detour {name}"), format!("{name} is routed {:.1} mm where the shortest tree between its pads is {:.1} mm, {d} times as long (limit {max})", s.length_mm, s.tree_mm)));
         }
         if let Some(max) = lim.max_vias_two_pad
             && s.pads == 2 && s.vias > max {
@@ -230,11 +232,12 @@ pub fn run(b: &Board, p: &Project) -> Report {
     // broadside: a top track directly over a bottom track of another net
     let (top, bot): (Vec<_>, Vec<_>) = b.tracks.iter().filter(|t| !zone_nets.contains(t.net.as_str()) && (t.layer == "F.Cu" || t.layer == "B.Cu")).partition(|t| t.layer == "F.Cu");
     let mut pairs: BTreeMap<(String, String), f64> = BTreeMap::new();
-    for a in top.iter().filter(|a| (a.x1 - a.x0).hypot(a.y1 - a.y0) >= 1.0) {
+    for a in top.iter() {
         let (ax0, ax1, ay0, ay1) = (a.x0.min(a.x1) - 0.2, a.x0.max(a.x1) + 0.2, a.y0.min(a.y1) - 0.2, a.y0.max(a.y1) + 0.2);
         for c in bot.iter().filter(|c| c.net != a.net && c.x0.max(c.x1) >= ax0 && c.x0.min(c.x1) <= ax1 && c.y0.max(c.y1) >= ay0 && c.y0.min(c.y1) <= ay1) {
             let o = along(a, c, 0.15);
-            if o > 0.5 {
+            // a run laid as many short segments adds up as one long one does (review 21, 8)
+            if o > 1e-3 {
                 *pairs.entry((a.net.clone(), c.net.clone())).or_default() += o;
             }
         }

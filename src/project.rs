@@ -314,6 +314,9 @@ pub struct Info {
     pub fab: String,
     /// The circuit, as a KiCad schematic (`.kicad_sch`) or netlist (`.net`), relative to this file (milestone M4).
     pub netlist: Option<String>,
+    /// The pcb version the project is built with: "X.Y" (any patch) or "X.Y.Z". Another version is refused, so a
+    /// project is always judged by the checks it was designed under (`pcb new` writes it).
+    pub pcb: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -582,6 +585,17 @@ pub fn check(p: &Project) -> Vec<String> {
     }
     if !is_version(&i.version) {
         e.push(format!("project.version {:?} is not MAJOR.MINOR.PATCH", i.version));
+    }
+    if let Some(pin) = &i.pcb
+        && !crate::scaffold::pin_ok(pin) {
+        e.push(format!("project.pcb is {pin:?} and this is pcb {}; use the pinned version, or change the pin and run pcb check again", env!("CARGO_PKG_VERSION")));
+    }
+    if let Some(q) = &p.quality {
+        for (k, v) in [("power_width_mm", q.power_width_mm), ("power_neck_mm", q.power_neck_mm), ("max_detour", q.max_detour), ("detour_min_mm", q.detour_min_mm), ("max_segments_per_10mm", q.max_segments_per_10mm), ("max_broadside_mm", q.max_broadside_mm), ("small_pour_mm2", q.small_pour_mm2)] {
+            if v.is_some_and(|v| !(v.is_finite() && v >= 0.0)) {
+                e.push(format!("quality.{k} must be a number of 0 or more"));
+            }
+        }
     }
     if !matches!(i.layers, 2 | 4 | 6 | 8) {
         e.push(format!("project.layers {} is not 2, 4, 6 or 8", i.layers));

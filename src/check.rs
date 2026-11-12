@@ -127,7 +127,21 @@ fn content(text: &str) -> Result<Vec<String>> {
 /// mm from a point to a pad's copper (its turned bounding rectangle); 0 inside it.
 fn pad_gap(p: &crate::board::Pad, q: (f64, f64)) -> f64 {
     let (lx, ly) = crate::board::rotate(q.0 - p.x, q.1 - p.y, -p.rot);
-    (lx.abs() - p.w / 2.0).max(0.0).hypot((ly.abs() - p.h / 2.0).max(0.0))
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| (x0 - lx).max(lx - x1).max(0.0).hypot((y0 - ly).max(ly - y1).max(0.0));
+    let body = match p.shape.as_str() {
+        // a circle, or a stadium: the distance to its spine less the end radius (review 21, 9)
+        "circle" | "oval" => {
+            let r = p.w.min(p.h) / 2.0;
+            let (hx, hy) = ((p.w / 2.0 - r).max(0.0), (p.h / 2.0 - r).max(0.0));
+            ((lx.abs() - hx).max(0.0).hypot((ly.abs() - hy).max(0.0)) - r).max(0.0)
+        }
+        _ => rect(-p.w / 2.0, -p.h / 2.0, p.w / 2.0, p.h / 2.0),
+    };
+    // a custom pad's copper is its primitives: their extent counts as pad
+    match p.prims {
+        Some((x0, y0, x1, y1)) => body.min(rect(x0, y0, x1, y1)),
+        None => body,
+    }
 }
 
 /// `pcb check`: see the module documentation.
@@ -305,8 +319,20 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
     }
     // an outline with arcs: pours fill to chords of a rounded corner and read back under the limit, so the board's
     // own copper-to-edge setting carries the margin (GUIDELINES; the badge carrier 0.8.0 read back 0.299 mm)
-    let arcs = b.root.items().iter().any(|g| matches!(g.head(), Some("gr_arc" | "gr_circle")) && g.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts"));
-    if arcs && !b.zones.is_empty() {
+    // arcs anywhere on Edge.Cuts: board arcs and circles, rounded rectangles, arcs in a polygon, and the same held
+    // in a footprint (review 21, 5); pours only, not rule areas
+    fn edge_arc(g: &sexpr::Node, top: bool) -> bool {
+        let on_edge = g.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts");
+        match g.head() {
+            Some("gr_arc" | "gr_circle" | "fp_arc" | "fp_circle") => on_edge,
+            Some("gr_rect" | "fp_rect") => on_edge && g.find("radius").and_then(|r| r.arg(1)).and_then(|v| v.parse::<f64>().ok()).is_some_and(|v| v > 0.0),
+            Some("gr_poly" | "fp_poly") => on_edge && g.find("pts").is_some_and(|p| p.find("arc").is_some()),
+            Some("footprint") if top => g.items().iter().any(|x| edge_arc(x, false)),
+            _ => false,
+        }
+    }
+    let arcs = b.root.items().iter().any(|g| edge_arc(g, true));
+    if arcs && b.zones.iter().any(|z| !z.net.is_empty()) {
         let set = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.pointer("/board/design_settings/rules/min_copper_edge_clearance").and_then(|x| x.as_f64()));
         if set.is_none_or(|v| v + 1e-9 < lim.cu_edge_arcs_mm) {
             add("edge-setting", "copper-to-edge".into(), 1, format!("the outline has arcs and the board's copper-to-edge setting is {}; set min_copper_edge_clearance to {} mm in the .kicad_pro so pours clear {} mm in the Gerbers", set.map(|v| format!("{v} mm")).unwrap_or_else(|| "not set".into()), lim.cu_edge_arcs_mm, lim.cu_edge_mm));
@@ -317,11 +343,12 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
     for n in &p.near {
         let item = format!("{} {}", n.part, n.to);
         let (tr, tp) = n.to.split_once('.').unwrap_or((&n.to, ""));
-        let target = b.footprints.iter().find(|x| x.reference == tr).and_then(|x| x.pads.iter().find(|q| q.number == tp));
+        // a pin can be several pads of one number (a split thermal pad, shield pins): the nearest counts (review 21, 10)
+        let targets: Vec<&crate::board::Pad> = b.footprints.iter().find(|x| x.reference == tr).map(|x| x.pads.iter().filter(|q| q.number == tp).collect()).unwrap_or_default();
         let part = b.footprints.iter().find(|x| x.reference == n.part);
-        match (target, part) {
+        match (targets.first().copied(), part) {
             (Some(t), Some(pt)) => {
-                let d = pt.pads.iter().filter(|q| !t.net.is_empty() && q.net == t.net).map(|q| (q.x - t.x).hypot(q.y - t.y)).fold(f64::MAX, f64::min);
+                let d = pt.pads.iter().filter(|q| !t.net.is_empty() && q.net == t.net).flat_map(|q| targets.iter().map(move |t| (q.x - t.x).hypot(q.y - t.y))).fold(f64::MAX, f64::min);
                 if d == f64::MAX {
                     add("near", item, 1, format!("{} has no pad on {}'s net ({}); {}", n.part, n.to, if t.net.is_empty() { "none" } else { &t.net }, n.why));
                 } else if d > n.max_mm + 1e-6 {
@@ -332,7 +359,10 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         }
     }
     let (ex0, ey0, ex1, ey1) = b.bbox();
-    for g in &p.edge {
+    if !p.edge.is_empty() && b.outline.is_empty() {
+        add("edge", "outline".into(), 1, "the board has no outline on Edge.Cuts to measure [[edge]] against".into());
+    }
+    for g in p.edge.iter().filter(|_| !b.outline.is_empty()) {
         for r in &g.parts {
             let Some(fp) = b.footprints.iter().find(|x| &x.reference == r) else {
                 add("edge", r.clone(), 1, format!("{r} is bound to the {} edge and is not on the board", g.side));
@@ -346,8 +376,10 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
                 _ => ex1 - x,
             };
             let d = to_edge(fp.x, fp.y);
-            if d > g.max_mm + 1e-6 {
-                add("edge", r.clone(), 1, format!("{r} is {d:.2} mm from the {} edge, over {} mm ({})", g.side, sexpr::fmt_num(g.max_mm), g.why));
+            if d < -1e-6 {
+                add("edge", r.clone(), 1, format!("{r} is {:.2} mm outside the {} edge ({})", -d, g.side, g.why));
+            } else if d > g.max_mm + 1e-6 {
+                add("edge", r.clone(), 1, format!("{r} is {d:.2} mm from the {} edge of the outline's bounding box, over {} mm ({})", g.side, sexpr::fmt_num(g.max_mm), g.why));
             }
             if let Some(web) = g.min_web_mm {
                 for q in fp.pads.iter().filter(|q| q.drill.is_some()) {
@@ -417,17 +449,18 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         };
         for fp in &b.footprints {
             let node = sexpr::parse(&b.src[fp.span.0..fp.span.1])?;
-            for t in node.items().iter().filter(|t| t.is("property") || t.is("fp_text")) {
+            for t in node.items().iter().filter(|t| t.is("property") || t.is("fp_text") || t.is("fp_text_box")) {
                 judge(t, &fp.reference, &mut small);
             }
         }
-        for t in b.root.items().iter().filter(|t| t.is("gr_text")) {
+        for t in b.root.items().iter().filter(|t| t.is("gr_text") || t.is("gr_text_box")) {
             judge(t, "board text", &mut small);
         }
         for (item, mut owners) in small {
+            // every text counts, so a waiver's max is a number of texts (review 21, 7)
+            let n = owners.len();
             owners.sort();
             owners.dedup();
-            let n = owners.len();
             add("silk", item.clone(), n, format!("silkscreen {item}, under the fab file's {} mm height or {} mm stroke, on {} ({}{})", lim.silk_text_mm, lim.silk_line_mm, n, owners.iter().take(8).map(|x| x.as_str()).collect::<Vec<_>>().join(", "), if n > 8 { ", ..." } else { "" }));
         }
     }
@@ -493,6 +526,9 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
 
     // the files as the fab will read them (M5a): what pcb release would refuse, found before a release is made
     let mut warnings = vec![];
+    if p.finish.is_none() {
+        warnings.push(crate::contract::warn("finish-unset", "pcb.toml has no [finish]: the board spec is not held against the assembly service (spec)".to_string()));
+    }
     if fab_read_back {
         let rb = crate::release::read_back(l, &b, &work.join("fab"))?;
         let mut groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
