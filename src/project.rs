@@ -1020,7 +1020,7 @@ pub fn init_text(name: &str, board_rel: &str, b: &Board) -> String {
     });
     let common = base.iter().max_by_key(|(w, c)| (**c, -**w)).map(|(w, _)| *w).unwrap_or(0);
     let mut o = String::new();
-    o.push_str(&format!("# pcb project file, written by `pcb init` from {board_rel}. Schema: tools/pcb/DESIGN.md, \"Project file\".\nschema = {SCHEMA}\n\n"));
+    o.push_str(&format!("# pcb project file, written by `pcb init` from {board_rel}. Schema: DESIGN.md in the pcb repository, \"Project file\".\nschema = {SCHEMA}\n\n"));
     o.push_str("[project]\n");
     o.push_str(&format!("name = {}\nversion = \"0.1.0\"\nboard = {}\nlayers = {layers}\nfab = \"jlcpcb-{layers}layer-1.6mm\"\n\n", toml_str(name), toml_str(board_rel)));
     o.push_str("[decisions]                  # owner decisions the agent must not re-ask: key = { text = \"...\", date = \"YYYY-MM-DD\" }\n\n");

@@ -1,5 +1,5 @@
-# CI image for tools/pcb: the exact tool versions pcb is tested against (pcb doctor checks them at run time).
-# Built by .github/workflows/pcb-ci-image.yml and published as ghcr.io/<owner>/claude-pcb/pcb-ci:<IMAGE_VERSION>.
+# CI image for pcb: the exact tool versions pcb is tested against (pcb doctor checks them at run time).
+# Built by .github/workflows/pcb-ci-image.yml and published as ghcr.io/<owner>/pcb/pcb-ci:<IMAGE_VERSION>.
 # Bump IMAGE_VERSION (and the tag in pcb-test.yml) whenever this file changes; the workflow refuses to overwrite a tag.
 # Pinned: the base image by digest, KiCad by exact version, pip packages exactly, Rust by toolchain, Freerouting by
 # SHA-256. Other Ubuntu packages come from the live archive: Ubuntu's snapshot service, which would pin them too, served

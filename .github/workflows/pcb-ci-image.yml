@@ -1,10 +1,10 @@
-# Builds the CI image for tools/pcb and publishes it to the repository's GitHub Container Registry.
-# Runs when tools/pcb/ci/ changes, or by hand. The tag is the image version in the Dockerfile.
+# Builds the CI image for pcb and publishes it to the repository's GitHub Container Registry.
+# Runs when ci/ changes, or by hand. The tag is the image version in the Dockerfile.
 name: pcb CI image
 
 on:
   push:
-    paths: [tools/pcb/ci/**, .github/workflows/pcb-ci-image.yml]
+    paths: [ci/**, .github/workflows/pcb-ci-image.yml]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
         id: v
         # GHCR names must be lowercase; an owner or repository name with capitals would not push (review 5, 16)
         run: |
-          echo "version=$(sed -n 's/^ARG IMAGE_VERSION=//p' tools/pcb/ci/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "version=$(sed -n 's/^ARG IMAGE_VERSION=//p' ci/Dockerfile)" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/pcb-ci" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
@@ -34,7 +34,7 @@ jobs:
         run: |
           ref="${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}"
           if out=$(docker manifest inspect "$ref" 2>&1); then
-            echo "$ref is already published; bump IMAGE_VERSION in tools/pcb/ci/Dockerfile"
+            echo "$ref is already published; bump IMAGE_VERSION in ci/Dockerfile"
             exit 1
           fi
           if ! grep -qiE "manifest unknown|not found" <<< "$out"; then
@@ -47,6 +47,6 @@ jobs:
         with:
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          context: tools/pcb/ci
+          context: ci
           push: true
           tags: ${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}

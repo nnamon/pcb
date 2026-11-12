@@ -1,6 +1,6 @@
 # PCB Project Guidelines: Deliverables, Checks, Formats
 
-Last updated 9 Nov 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
+Last updated 13 Nov 2026. Mirrors the Claude doc "PCB Project Guidelines"; when one changes, update the other.
 
 Every board in this project ships as one versioned zip that a person can order from without reading the source, and it passes two independent review gates (schematic, then release) plus checks on the final Gerbers before anything is ordered. These rules come from the Quansheng paddle adapter (v1.0.0, two boards) and the paddle keyer (v0.2.x).
 
@@ -38,7 +38,7 @@ Every file a person uploads or keeps carries the project, board and version in i
 
 - **Version on the board.** The silkscreen carries the full version (`v2.0.3`) and matches the file names. Update it with every bump that changes the order files; a script should do this so it is never missed.
 - **Multiple boards in one project** get a letter and a short shape name (`A_L-shape`, `B_straight`). They share the project's version, and each is its own JLCPCB order with its own files. Alternative designs of the same board, where only one will be ordered, share the version with a letter suffix (`0.2.1a`, `0.2.1b`) and each has its own board folder.
-- **Version control.** Design sources and scripts live in this repository (`nnamon/claude-pcb`) with a tag per version (`paddle-keyer-v1.2.0`), so any board, ordered or not, can be regenerated exactly.
+- **Version control.** Each project has its own repository (`nnamon/<project>`) holding its design sources and scripts, with a tag per version (`v1.2.0`), so any board, ordered or not, can be regenerated exactly. This standard, `STYLE.md` and the `pcb` tool live in `nnamon/pcb`; a project's `pcb.toml` pins the `pcb` version it is checked with. Until 13 Nov 2026 every project was a folder of `nnamon/claude-pcb`, tagged `<project>-v<x.y.z>`; documents from before then use those names.
 
 ### Version numbers
 
@@ -54,8 +54,8 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 - **Gates by bump.** A MINOR bump goes back through Gate 1 before layout continues, and `VERSION` changes with the branch. On the badge carrier 0.5.0 the cell-input change was routed before Gate 1, which then found a blocker, and the version file still said 0.4.0. A PATCH bump re-runs the checks it affects. Every ordered version passes Gate 2, whatever it took to get there.
 - **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
-- **Every version is tagged** when it is committed: hardware `<project>-v<x.y.z>`, firmware `<project>-fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered.
-- **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `<project>-fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
+- **Every version is tagged** when it is committed: hardware `v<x.y.z>`, firmware `fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered.
+- **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
 - **CHANGELOG.md** lists what changed in each version and why, including review findings fixed.
 
 ## Package and deliverables
@@ -89,6 +89,17 @@ The package is the one download a person needs: the `order/` folder is everythin
   design/           scripts that regenerate the order files and run the checks
 ```
 
+A project made with `pcb new` (from 13 Nov 2026) keeps the same `order/`, `docs/` and `firmware/`, and in place of `source/` and `design/` has:
+
+```
+  pcb.toml          the project: fab, finish, assembly, nets, placement, constraints, waivers, gates
+  VERSION, TAGS.tsv, NOTES.md
+  hw/               KiCad schematic and board, artwork sources
+  parts/            JLCPCB's footprint and data per LCSC code, committed
+  reviews/          gate1/, gate2/, external/: briefs, findings as written, closures
+  scripts/          one-off scripts, each named for the version it served
+```
+
 The full BOM carries one row per line with designators, quantity, value, package, manufacturer, MPN, LCSC code, Basic/Extended, DNP flag and an alternate part where one exists. JLCPCB's BOM stays in its own format in `order/`.
 
 The README covers, in this order:
@@ -103,7 +114,7 @@ The README covers, in this order:
 8. **Bring-up:** expected rail voltages and idle current, the meter checks before first power, then the acceptance tests.
 9. **Known issues (errata),** updated after bring-up.
 
-Alongside the package, keep `<project>/NOTES.md` (status per version, order records, bring-up logs and lessons) updated after each design, order and bring-up.
+Alongside the package, keep `NOTES.md` (status per version, order records, bring-up logs and lessons) updated after each design, order and bring-up.
 
 ## Required checks before ordering
 

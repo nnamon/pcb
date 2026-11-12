@@ -1,4 +1,4 @@
-# The edge cases, run by `cargo xtask test` in this order. Each step runs `python3` with `run` from tools/pcb.
+# The edge cases, run by `cargo xtask test` in this order. Each step runs `python3` with `run` from the repository root.
 #
 #   id      the step's work folder, target/xtask/<id>; other steps name it in {work:<id>} and `after`
 #   covers  the pcb commands or parts of pcb it tests (`cargo xtask test --only <word>`, `--list`)

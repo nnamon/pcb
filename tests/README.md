@@ -1,6 +1,6 @@
 # pcb tests
 
-`cargo xtask test` runs everything from a clean checkout. Run it in the pinned image (`ci/Dockerfile`) before every push that touches `tools/pcb`; there is no CI test run, so this local run is the check. It needs `PCB_FREEROUTING_JAR`, or `--fast`, which skips the Freerouting runs and the mutation suites. The summary is written to `target/xtask/summary.json`.
+`cargo xtask test` runs everything from a clean checkout. Run it in the pinned image (`ci/Dockerfile`) before every push that touches the tool; there is no CI test run, so this local run is the check. It needs `PCB_FREEROUTING_JAR`, or `--fast`, which skips the Freerouting runs and the mutation suites. The summary is written to `target/xtask/summary.json`.
 
 - A step that passed is not run again while its inputs are unchanged: its scripts, the shared test files, the `pcb` binary and the steps it reads from (a mutation suite: the files it damages and the oracle). `cargo xtask test --full` clears that cache and runs everything; run it before a milestone gate or a release.
 - `cargo xtask test --list` prints, for each command, the steps that cover it.
