@@ -55,6 +55,7 @@ Versions are `MAJOR.MINOR.PATCH`. MAJOR counts board spins sent to JLCPCB; MINOR
 - **Re-ordering** the same files keeps the same version; add the new order to `NOTES.md` and the tag message. Any change at all, even silkscreen, is a new PATCH and therefore a new spin once ordered.
 - **No bump** for README, notes or other changes that leave `order/` and firmware unchanged.
 - **Every version is tagged** when it is committed: hardware `v<x.y.z>`, firmware `fw-v<x.y.z>`, annotated. Add a line to `TAGS.tsv` (tag, commit, message). Agent sessions cannot push tags, so `TAGS.tsv` is the record of each version's commit; the "Tag and release" workflow, run by hand, creates the tags and GitHub releases (package zip or firmware files, pre-release for `0.x`). The tag message says whether the version was ordered.
+- **Every build handed to someone gets its own version.** Two different UF2s or order packages never share a number, even before a release is merged; a fix after a handout is the next PATCH (or MINOR for a feature).
 - **Firmware** has its own version, `<hw major>.<minor>.<patch>`, tagged `fw-v<x.y.z>`. Its MAJOR always equals the hardware spin it targets, so firmware 2.x.x runs on spin 2 boards. Its MINOR and PATCH follow the same rules for features and fixes, independently of the hardware's. The firmware reports both its own version and the hardware spin it expects.
 - **CHANGELOG.md** lists what changed in each version and why, including review findings fixed.
 
@@ -152,7 +153,7 @@ A board is orderable only when every check below passes on the final files, or c
    - Every capacitor's surge or rush-current rating holds at hot-plug (polymer types are often limited to about 10 A), and every pass transistor's pulsed rating holds at the inrush the lead allows.
    - An input protected by a series resistor, a clamp and a pull-up still reaches a valid logic low when the far end is pulled to ground: the pull-up must be several times the series resistor. Check the unpowered case too: the clamp must hold the pin under its limit with the processor off.
    - Sum the datasheet maximum currents before setting a current acceptance limit.
-6. **Design for test.** Test points on every rail and GND, programming and debug access (SWD, BOOT), and acceptance tests that can run without probing fine-pitch pins. ERC is clean.
+6. **Design for test.** Test points on every rail and GND, programming and debug access (SWD, BOOT), and acceptance tests that can run without probing fine-pitch pins. A power indicator that lights from the rail without firmware, so a blank or crashed MCU doesn't look like a dead board (the paddle keyer's only LED is on a GPIO and stays dark until it is flashed). ERC is clean.
 
 **Layout**
 
