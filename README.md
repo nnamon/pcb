@@ -1,8 +1,20 @@
 # pcb
 
-`pcb` is a command-line tool an agent uses to take a KiCad board from a schematic to a JLCPCB order. It exists because the pipeline it replaced re-routed the whole board whenever a few parts moved, and 4 of 7 such runs on one board shorted nets or left them open. The hard part is changing one area of a routed board without disturbing the rest, so `pcb route --region` locks everything outside the region you name and gives only that region to Freerouting. Every command that writes the board runs KiCad DRC before and after, and rejects a result that adds a violation. `pcb release` writes the order files, then reads the Gerbers back against the board's nets and the fab's limits.
+`pcb` is a command-line tool an agent uses to design a KiCad board and order it from JLCPCB. It runs every stage from a new project folder to the files you upload to JLCPCB, listed by command below. Every command that changes the board runs KiCad's DRC before and after, and refuses a result that adds a violation. With `--json`, each command prints one JSON object, so an agent reads results instead of parsing logs.
 
-This repository also holds `GUIDELINES.md`, the standard each board is reviewed against before it is ordered.
+This repository also holds `GUIDELINES.md`, the standard every board must meet before it is ordered.
+
+| Stage | Commands |
+| --- | --- |
+| Start | `pcb new` makes a project folder; `pcb init` writes a `pcb.toml` for an existing board; `pcb doctor` checks the pinned KiCad, Freerouting and Java |
+| Parts | `pcb parts` fetches JLCPCB's stock, Basic or Extended and Economic status for every assembled part, and matches each footprint to JLCPCB's for the CPL rotation |
+| Circuit | `pcb sync` adds, replaces and removes footprints so the board matches the schematic's netlist, and checks each pin name against JLCPCB's symbol |
+| Layout | `pcb place` puts parts where `pcb.toml` says; `pcb route` runs Freerouting inside a region with the rest of the board locked; `pcb edit` makes explicit track, via and part changes; `pcb zone` builds pours, planes and stitching; `pcb paste` and `pcb art` |
+| Checks | `pcb check` runs KiCad DRC under JLCPCB's limits, then track width against current, assembly side and paste, the board spec against the assembly service, placement rules, silkscreen and route quality; `--fab` also reads the Gerbers back. `pcb quality` measures the routing |
+| Gates and release | `pcb gate pass` records a review gate when nothing unwaived is left; `pcb release` writes the Gerbers, drill files, BOM, CPL and checksums and reads the Gerbers back against the board's nets; `pcb compare-gerbers` compares two fab sets shape by shape |
+| Inspection | `pcb status`, `pcb info`, `pcb diff`, `pcb render`, `pcb drawing` |
+
+`pcb --help` lists every command, and `DESIGN.md` describes each one.
 
 | File | What it is |
 | --- | --- |
@@ -24,7 +36,7 @@ pcb new my-board --size 60x40   # a project folder, for a repository of its own
 cd my-board && pcb status
 ```
 
-Each project is its own repository and pins the `pcb` version it is checked with (`[project] pcb` in `pcb.toml`). Until 13 Nov 2026 the tool and every project lived in `nnamon/claude-pcb`; this repository carries the tool's history from there, and `scripts/split_project.sh` is how the projects were split out.
+Each project is its own repository and pins the `pcb` version it is checked with (`[project] pcb` in `pcb.toml`).
 
 ## Test
 
