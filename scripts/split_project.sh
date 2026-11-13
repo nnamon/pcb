@@ -50,7 +50,7 @@ This project predates \`pcb new\` and keeps the layout it was made with: \`order
 ## Hard rules
 
 - Never order, or say the board is ready to order, until every check in GUIDELINES has passed or carries a written waiver in the README.
-- The Gerbers are the truth. After any change to exported files, read them back again.
+- Check the final Gerbers. After any change to exported files, read them back again.
 - Gate 1 and Gate 2 reviewers are fresh agents given the files and the checks they own, not the design reasoning. Save their findings as written.
 - Any change to \`order/\` bumps the version. An ordered version is frozen; the next change starts the next MAJOR.
 - Check JLCPCB data; do not assume stock, Basic or Extended, or Economic eligibility.

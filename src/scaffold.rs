@@ -180,7 +180,7 @@ Older versions live in git history under their tags, not in side-by-side folders
 ## Hard rules
 
 - Never order, or say the board is ready to order, until every check in GUIDELINES has passed or carries a written waiver in the README.
-- The Gerbers are the truth. `pcb release` reads them back; after any change to `order/`, release again.
+- `pcb release` reads the Gerbers back; after any change to `order/`, release again.
 - Gate 1 and Gate 2 reviewers are fresh agents given the files and the checks they own, not the design reasoning. Save their findings as written.
 - Any change to `order/` bumps the version. An ordered version is frozen; the next change starts the next MAJOR.
 - Check JLCPCB data with `pcb parts --live`; do not assume stock, Basic or Extended, or Economic eligibility.

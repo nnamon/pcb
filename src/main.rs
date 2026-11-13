@@ -1,4 +1,4 @@
-//! `pcb`: board tooling for agents. See DESIGN.md.
+//! `pcb`: takes a KiCad board from a schematic to a JLCPCB order. See DESIGN.md.
 
 mod art;
 mod board;
@@ -39,7 +39,7 @@ use contract::{Outcome, Warning};
 use serde_json::json;
 
 #[derive(Parser)]
-#[command(name = "pcb", version, about = "Board tooling for agents: KiCad files, region-locked routing, checks, JLCPCB releases")]
+#[command(name = "pcb", version, about = "Takes a KiCad board from a schematic to a JLCPCB order: region-locked routing, checks, releases")]
 struct Cli {
     /// Print one JSON object instead of the human summary.
     #[arg(long, global = true)]
@@ -114,7 +114,7 @@ enum Cmd {
         /// Leave the copper zones out of what the router sees, so it routes their nets as tracks too
         #[arg(long)]
         no_zones: bool,
-        /// Freerouting runs; the one that leaves fewest nets open is kept (Freerouting does not repeat itself)
+        /// Number of Freerouting runs. pcb keeps the run with the fewest open nets; two runs give different results
         #[arg(long, default_value_t = 1)]
         attempts: u32,
         /// pcb.toml, or the folder holding it: its `[nets.X] class = "critical"` nets are never ripped or laid by
@@ -292,7 +292,7 @@ enum Cmd {
         #[arg(long, default_value = "pcb_work/compare")]
         work: String,
     },
-    /// Route quality: what a person reading the layout would call odd, measured per net (detours, vias, slivers,
+    /// Route quality, measured per net (detours, vias, slivers,
     /// thin power nets, broadside runs) and per pour (small pieces). Limits in `[quality]` make `pcb check` findings.
     Quality {
         /// pcb.toml, or the folder holding it.
@@ -302,7 +302,7 @@ enum Cmd {
         #[arg(long, default_value_t = 8)]
         top: usize,
     },
-    /// The project at a glance: version against VERSION and TAGS.tsv, gates, decisions, the board, its DRC, and
+    /// The project's state: version against VERSION and TAGS.tsv, gates, decisions, the board, its DRC, and
     /// anything in pcb.toml that is wrong or does not match the board. The first command to run in a session.
     Status {
         /// pcb.toml, or the folder holding it.
@@ -722,7 +722,7 @@ fn run(cli: Cli) -> Result<Reply> {
             let mut warnings: Vec<Warning> = rep.still_open.iter().map(|n| contract::warn("still-open", format!("{n} is still not fully connected"))).collect();
             warnings.extend(rep.declared_pinless_nets.iter().map(|n| contract::warn("pinless-net", format!("{n} has copper but no pads; declared to Freerouting"))));
             if let Some(e) = &rep.attempt_error {
-                warnings.push(contract::warn("second-run-failed", format!("the router's second run, without region keep-outs, gave no result; the first run's stands: {e}")));
+                warnings.push(contract::warn("second-run-failed", format!("the router's second run, without region keep-outs, gave no result; pcb kept the first run's result: {e}")));
             }
             if !rep.plane_split.is_empty() {
                 warnings.push(contract::warn("plane-split", format!("the new tracks cut zone fills apart ({}); run pcb zone again, with stitching vias for the net", rep.plane_split.join("; "))));
