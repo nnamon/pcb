@@ -1,3 +1,4 @@
 # One line per version: tag, commit, then the tag message (tab-separated).
 # Versions before 0.5.0 were not tagged; CHANGELOG.md lists them. Never edit or remove a line.
 v0.5.0	558d847f4fde29308e3cca7192a9d50959e11091	pcb 0.5.0: M5a checks, route quality, pcb new; first version in its own repository. cargo xtask test 65 of 65 in pcb-ci:8-local
+v0.5.1	49d57bbc5c633b24270c3de5d8ab4ec0bb72149f	pcb 0.5.1: parts --live fetches every schematic part; 6-layer spec warns spec-unchecked; stable hole mutation. cargo xtask test --full 64 of 64 in pcb-ci:8-local
