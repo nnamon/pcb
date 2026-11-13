@@ -109,24 +109,31 @@ Built by the end of M3: `roundtrip`, `info`, `import-tscircuit`, `render`, `doct
 | Key | Holds | Used by |
 | --- | --- | --- |
 | `schema` | `1` | every reader; checked first |
-| `[project]` | `name`, `version` (MAJOR.MINOR.PATCH), `board` (relative to `pcb.toml`), `layers` (2, 4, 6 or 8), `fab` (rule-set name) | `status` |
+| `[project]` | `name`, `version` (MAJOR.MINOR.PATCH), `board` (relative to `pcb.toml`), `netlist` (the schematic or `.net`), `layers` (2, 4, 6 or 8), `fab` (rule-set name), `pcb` (the tool pin, `X.Y` or `X.Y.Z`) | `status`; `netlist` by sync, check, release; `pcb` by every command that checks the project |
 | `[gates.<name>]` | `version`, `passed` (YYYY-MM-DD), `inputs` (`sha256:...`) | written by `pcb gate pass` (M3), never by hand |
 | `[decisions.<key>]` | `text`, `date`: owner decisions an agent must not ask about again | `status` |
-| `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste`, `designators` (board reference to BOM and CPL designator) | M3 check, release |
-| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm`, `fill_priority` | M2 zones, M3 width and rating checks |
+| `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste`, `designators` (board reference to BOM and CPL designator), `boards` (boards ordered assembled, default 5), `service` (`economic`, the default, or `standard`) | M3 check, release; `boards` by parts; `service` by check's `spec` |
+| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm`, `fill_priority`, `class` (`critical`, `power`, `signal`) | M2 zones, M3 width and rating checks; `class` by route `--project` and `[quality]`. `width_mm` is recorded (`pcb init` writes it) and read by no command: the router takes a net's most common track width, or `--width` |
 | `[[keepout]]` | `name`, `rect` (x0, y0, x1, y1 mm), `grow_mm`, `layers` (`"all"` or a list), `forbid` (`pour`, `track`, `via`, `footprint`) | M2 |
 | `[[zone]]` | `net`, `layers`, `clearance_mm`, `thermal = { gap_mm, spoke_mm }`, `priority`, `min_width_mm`, `connect` (`thermal`, `solid`, `none`) | M2 |
 | `[fill]` | `layers`, `clearance_mm`, `min_width_mm`, `priority`: the power fills grown from each `fill_grow_mm` net | M2 |
 | `[[pad_override]]` | `pad` (`REF.PAD`), `zone_connection` (`solid`, `thermal`, `none`) | M2 |
 | `[[net_tie]]` | `footprint`, `pads` (two or more), `absorb_net`, `absorb_vias_net` | M2 |
-| `[[stitch]]` | `net`, `pitch_mm`, `size_mm`, `drill_mm`, `margin_mm` (default 0.3), `rect` | M2 |
+| `[[stitch]]` | `net`, `pitch_mm`, `size_mm`, `drill_mm`, `margin_mm` (default 0.3), `rect`, `join` | M2; `join` M4 |
 | `[[drc_allow]]` | `kind` (a KiCad DRC type), `nets`, `max`, `why` | M2 zone; the gate's allowance |
-| `[[paste]]` | `pad` (`REF.PAD`), `windows`, `size_mm`, `web_mm`, `pin_in_paste` | M3 paste |
+| `[[paste]]` | `pad` (`REF.PAD`), `windows`, `size_mm`, `web_mm`, `pin_in_paste`, `no_paste` | M3 paste; `no_paste` 0.4.3 |
 | `[[art]]` | `name`, `file` (GeoJSON), `key`, `frame` (`centre`, `board`), `layers`, `net` | M3 art |
 | `[[text]]` | `name`, `text`, `font`, `cap_mm`, `at`, `anchor` (`centre`, `left`), `frame`, `rot_deg`, `layer`, `grow_mm`, `net` | M3 art; `anchor` 0.4.1 |
-| `[parts.<LCSC>]` | `rotation_offset_deg`, `cpl_offset_mm`, `source` | M3 release (M4 parts solves them) |
+| `[parts.<LCSC>]` | `rotation_offset_deg`, `cpl_offset_mm`, `source` (required), `pins` (pad number to datasheet name) | M3 release (M4 parts solves them); `pins` by sync |
 | `[[waiver]]` | `check`, `item`, `max`, `why` | M3 check, gate |
 | `[bringup]` | `ammeter_break` (nets), `test_points` (reference to what it measures) | M3 bring-up sheet |
+| `[outline]` | `rect_mm`, or `file` (GeoJSON, mm, y up about the outline's centre) and `key` | M4 sync, for a new board |
+| `[[place]]` | `ref`, `at` (centred frame, mm, y up), `rot_deg`, `side` (default `top`), `locked` | M4 place; check's `stale` |
+| `[[near]]` | `part`, `to` (`REF.PAD`), `max_mm`, `why` | M5a check |
+| `[[edge]]` | `side` (`top`, `bottom`, `left`, `right`, as drawn), `parts`, `max_mm`, `min_web_mm`, `why` | M5a check |
+| `[quality]` | `power_width_mm`, `max_detour`, `max_vias_two_pad`, `max_segments_per_10mm`, `max_widths`, `max_broadside_mm`, `max_small_pour_pieces` | M5a quality, check |
+| `[finish]` | `mask`, `silk`, `copper` | 0.4.2 release, render `--look`; check's `spec` |
+| `[drawing]` | title block and notes, `[[drawing.leader]]`, `[[drawing.outline]]`, `[drawing.section]` (`docs/drawing-standard.md`) | M4 drawing |
 
 - **`pcb init BOARD`** writes a starter file, with `board` relative to the file's own folder (climbing with `..` when it must): the name (the board's stem unless `--name`), version 0.1.0, the layer count and `jlcpcb-<n>layer-1.6mm`, an empty `[decisions]`, and a `[nets.<NET>] width_mm` for every net whose most common track width is above the board's usual one. It never overwrites a file (`exists`), refuses to write one `status` would refuse (`config`), and checks that the board is found from the written file.
 - **`pcb status [--project DIR|FILE]`** is the first command of a session. It reports the project, the board's counts, its KiCad DRC (`--no-drc` skips it), gates and decisions. It compares the version with a `VERSION` file beside `pcb.toml` or one folder up (`version-mismatch`), and looks for the tag `<name>-v<version>` in the nearest `TAGS.tsv` above. Problems inside the file (bad version, layer count, dates, ranges, names) make the outcome `refused` with every problem listed in `data.problems`; a file that does not parse is refused the same way, its parse message the one problem. Dates must be real calendar days, and ranges are checked (a keep-out's `grow_mm` 0 or more, thermal gap and spoke above 0). A board the file names that is not there is refused (`config`). Names the board lacks (nets, references, pads, layers) are `config-mismatch` warnings, since the board may be mid-change.

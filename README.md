@@ -27,8 +27,7 @@ These steps take a new board from an empty folder to an order. `pcb route`, `pcb
    - a Footprint field `LIB:NAME` and a file `footprints/NAME.kicad_mod` beside `pcb.toml`, for a part JLCPCB has no footprint for, such as a test pad. This footprint is used even when the part also has an LCSC code.
 
    Pin names must match JLCPCB's symbol for the part, or the datasheet names you give in `[parts.<LCSC>] pins`. KiCad's DNP and Exclude from BOM checkboxes keep a part off the BOM and CPL; so does a field named `DNP` or `exclude_from_bom` that is empty or says yes, true, 1 or x.
-3. Run `pcb parts --live`. It downloads JLCPCB's footprint, symbol, stock and library type into `parts/`. Commit that folder: every other command reads only the cache. Run it again on order day, since stock changes.
-   - Before a board exists, `--live` skips parts that are DNP, excluded from the BOM or listed in `[assembly] hand_fit`, and `pcb sync` then refuses because their data is missing. Give such parts a project footprint for the first sync, then run `pcb parts --live` again once the board exists, which fetches every part in the schematic.
+3. Run `pcb parts --live`. It downloads JLCPCB's footprint, symbol, stock and library type into `parts/`. Commit that folder: every other command reads only the cache. It fetches every part in the schematic that has an LCSC code, assembled or not. Run it again on order day, since stock changes.
 4. Run `pcb sync`. It makes `hw/my-board.kicad_pcb` from `[outline]` and the schematic, with JLCPCB's footprints, and puts new parts in a column to the right of the outline (warning `unplaced`). Run it after every schematic change: it adds, replaces, removes and renets footprints, and removes copper left on a net no pad has any more. A change that would leave tracks joining the wrong pads is refused; `--rip` removes those tracks instead. From here `pcb status` works, and it is the first command of every session.
 5. Write a `[[place]]` entry for each part you want placed by the file, and run `pcb place`. Parts without an entry can be placed by hand in KiCad. A part with an entry that is then moved in KiCad makes `pcb check` report `stale`. Write a `[[near]]` for each decoupling and regulator capacitor and an `[[edge]]` for each group of parts that belongs at an edge; `pcb check` judges both. `pcb drawing placement -o docs/placement` writes the Gate 1 placement proposal as three A3 sheets (top view, bottom view, placement table) in SVG and PNG, and one PDF.
 6. Run `pcb zone` if the board has planes or pours, before routing. The router leaves a net that has a zone to its zone; without the zone it lays the net as tracks.
@@ -189,7 +188,7 @@ KiCad's DRC runs twice, once with the board's own rules and once with the fab's 
 | `width-current` | The narrowest track per layer on a net with `current_a`, against IPC-2221 at a 10 °C rise (outer 1 oz, inner 0.5 oz) |
 | `near` | A part farther than `max_mm` from its pin, pad centre to the nearest pad centre on the same net |
 | `edge` | A part's footprint origin farther than `max_mm` from its edge of the outline's bounding box, or a hole nearer the edge than `min_web_mm` |
-| `spec` | With a `[finish]` and Economic assembly: a board spec the service refuses (4 layers other than green, ENIG other than green, black 2-layer without HASL) |
+| `spec` | With a `[finish]` and Economic assembly: a board spec the service refuses (4 layers other than green, ENIG other than green, black 2-layer without HASL). On 6 layers it warns `spec-unchecked` instead |
 | `via-in-pad` | A via's hole in a pasted pad of an assembled part; an open drill wicks solder away from the joint |
 | `paste` | An assembled SMD pad with no paste |
 | `paste-unassembled` | Paste on a part left out of the CPL, which JLCPCB would print and reflow into a solder bump |
@@ -247,7 +246,7 @@ Checks 1, 4, 5, 17, 18 and 20 are a person's or a reviewer's: the requirements t
 - Nothing traces current through the copper yet, so the via count on a power path, whether a capacitor's ground reaches its IC's ground pin, and whether a signal has ground beneath it are a reviewer's. A copper graph, planned for the next milestone, would cover them.
 - `pcb parts` doesn't match bottom-side footprints.
 - `pcb route` refuses a board with track arcs (`arc-unsupported`): replace them with segments, or route that net by hand. Paste windows work on the top side only, and `add_via` makes through vias only.
-- `pcb new --layers 6` is accepted, but `pcb sync` can't make the board. The 6-layer fab file's Economic refusals are a copy of the 4-layer file's, keyed to 4 layers, so `spec` never flags a 6-layer board. There is no 8-layer fab file.
+- `pcb new --layers 6` is accepted, but `pcb sync` can't make the board. JLCPCB publishes no Economic assembly colour or finish rules for 6 layers, so on that process `pcb check` warns `spec-unchecked` and doesn't judge the spec. There is no 8-layer fab file.
 - Fab files exist for JLCPCB's 1.6 mm 2-, 4- and 6-layer processes. Another process is a new file in `fab/` and a line in `src/fab.rs`.
 
 ## Commands

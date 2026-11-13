@@ -528,6 +528,11 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
     let mut warnings = vec![];
     if p.finish.is_none() {
         warnings.push(crate::contract::warn("finish-unset", "pcb.toml has no [finish]: the board spec is not held against the assembly service (spec)".to_string()));
+    } else if !fab.economic_rules_read && asm.and_then(|a| a.service.as_deref()).unwrap_or("economic") == "economic" {
+        warnings.push(crate::contract::warn(
+            "spec-unchecked",
+            format!("{} has no Economic assembly rules read from JLCPCB for {} layers, so the board spec was not judged (spec); check the assembly capabilities page before ordering", fab.name, fab.layers),
+        ));
     }
     if fab_read_back {
         let rb = crate::release::read_back(l, &b, &work.join("fab"))?;
@@ -539,7 +544,7 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         for (item, list) in groups {
             add("fab", item.clone(), list.len(), format!("{item}: {}{}", list.iter().take(3).cloned().collect::<Vec<_>>().join("; "), if list.len() > 3 { format!("; and {} more", list.len() - 3) } else { String::new() }));
         }
-        warnings = rb.warnings;
+        warnings.extend(rb.warnings);
     }
 
     // waivers

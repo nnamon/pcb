@@ -89,7 +89,47 @@ ex0, ey_mid = min(xs), (min(ys) + max(ys)) / 2
 exposed = next(p for f in b.GetFootprints() for p in f.Pads() if p.IsOnLayer(pcbnew.F_Mask) and p.IsOnLayer(pcbnew.F_Cu) and p.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and min(p.GetSize().x, p.GetSize().y) >= pcbnew.FromMM(0.5))
 px, py = gxy(exposed.GetPosition())
 pw = mm(max(exposed.GetSize().x, exposed.GetSize().y))
-via = next(t for t in b.GetTracks() if t.GetClass() == "PCB_VIA")
+# the via the hole goes beside: its net must have no copper where the hole lands, or the read-back puts the hole in
+# the via's own copper group and judges the pair by the same-net limit (0.254 mm), which a 0.3 mm gap passes. The
+# first via in file order changed with each Freerouting run and was sometimes a GND via inside a pour (pcb 0.5.1).
+zone_nets = {z.GetNetname() for z in b.Zones() if z.GetNetname()}
+
+
+def seg_dist(p, a, c):
+    (px_, py_), (ax_, ay_), (cx_, cy_) = p, a, c
+    dx, dy = cx_ - ax_, cy_ - ay_
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px_ - ax_) * dx + (py_ - ay_) * dy) / L2))
+    return math.hypot(px_ - (ax_ + t * dx), py_ - (ay_ + t * dy))
+
+
+def hole_spot(v):
+    """The new hole's centre, KiCad mm: 0.3 mm edge to edge from the via, on its +x side."""
+    r = v.GetDrillValue() / 1e6 / 2
+    return (mm(v.GetPosition().x) + r + 0.3 + 0.25, mm(v.GetPosition().y))
+
+
+def spot_clear(v):
+    n = v.GetNetname()
+    if not n or n in zone_nets:
+        return False
+    q = hole_spot(v)
+    for t in b.GetTracks():
+        if t.GetNetname() != n:
+            continue
+        if t.GetClass() == "PCB_VIA":
+            if t.GetPosition() != v.GetPosition() and math.dist(q, (mm(t.GetPosition().x), mm(t.GetPosition().y))) < mm(t.GetWidth(pcbnew.F_Cu)) / 2 + 0.5:
+                return False
+        elif seg_dist(q, (mm(t.GetStart().x), mm(t.GetStart().y)), (mm(t.GetEnd().x), mm(t.GetEnd().y))) < mm(t.GetWidth()) / 2 + 0.5:
+            return False
+    for p in pads_of.get(n, []):
+        if math.dist(q, (mm(p.GetPosition().x), mm(p.GetPosition().y))) < mm(max(p.GetSize().x, p.GetSize().y)) / 2 + 0.5:
+            return False
+    return True
+
+
+vias = sorted((t for t in b.GetTracks() if t.GetClass() == "PCB_VIA"), key=lambda t: (t.GetNetname(), t.GetPosition().x, t.GetPosition().y))
+via = next(t for t in vias if spot_clear(t))
 vx, vy = gxy(via.GetPosition())
 
 def neck():

@@ -97,3 +97,4 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `arcs-kept` | sync | The board has track arcs, which `pcb sync --rip` does not remove; check them |
 | `silk-filled` | import-tscircuit | A filled silkscreen rectangle was carried over as its outline only |
 | `economic-unknown` | parts, release | JLCPCB's record for a part gives no `componentProductType`, so Economic eligibility is unknown |
+| `spec-unchecked` | check | The fab file has no Economic assembly rules read for its layer count (the 6-layer process), so the board spec was not judged. Check JLCPCB's assembly capabilities page before ordering |

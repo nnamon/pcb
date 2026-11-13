@@ -354,6 +354,24 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
     Ok(r)
 }
 
+/// The LCSC codes `pcb parts --live` fetches: every assembled part, and every part of the netlist with a code,
+/// with or without a board. `pcb sync` converts the footprint of every part with a code, DNP, BOM-excluded and
+/// hand-fitted ones included, so a first `--live` that skipped them left a new project unable to make its board.
+fn live_codes(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Vec<String>> {
+    let mut codes: Vec<String> = assembled(l, b, work)?.into_keys().collect();
+    if let Some(netlist) = l.project.project.netlist.as_ref() {
+        let nl = l.path.parent().unwrap_or(Path::new(".")).join(netlist);
+        for c in crate::netlist::load(&nl, work)?.comps {
+            if let Some(code) = c.lcsc() {
+                codes.push(code);
+            }
+        }
+    }
+    codes.sort();
+    codes.dedup();
+    Ok(codes)
+}
+
 /// `pcb parts`: fetch (with `live`), then check.
 pub fn run(l: &Loaded, live: bool, work: &Path) -> Result<Report> {
     let problems = crate::project::check(&l.project);
@@ -365,19 +383,7 @@ pub fn run(l: &Loaded, live: bool, work: &Path) -> Result<Report> {
     let mut fetched = 0;
     if live {
         let today = crate::gates::today();
-        let mut codes: Vec<String> = assembled(l, b.as_ref(), work)?.into_keys().collect();
-        // the netlist's parts too, so a part sync is about to add is cached before it is needed
-        if let (Some(_), Some(netlist)) = (b.as_ref(), l.project.project.netlist.as_ref()) {
-            let nl = l.path.parent().unwrap_or(Path::new(".")).join(netlist);
-            for c in crate::netlist::load(&nl, work)?.comps {
-                if let Some(code) = c.lcsc() {
-                    codes.push(code);
-                }
-            }
-        }
-        codes.sort();
-        codes.dedup();
-        for c in &codes {
+        for c in &live_codes(l, b.as_ref(), work)? {
             fetch(&dir(l), c, &today)?;
             fetched += 1;
         }
@@ -390,6 +396,34 @@ pub fn run(l: &Loaded, live: bool, work: &Path) -> Result<Report> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_fetches_every_netlist_part_before_a_board_exists() {
+        // source: pcb 0.5.1 README review. With no board, --live fetched only assembled parts, and pcb sync then
+        // refused the DNP, BOM-excluded and hand-fitted parts for want of their footprints.
+        let d = std::env::temp_dir().join(format!("pcb-live-codes-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("pcb.toml"), "schema = 1\n[project]\nname = \"t\"\nversion = \"0.1.0\"\nboard = \"t.kicad_pcb\"\nnetlist = \"t.net\"\nlayers = 2\nfab = \"jlcpcb-2layer-1.6mm\"\n[assembly]\nmachine_sides = [\"top\"]\nhand_fit = [\"J1\"]\n").unwrap();
+        std::fs::write(
+            d.join("t.net"),
+            r#"(export (version "E")
+  (components
+    (comp (ref "U1") (value "MCU") (fields (field (name "LCSC") "C100")))
+    (comp (ref "R1") (value "10k") (fields (field (name "LCSC") "C200") (field (name "DNP"))))
+    (comp (ref "R2") (value "1k") (fields (field (name "LCSC") "C300") (field (name "exclude_from_bom") "yes")))
+    (comp (ref "J1") (value "JACK") (fields (field (name "LCSC") "C400")))
+    (comp (ref "TP1") (value "TP") (fields (field (name "Footprint") "pcb:TP"))))
+  (nets))"#,
+        )
+        .unwrap();
+        let l = crate::project::load(&d.join("pcb.toml")).unwrap();
+        assert!(!l.board_path().exists());
+        let codes = live_codes(&l, None, &d.join("work")).unwrap();
+        assert_eq!(codes, vec!["C100", "C200", "C300", "C400"]);
+        let assembled_only: Vec<String> = assembled(&l, None, &d.join("work")).unwrap().into_keys().collect();
+        assert_eq!(assembled_only, vec!["C100"], "the assembled set alone is what 0.5.0 fetched");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn pads(v: &[(&str, f64, f64)]) -> Vec<(String, f64, f64)> {
         v.iter().map(|(n, x, y)| (n.to_string(), *x, *y)).collect()

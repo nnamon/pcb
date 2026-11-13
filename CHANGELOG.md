@@ -2,7 +2,13 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
-## Unreleased
+## 0.5.1 (13 Nov 2026)
+
+- `pcb parts --live` fetches every part of the schematic that has an LCSC code, with or without a board. Before a board existed it fetched only assembled parts, and `pcb sync` then refused the DNP, BOM-excluded and hand-fitted ones for want of their footprints, so a new project with such a part could not make its first board.
+- The 6-layer fab file no longer carries the 4-layer file's Economic refusals, which were keyed to 4 and 2 layers and never applied to a 6-layer board. JLCPCB's assembly capabilities page gives no colour or finish rules for 6 layers, so the file says so (`economic_rules_read = false`) and `pcb check` warns `spec-unchecked` in place of judging the spec.
+- `pcb check --fab` keeps its own warnings (`finish-unset`, `spec-unchecked`) beside the read-back's; it replaced them.
+- Tests: the read-back's hole mutation drills its hole beside a via whose net has no copper at that spot. It used the first via in file order, which changed with each Freerouting run; when it was a via inside its net's pour, the read-back judged the pair by the same-net limit and the 0.3 mm gap passed (`paddle_keyer_m4: release read-back mutations` failed about one run in three).
+- README rewritten for someone using the tool on their own project; `DESIGN.md`'s project file table lists every section.
 
 - Tests: the fixture `badge_r36a`, a layout of the badge carrier, is replaced by `sample_node`, a sample board drawn for the tests (`tests/fixtures/sample_node/README.md`), so the repository holds no real project's design from here on. The old fixture stays in the history. The sample goes through the same flow: import with its mutations, three route cases, four edit cases, zones with a net tie, a keep-out and stitching and their mutations, `pcb check`, and in the cases a whole-board zone run and a release.
   - Not carried over: a DRC kind allowed within a limit on a whole board (the sample needs no allowance; the synthetic zone cases cover the allowance), and a net left open because no path exists at its width (the route edge cases cover a net with no path on the layers allowed, not one that fails for its width). The sample adds a rip that leaves a net cut off at the region's edge, which must be rejected.

@@ -10,6 +10,7 @@
 name = "jlcpcb-6layer-1.6mm"
 layers = 6
 checked = "2026-11-10"
+economic_rules_read = false     # see the note at the end of this file
 
 [limits]
 track_mm = 0.15                 # fab 0.127
@@ -30,19 +31,7 @@ mask_dam_other_mm = 0.254       # fab: solder mask bridge, other colours
 inner_hole_via_mm = 0.2         # inner copper of another net to a via hole
 inner_hole_comp_mm = 0.3        # inner copper of another net to a component hole
 
-# Board specs JLCPCB's Economic assembly does not take (assembly capabilities page, 8 Nov 2026). A spec not listed
-# here is not known to be refused: check the page on order day (GUIDELINES check 16).
-[[economic_refuses]]
-when = { layers = 4 }
-unless_mask = ["green"]
-why = "Economic assembly takes 4-layer boards in green only"
-
-[[economic_refuses]]
-when = { copper = "enig" }
-unless_mask = ["green"]
-why = "Economic assembly takes ENIG on green boards only"
-
-[[economic_refuses]]
-when = { layers = 2, mask = "black" }
-unless_copper = ["hasl", "hasl-lead-free"]
-why = "Economic assembly takes black 2-layer boards with HASL only"
+# Board specs JLCPCB's Economic assembly does not take: not read for 6 layers. The assembly capabilities page lists
+# 6-layer boards for Economic assembly but gives no colour or finish rules for them (read 13 Nov 2026), so
+# `pcb check` warns `spec-unchecked` in place of judging the spec. Check the page on order day (GUIDELINES check 16).
+# Until 0.5.1 this file carried the 4-layer file's refusals, which are keyed to 4 and 2 layers and never applied.

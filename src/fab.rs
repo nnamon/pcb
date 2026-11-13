@@ -58,6 +58,14 @@ pub struct Fab {
     pub limits: Limits,
     #[serde(default)]
     pub economic_refuses: Vec<Refusal>,
+    /// Whether `economic_refuses` was read from the fab's assembly pages for this layer count. When it was not,
+    /// `pcb check` warns `spec-unchecked` in place of judging the spec.
+    #[serde(default = "yes")]
+    pub economic_rules_read: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The names of the processes pcb has.
@@ -136,5 +144,18 @@ mod tests {
         assert!(f2.economic_refusal(2, "black", "hasl-lead-free").is_none());
         assert!(f2.economic_refusal(2, "black", "enig").is_some());
         assert!(f2.economic_refusal(2, "green", "hasl").is_none());
+    }
+
+    #[test]
+    fn six_layer_economic_rules_are_marked_unread() {
+        // source: pcb 0.5.1 README review. The 6-layer file carried the 4-layer file's refusals, keyed to 4 and 2
+        // layers, so a 6-layer board was never judged and looked as if it had been.
+        let f6 = load("jlcpcb-6layer-1.6mm").unwrap();
+        assert!(!f6.economic_rules_read);
+        assert!(f6.economic_refuses.is_empty());
+        for n in ["jlcpcb-2layer-1.6mm", "jlcpcb-4layer-1.6mm"] {
+            let f = load(n).unwrap();
+            assert!(f.economic_rules_read && !f.economic_refuses.is_empty(), "{n}");
+        }
     }
 }
