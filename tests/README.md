@@ -27,8 +27,8 @@ A review's findings become cases in the command's case file, each marked `# sour
 ## Rules
 
 - **No shared check names a board.** Board facts (hole names, back-side parts, keep-outs, nets, expected fills, allowed DRC kinds) live in that board's `fixture.toml`.
-- **Oracles come from someone else.** Each oracle is written or reviewed by an independent reviewer against the spec. A reviewer's oracle and mutations join the suite.
-- **A check without a mutation does not count.** Each oracle check needs a mutation in `mutations/` that it catches.
-- **Reviewers' verdicts stay theirs.** A ported case keeps the reviewer's input and expected outcome; a change to either needs the reason in a comment.
+- **Independent oracles.** Each oracle is written or reviewed by an independent reviewer against the spec. A reviewer's oracle and mutations join the suite.
+- **Mutations.** Each oracle check needs a mutation in `mutations/` that it catches; without one the check does not count.
+- **Ported cases.** A ported case keeps the reviewer's input and expected outcome; a change to either needs the reason in a comment.
 - **New fixture:** copy the board's inputs into `fixtures/<name>/`, write its `fixture.toml`, and run the suite. `xtask` picks up every folder that has a `fixture.toml`.
 - **New case:** add it to the command's case file; a new case file needs a `[[step]]` in `cases/steps.toml`.

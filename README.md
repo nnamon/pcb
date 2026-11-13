@@ -1,6 +1,6 @@
 # pcb
 
-`pcb` is a command-line tool an agent uses to take a KiCad board from a schematic to a JLCPCB order. It exists because the pipeline it replaced re-routed the whole board whenever a few parts moved, and 4 of 7 such runs on one board shorted nets or left them open. The hard part is changing one area of a routed board without disturbing the rest. `pcb route --region` locks everything outside the region you name and gives only that region to Freerouting. Every command that writes the board runs KiCad DRC before and after, and rejects a result that adds a violation. `pcb release` writes the order files, then reads the Gerbers back against the board's nets and the fab's limits.
+`pcb` is a command-line tool an agent uses to take a KiCad board from a schematic to a JLCPCB order. It exists because the pipeline it replaced re-routed the whole board whenever a few parts moved, and 4 of 7 such runs on one board shorted nets or left them open. The hard part is changing one area of a routed board without disturbing the rest, so `pcb route --region` locks everything outside the region you name and gives only that region to Freerouting. Every command that writes the board runs KiCad DRC before and after, and rejects a result that adds a violation. `pcb release` writes the order files, then reads the Gerbers back against the board's nets and the fab's limits.
 
 This repository also holds `GUIDELINES.md`, the standard each board is reviewed against before it is ordered.
 
@@ -28,4 +28,4 @@ Each project is its own repository and pins the `pcb` version it is checked with
 
 ## Test
 
-Run `cargo xtask test` in the pinned image (`ci/Dockerfile`) before every push. GitHub runs no tests, so a suite you skip is a change nobody checked.
+Run `cargo xtask test` in the pinned image (`ci/Dockerfile`) before every push. GitHub runs no tests, so nothing else checks a change.

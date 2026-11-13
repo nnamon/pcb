@@ -6,11 +6,11 @@ Every board in this project ships as one versioned zip that a person can order f
 
 ## Principles
 
-- **The Gerbers are the truth.** Anything added after export (art, copper logos, paste fixes, pours) bypasses the design-level DRC, so every check that matters re-runs on the final Gerber and drill files.
-- **Check what JLCPCB will actually do.** Footprint rotations, Economic eligibility, Basic vs Extended and DFM limits are checked against JLCPCB's own data, not assumed from the design tool.
+- **Check the final Gerbers.** Anything added after export (art, copper logos, paste fixes, pours) bypasses the design-level DRC, so every check that matters re-runs on the final Gerber and drill files.
+- **Check what JLCPCB will do.** Footprint rotations, Economic eligibility, Basic vs Extended and DFM limits are checked against JLCPCB's own data, not assumed from the design tool.
 - **Never grade your own work alone.** Fresh reviewers that haven't seen the design reasoning check it at both gates. On v0.0.2 the first review found an overloaded resistor, a missing coil clamp diode, a firmware stuck-key bug and 8 parts that did nothing.
 - **Review early, when changes are cheap.** A schematic error found before layout costs minutes; after routing it costs a re-layout; after ordering it costs a board spin.
-- **Unrecorded means unchecked.** Each release records which checks ran, with what script, on which files, and the result.
+- **Check records.** Each release records which checks ran, with what script, on which files, and the result. A check with no record counts as not run.
 - **Prototype economics.** Default to HASL, ink-jet silkscreen, green, 1.6 mm, Economic assembly. Upgrades like ENIG or high-precision silkscreen cost about 4× the board on tiny boards, so they need a reason.
 - **Scope and limits.** These guidelines cover low-voltage USB and battery boards. Mains, Li-ion charging, high current and RF transmit paths need review by a qualified person before ordering. Claude can't verify a physical board, so first-article testing and fit are checked by hand.
 
@@ -272,4 +272,4 @@ No board is plugged into anything valuable until it has passed inspection and a 
 - [ ] **First power on a current-limited supply,** set just above the expected idle current. Measure each rail and the idle current against the README's expected values, and stop on any mismatch.
 - [ ] **Program and run the acceptance tests** from the requirements brief, on every unit, recording pass or fail.
 - [ ] **Connect to the real target device** only after the above pass.
-- [ ] **Close the loop:** update the errata and `NOTES.md`, and turn each lesson into a check or rule here.
+- [ ] **Record the lessons:** update the errata and `NOTES.md`, and turn each lesson into a check or rule here.

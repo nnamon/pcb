@@ -42,7 +42,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `netlist` | refused | The netlist (or the schematic's) cannot be read, or two parts share a reference or one is not annotated | Annotate the schematic; check the file |
 | `footprint` | refused | `pcb sync`: a part has neither an LCSC code nor a project footprint (`footprints/NAME.kicad_mod` for its Footprint field `LIB:NAME`) | Give the symbol an LCSC field or a project footprint |
 | `pin-missing` | refused | `pcb sync`: the netlist connects a pin number the footprint has no pad for | Fix the symbol's pin numbers to the footprint's pads |
-| `pin-name` | refused | `pcb sync`: a connected pin's name differs from JLCPCB's symbol (by the pin number it shows) or `[parts.<LCSC>] pins`; the XC6206 trap | Check the datasheet; fix the schematic, or give the datasheet's names in `[parts.<LCSC>] pins` |
+| `pin-name` | refused | `pcb sync`: a connected pin's name differs from JLCPCB's symbol (by the pin number it shows) or `[parts.<LCSC>] pins`; JLCPCB's XC6206 symbol swaps VIN and VOUT | Check the datasheet; fix the schematic, or give the datasheet's names in `[parts.<LCSC>] pins` |
 | `sync-copper` | refused | `pcb sync`: tracks or vias of a net whose pads change would be left wrong | Run `pcb sync --rip` and route the nets again |
 | `locked` | refused | `pcb sync` or `pcb place` would remove, replace or move a locked part | Unlock it, or change the circuit or the place |
 | `unknown-ref` | refused | `pcb place`: a `[[place]]` or `--ref` names a part the board does not have | Run `pcb sync` first; check the reference |
