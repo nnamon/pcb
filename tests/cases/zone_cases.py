@@ -1159,14 +1159,16 @@ def group_overrides():
            f"property moved with J2, then every pad restored ({ej.get('outcome')} {(ej.get('error') or {}).get('message', '')[:150]}; {res})")
 
 
-def group_badge():
-    """The badge fixture through pcb zone once (import and zone as the fixture flow does them); reviews 13 and 14's badge
-    verdicts read that one run. verify_zones, the second run and the oracle's mutations run in the fixture flow."""
+def group_sample():
+    """The sample fixture through pcb zone once (import and zone as the fixture flow does them); the verdicts reviews 13
+    and 14 asked for on a whole board read that one run. verify_zones, the second run and the oracle's mutations run in
+    the fixture flow. (Until 13 Nov 2026 this board was the badge carrier's layout r36a; the allowance of a DRC kind
+    on a whole board went with it and stays covered on the synthetic board, group_features.)"""
     import tomllib
-    fx = os.path.join(here, "..", "fixtures", "badge_r36a")
+    fx = os.path.join(here, "..", "fixtures", "sample_node")
     ftoml = os.path.join(fx, "fixture.toml")
     Z = tomllib.load(open(ftoml, "rb"))["zones"]
-    bw = P("badge")
+    bw = P("sample")
     zdir = os.path.join(bw, "zone")
     os.makedirs(zdir, exist_ok=True)
     board = os.path.join(zdir, "board.kicad_pcb")
@@ -1174,7 +1176,7 @@ def group_badge():
     r = subprocess.run([pcb, "--json", "import-tscircuit", os.path.join(fx, "circuit.json"), "--layers", "4"] + [a for n in allow for a in ("--allow-cross-net", n)] + ["-o", board],
                        capture_output=True, text=True)
     if r.returncode:
-        expect("badge", False, f"import: {r.stdout[-300:]}")
+        expect("sample", False, f"import: {r.stdout[-300:]}")
         return
     shutil.copy(os.path.join(fx, "pcb.toml"), zdir)
     base = os.path.join(bw, "base.kicad_pcb")
@@ -1187,32 +1189,27 @@ def group_badge():
     for z in d.get("zones", []):
         kinds[z["kind"]] = kinds.get(z["kind"], 0) + 1
     tie = (d.get("net_ties") or [{}])[0]
-    # source: review 13, badge zone: the run, its two allowances, the stitching, the zones it makes, DRC 189 -> 72
-    # (189 -> 72 since the import carries silkscreen, M3; the fixture's stitching floor is 190)
-    expect("r13_badge_zone", is_done(v) and sorted(d.get("allowed", [])) == ["clearance <no net> NFC_AC1: 0 -> 2", "starved_thermal GND: 0 -> 2"] and list(d.get("stitch_vias", {})) == ["GND"]
-           and d["stitch_vias"]["GND"] >= 190 and kinds == {"keepout": 2, "zone": 4, "fill": 34} and d.get("drc_total_before") == 189 and d.get("drc_total_after") == 72,
-           f"as the review says ({short(v)}; allowed {d.get('allowed')}, stitch {d.get('stitch_vias')}, kinds {kinds}, DRC {d.get('drc_total_before')} -> {d.get('drc_total_after')})")
-    # source: review 14, badge run (review 13, 1 and 14): no overlap or unfilled warning, the tie's counts
-    expect("r14_badge_run", is_done(v) and d.get("fill_overlaps") == [] and d.get("stitch_unfilled") == [] and sorted(set(SB.warnings(v))) == ["drc-allowed"]
-           and d.get("stitch_vias", {}).get("GND", 0) >= 190 and tie.get("copper_segments") == 49 and tie.get("retyped_tracks") == 2 and tie.get("via_pads") == ["3", "4"],
-           f"as the review says ({short(v)}; overlaps {d.get('fill_overlaps')}, unfilled {d.get('stitch_unfilled')}, tie {tie})")
+    floor = Z["stitch"]["min_new_vias"]
+    # source: review 13, whole-board zone run: the run, no allowance needed, the stitching, the zones it makes, and
+    # a board that ends with no DRC violation (47 before: the coil's shorts to L1's pads and the open GND pads)
+    expect("r13_sample_zone", is_done(v) and d.get("allowed") == [] and list(d.get("stitch_vias", {})) == ["GND"]
+           and d["stitch_vias"]["GND"] >= floor and kinds == {"keepout": 1, "zone": 4, "fill": 5} and d.get("drc_total_before") == 47 and d.get("drc_total_after") == 0,
+           f"the whole board zoned ({short(v)}; allowed {d.get('allowed')}, stitch {d.get('stitch_vias')}, kinds {kinds}, DRC {d.get('drc_total_before')} -> {d.get('drc_total_after')})")
+    # source: review 14, whole-board run (review 13, 1 and 14): no overlap or unfilled warning, the tie's counts
+    expect("r14_sample_run", is_done(v) and d.get("fill_overlaps") == [] and d.get("stitch_unfilled") == [] and sorted(set(SB.warnings(v))) == []
+           and d.get("stitch_vias", {}).get("GND", 0) >= floor and tie.get("copper_segments") == 22 and tie.get("retyped_tracks") == 2 and tie.get("via_pads") == ["3", "4"],
+           f"no warning, and the coil as a tie ({short(v)}; overlaps {d.get('fill_overlaps')}, unfilled {d.get('stitch_unfilled')}, tie {tie})")
     if not is_done(v):
         return
 
-    # source: review 13, badge allowed_items: the DRC items the allowances cover are J701.2 and J102.4's thermals and
-    # the coil's clearance to L601 pad 3
+    # source: review 13, allowed_items: with nothing allowed, the zoned board has no starved thermal and nothing
+    # within clearance of the coil's nets
     rep = SB.drc_report(zoned)
-    st, cl = [], []
-    for x in rep["violations"]:
-        ds = [it.get("description", "") for it in x.get("items", [])]
-        if x["type"] == "starved_thermal":
-            st.append(ds[1] if len(ds) > 1 else "")
-        elif x["type"] == "clearance" and any("NFC_AC1" in s for s in ds):
-            cl.append(ds)
-    expect("r13_badge_allowed_items", sorted(st) == ["PTH pad 2 [GND] of J701", "PTH pad 4 [GND] of J102"] and len(cl) == 2 and all(any("PTH pad 3 [NFC_AC1] of L601" in s for s in x) for x in cl),
-           f"allowed items as the review says ({st}; {cl})")
+    st = [x for x in rep["violations"] if x["type"] == "starved_thermal"]
+    cl = [x for x in rep["violations"] if x["type"] == "clearance" and any("NFC_AC" in it.get("description", "") for it in x.get("items", []))]
+    expect("r13_sample_no_allowance", not st and not cl, f"no starved thermal and no coil clearance on the zoned board ({len(st)}; {len(cl)})")
 
-    # source: review 13, badge stitch: as many stitching vias as reported, none on a pad, in a keep-out or within
+    # source: review 13, whole-board stitch: as many stitching vias as reported, none on a pad, in a keep-out or within
     # 0.3 mm of another net's pad
     rr = SB.inspect(zoned)
     uuids = set(re.findall(r'\(via \(at [^)]*\) \(size [^)]*\) \(drill [^)]*\) \(layers "F.Cu" "B.Cu"\) \(net "GND"\) \(uuid "([^"]+)"\)\)', open(zoned).read()))
@@ -1228,10 +1225,10 @@ def group_badge():
                 near.append(f"{ref}.{p['num']}")
     keeps = [box(k["rect"][0] - k.get("grow", 0), k["rect"][1] - k.get("grow", 0), k["rect"][2] + k.get("grow", 0), k["rect"][3] + k.get("grow", 0)) for k in Z["keepouts"]]
     in_keep = [x for x in stitch if any(k.intersects(Point(x["x"], x["y"])) for k in keeps)]
-    expect("r13_badge_stitch", len(stitch) >= 190 and len(stitch) == d["stitch_vias"]["GND"] and not on_pad and not in_keep and not near,
+    expect("r13_sample_stitch", len(stitch) >= floor and len(stitch) == d["stitch_vias"]["GND"] and not on_pad and not in_keep and not near,
            f"{len(stitch)} vias (reported {d['stitch_vias']}), on pads {on_pad[:3]}, in keep-outs {len(in_keep)}, near {near[:3]}")
 
-    # source: review 13, badge refill (finding 1), and review 14, badge refill: a KiCad refill of the written board keeps
+    # source: review 13, whole-board refill (finding 1), and review 14: a KiCad refill of the written board keeps
     # every zone's fill (by zone, and by net and layer within 0.5 mm²), and verify_zones passes on it
     refilled = SB.refill(zoned, os.path.join(bw, "refilled.kicad_pcb"))
     diff = SB.fill_diff(zoned, refilled)
@@ -1246,11 +1243,11 @@ def group_badge():
     a0 = {k: unary_union(x).area for k, x in a0.items()}
     a1 = {k: unary_union(x).area for k, x in a1.items()}
     changed = {k: [a0.get(k), a1.get(k)] for k in set(a0) | set(a1) if abs((a0.get(k) or 0) - (a1.get(k) or 0)) > 0.5}
-    expect("badge_refill", diff == {} and not changed and o.returncode == 0, f"refill keeps every fill and verify_zones passes ({diff}; {changed}; verify exit {o.returncode} {o.stdout[-300:] if o.returncode else ''})")
+    expect("sample_refill", diff == {} and not changed and o.returncode == 0, f"refill keeps every fill and verify_zones passes ({diff}; {changed}; verify exit {o.returncode} {o.stdout[-300:] if o.returncode else ''})")
 
 
 with ThreadPoolExecutor(max_workers=2) as ex:
-    for fut in [ex.submit(g) for g in (group_badge, group_stitch, group_features, group_fills, group_ties, group_refusals, group_overrides)]:
+    for fut in [ex.submit(g) for g in (group_sample, group_stitch, group_features, group_fills, group_ties, group_refusals, group_overrides)]:
         try:
             fut.result()
         except BaseException as e:  # a group that crashes is a failure, not a lost verdict

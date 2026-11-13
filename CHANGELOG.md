@@ -2,6 +2,12 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## Unreleased
+
+- Tests: the fixture `badge_r36a`, a layout of the badge carrier, is replaced by `sample_node`, a sample board drawn for the tests (`tests/fixtures/sample_node/README.md`), so the repository holds no real project's design from here on. The old fixture stays in the history. The sample goes through the same flow: import with its mutations, three route cases, four edit cases, zones with a net tie, a keep-out and stitching and their mutations, `pcb check`, and in the cases a whole-board zone run and a release.
+  - Not carried over: a DRC kind allowed within a limit on a whole board (the sample needs no allowance; the synthetic zone cases cover the allowance), and a net left open because no path exists at its width (the route edge cases cover a net with no path on the layers allowed, not one that fails for its width). The sample adds a rip that leaves a net cut off at the region's edge, which must be rejected.
+- `verify_zones` check J reads every via the base board lacks as a stitching via, whatever net it has now. KiCad gives a via that lands on one net's copper alone that net, so a stitching via moved onto another net's pad inside that net's fill stopped reading as GND and J missed it.
+
 ## 0.5.0 (13 Nov 2026): M5a, the checks the badge's reviews did by hand
 
 Proposal: "pcb tool: review and M5 proposal" (Claude doc, 10 Nov 2026). M5a as built; what was left for M5b is listed in `DESIGN.md`.

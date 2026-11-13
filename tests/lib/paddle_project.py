@@ -22,7 +22,7 @@ sys.path.insert(0, here)
 from contract_check import check as contract  # noqa: E402
 
 FX = os.path.join(TESTS, "fixtures", "paddle_keyer_v1")
-FXB = os.path.join(TESTS, "fixtures", "badge_r36a")
+FXS = os.path.join(TESTS, "fixtures", "sample_node")
 GOLDEN_ZIP = os.path.join(FX, "golden", "paddle-keyer_v1.0.0_gerbers.zip")
 EXPLAIN = os.path.join(FX, "explain.toml")
 STEM = "paddle-keyer_v1.0.0"

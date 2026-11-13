@@ -528,7 +528,7 @@ fn fixture(s: &mut Suite, dir: &Path, pcb: &str, jar: Option<&str>) -> Result<()
             let ran = Command::new(pcb).args(["zone", "--project", &again, "-o", &zoned2, "--work", &w("zone_work2")]).output()?;
             let same = ran.status.success() && std::fs::read(&zoned2).ok() == std::fs::read(&zoned).ok();
             s.steps.push(Step { name: format!("{name}: pcb zone again (same bytes)"), ok: same, seconds: t0.elapsed().as_secs_f64(), detail: if same { String::new() } else { String::from_utf8_lossy(&ran.stdout).chars().take(400).collect() } });
-            // pcb check on the zoned board finds exactly what the fixture lists (M3 gate: the badge through pcb check)
+            // pcb check on the zoned board finds exactly what the fixture lists (M3 gate: a whole board through pcb check)
             if let Some(want) = fx.get("check").and_then(|c| c.get("findings")).and_then(|v| v.as_array()) {
                 let want: std::collections::BTreeSet<String> = want.iter().filter_map(|x| x.as_str().map(String::from)).collect();
                 let t0 = Instant::now();

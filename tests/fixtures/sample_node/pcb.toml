@@ -1,0 +1,64 @@
+# pcb zone settings for the sample board. The suite copies this beside the imported board; verify_zones checks what
+# pcb zone makes from it against fixture.toml.
+schema = 1
+
+[project]
+name = "sample_node"
+version = "0.1.0"
+board = "board.kicad_pcb"
+layers = 4
+fab = "jlcpcb-4layer-1.6mm"
+
+# pours and planes stay out of the coil, on every copper layer
+[[keepout]]
+name = "coil"
+rect = [22, 32.5, 43.5, 52.5]
+grow_mm = 1.0
+layers = "all"
+forbid = ["pour"]
+
+# solid GND planes inside, GND pours outside below the power fills
+[[zone]]
+net = "GND"
+layers = ["In1.Cu", "In2.Cu"]
+clearance_mm = 0.35
+thermal = { gap_mm = 0.35, spoke_mm = 0.5 }
+
+[[zone]]
+net = "GND"
+layers = ["F.Cu", "B.Cu"]
+clearance_mm = 0.25
+priority = 1
+connect = "solid"              # the small pads between tracks have no room for two spokes
+
+[fill]
+clearance_mm = 0.25
+min_width_mm = 0.3
+priority = 2
+
+# power fills round the 3.3 V rail's and the USB supply's copper; where two meet, the higher fill_priority keeps
+# the copper. VIN stays as 0.4 mm tracks
+[nets.V3V3]
+fill_grow_mm = 0.8
+fill_priority = 3
+[nets.VBUS_F]
+fill_grow_mm = 1.0
+fill_priority = 5
+[nets.VBUS]
+fill_grow_mm = 1.0
+fill_priority = 6
+
+# the coil, drawn as tracks on its own net, becomes copper inside L1: a net tie joining pad 1 and the inner via
+[[net_tie]]
+footprint = "L1"
+pads = ["1", "3"]
+absorb_net = "NFC_COIL"
+absorb_vias_net = "NFC_AC1"
+
+# GND stitching between the pours and planes, on a 5 mm grid wherever every layer has GND
+[[stitch]]
+net = "GND"
+pitch_mm = 5
+size_mm = 0.6
+drill_mm = 0.3
+margin_mm = 0.3

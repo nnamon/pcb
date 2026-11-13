@@ -1130,27 +1130,28 @@ print(json.dumps(out))
     want("r15 art dropped", out_(r3, "done") and '"pcb:art:photo"' not in t and '"pcb:art:holes"' not in t, f"dropping an entry removes its group ({P.slim(r3)})", r3)
 
 
-def g_badge():
-    """The badge (4 layers) through check with every finding waived, gate and release: the read-back on a real board."""
-    # source: review 16, 15 badge_release (and review 15, badge release read-back)
-    d = W("badge")
+def g_sample():
+    """The sample board (4 layers) through check with every finding waived, gate and release: the read-back on a whole
+    routed board. (Until 13 Nov 2026 this was the badge carrier's layout r36a.)"""
+    # source: review 16, 15 whole-board release (and review 15, release read-back)
+    d = W("sample")
     os.makedirs(d, exist_ok=True)
-    r = P.pcb("import-tscircuit", os.path.join(P.FXB, "circuit.json"), "--layers", "4", "--allow-cross-net", "NFC_COIL", "-o", P.board(d))
+    r = P.pcb("import-tscircuit", os.path.join(P.FXS, "circuit.json"), "--layers", "4", "--allow-cross-net", "NFC_COIL", "-o", P.board(d))
     assert r["outcome"] == "done", r
-    shutil.copy(os.path.join(P.FXB, "pcb.toml"), d)
-    z = P.pcb("zone", "--project", d, "--work", W("badge_zw"))
-    c, _ = P.check(d, W("badge_cw"))
+    shutil.copy(os.path.join(P.FXS, "pcb.toml"), d)
+    z = P.pcb("zone", "--project", d, "--work", W("sample_zw"))
+    c, _ = P.check(d, W("sample_cw"))
     for f in c["data"].get("findings", []):
         P.toml_add(d, f'[[waiver]]\ncheck = "{f["check"]}"\nitem = "{f["item"]}"\nmax = {f["count"]}\nwhy = "review 16 probe"\n')
-    g = P.gate(d, W("badge_gw"))
-    rr = P.release(d, W("badge_out"), W("badge_rw")) if g["outcome"] == "done" else g
+    g = P.gate(d, W("sample_gw"))
+    rr = P.release(d, W("sample_out"), W("sample_rw")) if g["outcome"] == "done" else g
     v = rr["data"].get("verify") or {}
     dfm = {f'{x["rule"]} {x["layer"]}' for x in v.get("dfm", [])}
     holes = []
     if rr.get("written"):
         from shapely.geometry import LineString, Point
         ver = re.search(r'version = "([^"]+)"', open(os.path.join(d, "pcb.toml")).read()).group(1)
-        zd = P.unzip(os.path.join(rr["written"], f"badge_r36a_v{ver}_gerbers.zip"), W("badge_z"))
+        zd = P.unzip(os.path.join(rr["written"], f"sample_node_v{ver}_gerbers.zip"), W("sample_z"))
         for p in sorted(os.listdir(zd)):
             if not p.endswith(".drl"):
                 continue
@@ -1173,8 +1174,10 @@ def g_badge():
                         holes.append((Point(a).buffer(tools[cur] / 2, 32), False))
     gaps = sorted(round(hs.distance(h2), 3) for i, (hs, s1) in enumerate(holes) if s1 for j, (h2, s2) in enumerate(holes)
                   if j != i and hs.distance(h2) < 1.0 and (not s2 or j > i))
-    ok = "hole_hole drill" not in dfm and gaps and min(gaps) > 0.5 and v.get("opens") == ["GND", "PMUX_ILM", "VBUS_F"] and v.get("shorts") == [] and len(v.get("unplaced_pads") or []) == 0
-    want("r16 badge_release", ok, f"slots as stadiums, the badge's known opens only ({P.slim(rr)} opens {v.get('opens')} shorts {v.get('shorts')} gaps {gaps[:4]} {sorted(dfm)})", z, c, g, rr)
+    # J1's shell tabs are slots 0.6 mm apart end to end: read as stadiums they clear 0.5 mm, read as round holes of
+    # the slot's length they would not
+    ok = "hole_hole drill" not in dfm and gaps and min(gaps) > 0.5 and v.get("opens") == [] and v.get("shorts") == [] and len(v.get("unplaced_pads") or []) == 0
+    want("r16 sample_release", ok, f"slots as stadiums, no open and no short ({P.slim(rr)} opens {v.get('opens')} shorts {v.get('shorts')} gaps {gaps[:4]} {sorted(dfm)})", z, c, g, rr)
 
 
 def g_m5a():
@@ -1379,7 +1382,7 @@ def g_m5a():
          and "silk-on-via" in c["warnings"] and not os.path.exists(os.path.join(d, "order")), f"--fab reports the read-back's findings and makes no release ({fabs}; without --fab {sorted(k for k in f0 if k[0] == 'fab')})", c, c0)
 
 
-for group in (g_golden, g_check, g_gate, g_stale, g_release, g_readback, g_paste_art, g_badge, g_m5a):
+for group in (g_golden, g_check, g_gate, g_stale, g_release, g_readback, g_paste_art, g_sample, g_m5a):
     t0 = time.time()
     group()
     print(f"-- {group.__name__}: {time.time() - t0:.0f} s")

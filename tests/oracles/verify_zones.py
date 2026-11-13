@@ -102,6 +102,9 @@ if tie:
     coil_vias = sorted((xy(t.GetPosition()), t.GetWidth(pcbnew.F_Cu), t.GetDrillValue()) for t in base.GetTracks() if t.GetNetname() == tie["former_net"] and t.GetClass() == "PCB_VIA")
 st = Z.get("stitch")
 old_vias = {xy(t.GetPosition()) for t in base.GetTracks() if t.GetClass() == "PCB_VIA" and t.GetNetname() == st["net"]} if st else set()
+# every via the base has, of any net: a via pcb zone added is a stitching via whatever net it reads now (KiCad gives a
+# via that lands on one net's copper alone that net, so a misplaced stitching via may no longer read as its own)
+old_any = {xy(t.GetPosition()) for t in base.GetTracks() if t.GetClass() == "PCB_VIA"}
 del base
 
 b = pcbnew.LoadBoard(zoned_p)
@@ -294,7 +297,7 @@ if st:
         fails.append(f"J: {len(new)} new {st['net']} vias, expected at least {st['min_new_vias']}")
     pads_all = [(f.GetReference(), pd.GetNumber(), pad_poly(pd)) for f in b.GetFootprints() for pd in f.Pads()]
     ptree = STRtree([g for _, _, g in pads_all])
-    for t in new:
+    for t in [t for t in b.GetTracks() if t.GetClass() == "PCB_VIA" and xy(t.GetPosition()) not in old_any]:
         c = Point(t.GetPosition().x / IU, t.GetPosition().y / IU).buffer(t.GetWidth(pcbnew.F_Cu) / IU / 2)
         for i in ptree.query(c):
             if pads_all[i][2].intersects(c):

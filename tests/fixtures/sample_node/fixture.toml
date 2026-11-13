@@ -1,0 +1,110 @@
+# The sample board: a small USB-powered sensor node with an NFC tag and a printed coil, 70 x 45 mm on 4 layers.
+# Drawn for these tests (make_fixture.py writes circuit.json; routes.json holds the routing) and never ordered.
+# It carries what a dense real board asks of pcb: the import, re-routes in a region, edits the gate must reject,
+# zones with a net tie, keep-out and stitching, and pcb check on the result.
+
+[fixture]
+name = "sample_node"
+circuit_json = "circuit.json"
+layers = 4
+
+[import]
+allow_cross_net = ["NFC_COIL"]
+
+[import.holes]
+H1 = [-31.5, 19]
+H2 = [31.5, 19]
+H3 = [-31.5, -19]
+H4 = [31.5, -19]
+
+[import.back_side.BT1]
+pads = { "1" = [-7.6, 0], "2" = [2.0, -1.0] }
+
+# Route cases run on the imported board.
+[[route]]
+name = "reroute_nrst"                # NRST ripped and laid again between U2, R11, C8 and the header
+region = [74, 38, 89, 53]
+rip = ["NRST"]
+nets = ["NRST"]
+targets = ["NRST"]
+expect = "done"
+attempt_used = 0
+
+[[route]]
+name = "reroute_swdio"               # a longer net, round the right-hand side of U2
+region = [65, 30, 90, 55]
+rip = ["SWDIO"]
+nets = ["SWDIO"]
+targets = ["SWDIO"]
+expect = "done"
+
+# LED3 runs out of this region, so ripping it here leaves the part outside without its other end, and the router
+# finds no way back in: the result is rejected, nothing is written, LED3 is reported open
+[[route]]
+name = "led3_no_way_back"
+region = [58, 24, 70, 42]
+rip = ["LED3"]
+nets = ["LED3"]
+expect = "rejected"
+still_open = ["LED3"]
+
+# Edit cases run `pcb edit` on the imported board. `ops` is the JSON operation list; `regressions` must each be
+# among the DRC regressions reported.
+[[edit]]
+name = "r13_south_rejected"          # 0.1 mm south brings R13's pads within 0.15 mm of the BAT track at y 50.74
+ops = '[{"op": "move_footprint", "ref": "R13", "from": [52.8, 49.9], "to": [52.8, 50.0]}]'
+expect = "rejected"
+regressions = ["clearance BAT BAT_SENSE"]
+
+[[edit]]
+name = "via_through_usb_dm_rejected"  # a BAT via on its top-layer track, where USB_DM passes underneath
+ops = '[{"op": "add_via", "net": "BAT", "at": [65.7067, 50.7436], "size": 0.6, "drill": 0.3}]'
+expect = "rejected"
+regressions = ["shorting_items BAT USB_DM"]
+
+[[edit]]
+name = "no_such_track_refused"
+ops = '[{"op": "delete", "what": "track", "net": "USB_DP", "layer": "F.Cu", "start": [30.0, 30.0], "end": [31.0, 30.0]}]'
+expect = "refused"
+code = "edit-no-target"
+
+[[edit]]
+name = "usb_dp_run_relaid"           # the long bottom-layer run of USB_DP taken out and put back
+ops = '[{"op": "delete", "what": "track", "net": "USB_DP", "layer": "B.Cu", "start": [65.0605, 59.9462], "end": [65.0605, 44.583]}, {"op": "add_track", "net": "USB_DP", "layer": "B.Cu", "width": 0.15, "points": [[65.0605, 59.9462], [65.0605, 44.583]]}]'
+expect = "done"
+
+# Zones, in KiCad coordinates (mm, y down): x = make_fixture x + 55, y = 42.5 - make_fixture y.
+[zones]
+keepouts = [
+  { name = "coil", rect = [22, 32.5, 43.5, 52.5], grow = 1.0 },
+]
+planes = { net = "GND", layers = ["In1.Cu", "In2.Cu"], clearance = 0.35 }
+net_tie = { footprint = "L1", group = "1, 3", pads = { "1" = "NFC_AC0", "2" = "NFC_AC1", "3" = "NFC_AC1", "4" = "NFC_AC1" }, former_net = "NFC_COIL" }
+stitch = { net = "GND", min_new_vias = 25 }
+solid_override_pad = "J2.5"
+spoke_min = 0.5
+npth_gap = 0.2
+# fills that must exist, at no less than 95 % of the area pcb zone gave on 13 Nov 2026 (KiCad 10.0.8)
+expect_fill = [
+  { net = "GND", layer = "B.Cu", min_area = 2111.0 },
+  { net = "GND", layer = "F.Cu", min_area = 1731.7 },
+  { net = "GND", layer = "In1.Cu", min_area = 2335.3 },
+  { net = "GND", layer = "In2.Cu", min_area = 2335.3 },
+  { net = "V3V3", layer = "B.Cu", min_area = 9.5 },
+  { net = "V3V3", layer = "F.Cu", min_area = 199.9 },
+  { net = "VBUS", layer = "B.Cu", min_area = 7.0 },
+  { net = "VBUS", layer = "F.Cu", min_area = 27.3 },
+  { net = "VBUS_F", layer = "F.Cu", min_area = 23.5 },
+]
+
+# pcb check on the zoned board (4-layer JLCPCB rules) finds exactly these. The generic parts carry no LCSC code,
+# so they are left out of the CPL and their pads' paste is reported, as is the paste on the parts that are not
+# fitted (C7, the coil's pads, the test pads). A real project would give each fitted part its code.
+[check]
+findings = [
+  "paste-unassembled C7", "paste-unassembled D1", "paste-unassembled D2", "paste-unassembled D3",
+  "paste-unassembled D4", "paste-unassembled D6", "paste-unassembled D7", "paste-unassembled F1",
+  "paste-unassembled J1", "paste-unassembled L1", "paste-unassembled SW1", "paste-unassembled TP1",
+  "paste-unassembled TP2", "paste-unassembled TP3", "paste-unassembled TP4", "paste-unassembled TP5",
+  "paste-unassembled U1", "paste-unassembled U2", "paste-unassembled U3", "paste-unassembled U4",
+]
