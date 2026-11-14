@@ -106,6 +106,49 @@ pub fn ohms(value: &str) -> Option<f64> {
     v.parse().ok()
 }
 
+/// An IC's supply net and the capacitors on it that go to ground: what a decoupling loop is measured between.
+pub struct Decap {
+    pub ic: String,
+    pub net: String,
+    /// The IC's pins on the supply net.
+    pub ic_pins: Vec<String>,
+    /// The IC's pins on ground nets, as (pin, net).
+    pub ground_pins: Vec<(String, String)>,
+    /// (capacitor, its pin on the supply net, its pin on ground, the ground net).
+    pub caps: Vec<(String, String, String, String)>,
+}
+
+/// Every IC supply net with a capacitor to ground on the net itself, by the `decoupling` rule's reading of the
+/// netlist.
+pub fn decoupling_pairs(n: &Netlist) -> Vec<Decap> {
+    let mut pins: BTreeMap<&str, Vec<(&str, &str, &str, &str)>> = BTreeMap::new();
+    for net in &n.nets {
+        for x in &net.nodes {
+            pins.entry(x.reference.as_str()).or_default().push((&x.pin, &x.function, &x.pintype, &net.name));
+        }
+    }
+    let mut out = vec![];
+    for c in n.comps.iter().filter(|c| is(&c.reference, &["U", "IC"])) {
+        let Some(ps) = pins.get(c.reference.as_str()) else { continue };
+        let supply: BTreeSet<&str> = ps.iter().filter(|q| (q.2 == "power_in" || (q.2.is_empty() || q.2 == "passive") && supply_pin(q.1)) && !is_ground(q.3)).map(|q| q.3).collect();
+        let ground_pins: Vec<(String, String)> = ps.iter().filter(|q| is_ground(q.3)).map(|q| (q.0.to_string(), q.3.to_string())).collect();
+        for net in supply {
+            let caps: Vec<(String, String, String, String)> = pins
+                .iter()
+                .filter(|(r, v)| is(r, &["C"]) && v.len() == 2 && v.iter().any(|q| q.3 == net) && v.iter().any(|q| is_ground(q.3)))
+                .map(|(r, v)| {
+                    let (s, g) = (v.iter().find(|q| q.3 == net).unwrap(), v.iter().find(|q| is_ground(q.3)).unwrap());
+                    (r.to_string(), s.0.to_string(), g.0.to_string(), g.3.to_string())
+                })
+                .collect();
+            if !caps.is_empty() {
+                out.push(Decap { ic: c.reference.clone(), net: net.to_string(), ic_pins: ps.iter().filter(|q| q.3 == net).map(|q| q.0.to_string()).collect(), ground_pins: ground_pins.clone(), caps });
+            }
+        }
+    }
+    out
+}
+
 pub fn run(n: &Netlist) -> Vec<Fault> {
     let comp: BTreeMap<&str, &Comp> = n.comps.iter().map(|c| (c.reference.as_str(), c)).collect();
     // the pins of each part, as (pin, function, pintype, net); a net with one pin connects nothing
@@ -161,14 +204,22 @@ pub fn run(n: &Netlist) -> Vec<Fault> {
 
         // a USB-C receptacle's configuration pins
         if is(r, &["J", "P", "CN", "USB", "USBC", "X"]) {
-            let cc: Vec<(&str, &str)> = ps.iter().filter(|q| matches!(q.1.to_ascii_uppercase().as_str(), "CC1" | "CC2")).map(|q| (q.1, q.3)).collect();
-            let names: BTreeSet<String> = cc.iter().map(|q| q.0.to_ascii_uppercase()).collect();
+            // the pin's name, or its first word: a schematic made from JLCPCB's symbols names pins `CC1_A5`
+            // `CC2_EN` and `CC1101_GDO` are not configuration pins: the other words may only be pin numbers
+            let cc_name = |f: &str| {
+                let t = tokens(f);
+                let pin_number = |x: &str| x.len() >= 2 && x.starts_with(['A', 'B']) && x[1..].chars().all(|c| c.is_ascii_digit());
+                let cc: Vec<&String> = t.iter().filter(|x| *x == "CC1" || *x == "CC2").collect();
+                (cc.len() == 1 && t.iter().all(|x| x == cc[0] || pin_number(x))).then(|| cc[0].clone())
+            };
+            let cc: Vec<(String, &str)> = ps.iter().filter_map(|q| Some((cc_name(q.1)?, q.3))).collect();
+            let names: BTreeSet<String> = cc.iter().map(|q| q.0.clone()).collect();
             if names.len() == 2 {
                 let nets: BTreeSet<&str> = cc.iter().map(|q| q.1).collect();
                 if nets.len() == 1 && !single(nets.iter().next().unwrap()) {
                     add("usb-cc", r, "", format!("{r}'s CC1 and CC2 are tied together on {}; each needs its own 5.1 kΩ to ground, or a cable with an e-marker pulls both low and the source supplies nothing", nets.iter().next().unwrap()));
                 } else {
-                    for (name, net) in nets.iter().map(|net| (cc.iter().find(|q| q.1 == *net).unwrap().0, *net)) {
+                    for (name, net) in nets.iter().map(|net| (cc.iter().find(|q| q.1 == *net).unwrap().0.as_str(), *net)) {
                         // a controller on the net, or behind one series resistor
                         let has_ic = |x: &str| on(x).iter().any(|(o, _)| is(o, &["U", "IC", "Q"]));
                         let controller = has_ic(net) || through(net, true).iter().any(|far| !is_ground(far) && has_ic(far));
@@ -312,6 +363,12 @@ mod tests {
         assert_eq!(items(&tied), ["usb-cc J1"]);
         let wrong = nl(&[("J1", "USB-C"), ("R1", "10k"), ("R2", "5.1k")], &[("CC1", &[("J1", "A5", "CC1", "passive"), ("R1", "1", "", "passive")]), ("CC2", &[("J1", "B5", "CC2", "passive"), ("R2", "1", "", "passive")]), gnd]);
         assert_eq!(items(&wrong), ["usb-cc J1 CC1"]);
+        // pin names with the pin number after them, as a schematic from JLCPCB's symbols has
+        let suffixed = nl(&[("J1", "USB-C"), ("R1", "10k"), ("R2", "5.1k")], &[("CC1", &[("J1", "A5", "CC1_A5", "passive"), ("R1", "1", "", "passive")]), ("CC2", &[("J1", "B5", "CC2_B5", "passive"), ("R2", "1", "", "passive")]), gnd]);
+        assert_eq!(items(&suffixed), ["usb-cc J1 CC1"]);
+        // review 23, 13: an enable named after a CC line is not one
+        let enables = nl(&[("J1", "hdr"), ("R1", "10k"), ("R2", "10k")], &[("A", &[("J1", "1", "CC1_EN", "passive"), ("R1", "1", "", "passive")]), ("B", &[("J1", "2", "CC2_EN", "passive"), ("R2", "1", "", "passive")]), gnd]);
+        assert!(items(&enables).is_empty(), "{:?}", items(&enables));
         let controller = nl(&[("J1", "USB-C"), ("U1", "PD")], &[("CC1", &[("J1", "A5", "CC1", "passive"), ("U1", "1", "CC1", "bidirectional")]), ("CC2", &[("J1", "B5", "CC2", "passive"), ("U1", "2", "CC2", "bidirectional")])]);
         assert!(items(&controller).is_empty());
     }

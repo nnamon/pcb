@@ -29,7 +29,8 @@
      "broadside",
      "total_track_mm",
      "vias",
-     "over"
+     "over",
+     "unreferenced"
     ],
     "properties": {
      "nets": {
@@ -84,6 +85,29 @@
       "type": "array",
       "items": {
        "type": "array"
+      }
+     },
+     "unreferenced": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "net",
+        "track_mm",
+        "bare_mm"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "net": {
+         "type": "string"
+        },
+        "track_mm": {
+         "type": "number"
+        },
+        "bare_mm": {
+         "type": "number"
+        }
+       }
       }
      }
     }

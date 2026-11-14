@@ -70,7 +70,8 @@
           "quality",
           "silk-owner",
           "erc",
-          "circuit"
+          "circuit",
+          "via-current"
          ]
         },
         "item": {

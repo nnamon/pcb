@@ -51,7 +51,8 @@
      "prewired",
      "attempts",
      "attempt_used",
-     "dropped_nets"
+     "dropped_nets",
+     "plane_open"
     ],
     "properties": {
      "regressions": {
@@ -158,6 +159,12 @@
       }
      },
      "dropped_nets": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "plane_open": {
       "type": "array",
       "items": {
        "type": "string"

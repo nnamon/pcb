@@ -98,6 +98,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `silk-filled` | import-tscircuit | A filled silkscreen rectangle was carried over as its outline only |
 | `economic-unknown` | parts, release | JLCPCB's record for a part gives no `componentProductType`, so Economic eligibility is unknown |
 | `spec-unchecked` | check | The fab file has no Economic assembly rules read for its layer count (the 6-layer process), so the board spec was not judged. Check JLCPCB's assembly capabilities page before ordering |
+| `plane-open` | route | A zone's net has pads its fills do not join. The router lays nothing for a zone's net. Run `pcb zone` (with a `[[stitch]]`), or name the net in `--nets` |
 | `route-partial` | route | The result was worse only where some nets' new copper ran; that copper was dropped (`data.dropped_nets`) and the rest written. Route those nets again, or lay them with `pcb edit` |
 | `erc-warnings` | check | KiCad's ERC reported warnings on the schematic (counted by type); they do not fail the check |
 | `erc-skipped` | check | `[project] netlist` is a `.net` file, so KiCad's ERC did not run. Run ERC where the schematic is drawn |

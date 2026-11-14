@@ -20,7 +20,7 @@ The 0.6.0 run (`route-0.6.0.md`) ripped the copper with `--rip all` and found th
 | A net in a width class lost the via-to-via spacing | `paddle_keyer_v1`: two vias 0.46 mm apart, hole to hole | Width classes carry a width only and take the board's clearances |
 | With a zone's outline in the DSN, some other nets found no way through | `paddle_keyer_m4`: BZ_GATE and DIT open in every run | Zone outlines are left out, and the zones' nets are classes the router ignores |
 
-That file blamed the shorts on the board's pours; `paddle_keyer_v1` has none. Its note on `paddle_keyer_m4` (that one whole-board run was not enough) was wrong too: the pours stood in the way.
+`paddle_keyer_v1` has no pours: its shorts came from the footprint variants alone.
 
 ## What is left
 

@@ -591,7 +591,7 @@ pub fn check(p: &Project) -> Vec<String> {
         e.push(format!("project.pcb is {pin:?} and this is pcb {}; use the pinned version, or change the pin and run pcb check again", env!("CARGO_PKG_VERSION")));
     }
     if let Some(q) = &p.quality {
-        for (k, v) in [("power_width_mm", q.power_width_mm), ("power_neck_mm", q.power_neck_mm), ("max_detour", q.max_detour), ("detour_min_mm", q.detour_min_mm), ("max_segments_per_10mm", q.max_segments_per_10mm), ("max_broadside_mm", q.max_broadside_mm), ("small_pour_mm2", q.small_pour_mm2)] {
+        for (k, v) in [("power_width_mm", q.power_width_mm), ("power_neck_mm", q.power_neck_mm), ("max_detour", q.max_detour), ("detour_min_mm", q.detour_min_mm), ("max_segments_per_10mm", q.max_segments_per_10mm), ("max_broadside_mm", q.max_broadside_mm), ("small_pour_mm2", q.small_pour_mm2), ("max_decap_loop_mm", q.max_decap_loop_mm), ("max_unreferenced_mm", q.max_unreferenced_mm)] {
             if v.is_some_and(|v| !(v.is_finite() && v >= 0.0)) {
                 e.push(format!("quality.{k} must be a number of 0 or more"));
             }
@@ -868,9 +868,9 @@ pub fn check(p: &Project) -> Vec<String> {
         }
     }
     for w in &p.waiver {
-        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting" | "near" | "edge" | "quality" | "silk-owner" | "erc" | "circuit") {
+        if !matches!(w.check.as_str(), "drc" | "width-current" | "side" | "paste" | "testpoint" | "silk" | "ring" | "dfm" | "via-in-pad" | "paste-unassembled" | "cpl-bottom" | "edge-setting" | "near" | "edge" | "quality" | "silk-owner" | "erc" | "circuit" | "via-current") {
             // `spec` takes no waiver: a board the Economic service refuses is ordered with service = "standard"
-            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom, edge-setting, near, edge, quality, silk-owner, erc or circuit", w.item));
+            e.push(format!("waiver {:?}: check is drc, width-current, side, paste, testpoint, silk, ring, dfm, via-in-pad, paste-unassembled, cpl-bottom, edge-setting, near, edge, quality, silk-owner, erc, circuit or via-current", w.item));
         }
         if w.item.trim().is_empty() || w.why.trim().is_empty() {
             e.push(format!("waiver {:?}: needs an item and a why", w.item));

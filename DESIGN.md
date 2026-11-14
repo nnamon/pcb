@@ -131,7 +131,7 @@ Built by the end of M3: `roundtrip`, `info`, `import-tscircuit`, `render`, `doct
 | `[[place]]` | `ref`, `at` (centred frame, mm, y up), `rot_deg`, `side` (default `top`), `locked` | M4 place; check's `stale` |
 | `[[near]]` | `part`, `to` (`REF.PAD`), `max_mm`, `why` | M5a check |
 | `[[edge]]` | `side` (`top`, `bottom`, `left`, `right`, as drawn), `parts`, `max_mm`, `min_web_mm`, `why` | M5a check |
-| `[quality]` | `power_width_mm`, `max_detour`, `max_vias_two_pad`, `max_segments_per_10mm`, `max_widths`, `max_broadside_mm`, `max_small_pour_pieces` | M5a quality, check |
+| `[quality]` | `power_width_mm`, `max_detour`, `max_vias_two_pad`, `max_segments_per_10mm`, `max_widths`, `max_broadside_mm`, `max_small_pour_pieces`, `max_decap_loop_mm`, `max_unreferenced_mm` | M5a quality, check |
 | `[finish]` | `mask`, `silk`, `copper` | 0.4.2 release, render `--look`; check's `spec` |
 | `[drawing]` | title block and notes, `[[drawing.leader]]`, `[[drawing.outline]]`, `[drawing.section]` (`docs/drawing-standard.md`) | M4 drawing |
 
@@ -382,7 +382,7 @@ Source: a comparison with Copper (`claynicholson/copper-kicad-mcp`, read 14 Nov 
 | Rule | Finding | How it decides |
 | --- | --- | --- |
 | `decoupling` | A supply pin of a part with reference `U` or `IC` on a net with no capacitor to ground | Supply pin: pin type `power_in`, or with no type (or `passive`) a pin named `VDD`, `VCC`, `VBAT`, `AVDD` and the like (not `VIN`: `VIN+` is an amplifier's input). Capacitor: reference `C` with another pin on a ground net, on the supply net or one ferrite bead, inductor or link of 1 Ω or less away |
-| `usb-cc` | A receptacle's CC pin with no pull-down and no controller; CC1 and CC2 on one net; a pull-down that is not 5.1 kΩ ± 6 % | Receptacle: a connector with pins named `CC1` and `CC2`. Reference prefixes `J`, `P`, `CN`, `USB`, `USBC` and `X` are read. A part with reference `U`, `IC` or `Q` on the net or behind one series resistor, or a resistor to a supply, counts as a controller or a source |
+| `usb-cc` | A receptacle's CC pin with no pull-down and no controller; CC1 and CC2 on one net; a pull-down that is not 5.1 kΩ ± 6 % | Receptacle: a connector with pins named `CC1` and `CC2`, or with those as the first word (`CC1_A5`, as a schematic made from JLCPCB's symbols names them; 0.6.x read only the bare names and so never judged such a schematic). Reference prefixes `J`, `P`, `CN`, `USB`, `USBC` and `X` are read. A part with reference `U`, `IC` or `Q` on the net or behind one series resistor, or a resistor to a supply, counts as a controller or a source |
 | `i2c-pullup` | An I2C net with no resistor to a supply | I2C: a pin of an IC or connector named only `SDA`, `SCL` (with a digit or an `I2C`/`TWI` prefix), or a net with `SDA` or `SCL` as a word of its name (`SENSOR_SDA`). A pin named `GPIO4/I2C0_SDA/UART1_TX` does not make a net I2C |
 | `crystal-load` | A terminal of a part with reference `Y` with no capacitor to ground | Only a part with exactly two signal nets and no supply or output pin, so an oscillator is not judged |
 | `led-resistor` | A two-pin LED with no resistor on a terminal net that is neither ground nor a supply | LED: reference `LED`, or `D` with `LED` as a word of its value or starting a word of its footprint. A resistor elsewhere on ground or the rail does not count |
@@ -407,7 +407,21 @@ A `pcb check` finding carries `at` (KiCad mm) when its item names a part, a pad 
 - **What Freerouting is given (0.6.1).** Three changes to the DSN, each from a fault the benchmark showed:
   - Footprint variants (`NAME::1`) are renamed without `::`. Freerouting 2.5.0 read the variants of one name as one footprint and routed to another variant's pad places.
   - A width class carries its width alone. With a clearance of its own it lost the board's via-to-via spacing.
-  - Zone outlines (`plane`) are left out, and the zones' nets go into classes the router ignores (`pcb_plane_<i>`). With the outlines in, some nets of other names found no path. A zone's net is the zone's: the router lays nothing for it and `--rip all` rips nothing of it. A net the run names in `--nets` or `--rip` is routed as tracks all the same.
+  - Zone outlines (`plane`) are left out, and the zones' nets go into classes the router ignores (`pcb_plane_<i>`). With the outlines in, some nets of other names found no path. A zone's net is the zone's: the router lays nothing for it and `--rip all` rips nothing of it. A net the caller names in `--nets` or `--rip` is routed and judged as any other net. A zone's net with pads its fills do not join is reported (`plane_open`, warning `plane-open`), from 0.7.0.
+
+## The copper graph (0.7.0, from M5b)
+
+`src/copper.rs` builds one net's copper as a graph. Its pads, tracks (arcs by their chords) and vias are the nodes, joined where they touch, and each filled piece of a zone joins everything inside it. A track is first cut wherever another track's end, a via or a pad meets its middle. A track end then joins a pad it lies in, a track end it meets and a via whose pad it lies in; a via joins a pad it stands in, on the layers its barrel reaches; a fill joins every pad, via and track end inside it on its layer, each pair by the straight line between them. A pad on thermal spokes has no fill at its centre, so the middles of its edges are tried too. The three measures below need to know how a net's copper is joined, which DRC's "connected" does not say.
+
+A path's length is the parts of tracks it uses, plus 1.6 mm for each via and the straight lines across fills. It is a lower bound on the copper the current follows.
+
+| Measure | Where | What it judges |
+| --- | --- | --- |
+| `via-current` | `pcb check`, a finding of its own | For each net with `current_a`: the vias are grouped by the two pieces of copper they join (the pieces left when every via is taken out). A group whose removal parts the net's pads is the only copper between them, so all the current between those pads crosses it. A fill counts as a piece of copper, so a supply that goes down one via into a pour is judged. The group carries the sum of its vias: IPC-2221 at a 10 °C rise for a wall of the hole's circumference by 18 µm of plating (1.41 A for a 0.3 mm hole). Less than `current_a` is a finding at the first via. `current_a` is held against every branch of the net, so a pull-up reached through one via on a 2 A net is a finding to waive |
+| Decoupling loop | `pcb check`, `quality` item `decap-loop <IC> <NET>`, limit `[quality] max_decap_loop_mm` | For each IC supply net with capacitors to ground on it (the `decoupling` rule's reading of the netlist): over those capacitors, the least of the path from the capacitor's supply pad to the IC's nearest pin on the net plus the path from its ground pad to the IC's nearest ground pin. On paddle-keyer as `pcb` laid it the three loops are 9.5 to 11.5 mm |
+| Unreferenced | `pcb quality` (`data.unreferenced`), `quality` item `unreferenced <NET>`, limit `[quality] max_unreferenced_mm` | For each net of class `critical`: its track on the front and back layers, sampled every 0.25 mm, and the length with no fill of a ground net on the next layer in. On a board with no ground fill all of it counts. A critical net with no outer-layer track is not listed |
+
+Not judged: current shared between groups of vias that join different pieces of copper (two paths of one via each pass, since neither alone parts the pads), heat, and how far a return current must go round a gap. The loop is per supply net, not per supply pin, and a capacitor of another IC on the same net can be the nearest. An IC is not measured, and nothing says so, when the project has no netlist, the netlist gives no pin names or types, its capacitor's ground net is not one of its own ground nets, or the copper is not joined.
 
 ## Planning drawings
 

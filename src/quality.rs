@@ -43,6 +43,11 @@ pub struct Limits {
     pub max_small_pour_pieces: Option<usize>,
     /// What counts as a small piece (default 20 mm²).
     pub small_pour_mm2: Option<f64>,
+    /// Longest decoupling loop, mm: the copper from an IC's supply pin to its nearest capacitor and from the
+    /// capacitor's ground pad back to the IC's ground pin (`pcb check` measures it; it needs the netlist).
+    pub max_decap_loop_mm: Option<f64>,
+    /// Most outer-layer track, mm, a critical net may run with no ground fill on the next layer in.
+    pub max_unreferenced_mm: Option<f64>,
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -75,8 +80,17 @@ pub struct Report {
     pub broadside: Vec<Broadside>,
     pub total_track_mm: f64,
     pub vias: usize,
+    /// Critical nets' outer-layer track and how much of it has no ground fill on the next layer in.
+    pub unreferenced: Vec<Unreferenced>,
     /// What is over a limit in `[quality]`: (item, message).
     pub over: Vec<(String, String)>,
+}
+
+#[derive(Serialize, Default)]
+pub struct Unreferenced {
+    pub net: String,
+    pub track_mm: f64,
+    pub bare_mm: f64,
 }
 
 #[derive(Serialize, Default)]
@@ -250,6 +264,18 @@ pub fn run(b: &Board, p: &Project) -> Report {
         }
     }
     rep.broadside = bs;
+    // a critical net's return path: ground under its outer-layer track
+    for (net, _) in p.nets.iter().filter(|(_, r)| r.class.as_deref() == Some("critical")) {
+        let (track_mm, bare_mm) = crate::copper::unreferenced(b, net);
+        // a critical net with no outer-layer track has nothing to judge
+        if track_mm > 0.0 {
+            if let Some(max) = lim.max_unreferenced_mm
+                && bare_mm > max + 1e-6 {
+                over.push((format!("unreferenced {net}"), format!("{net} runs {bare_mm} mm of its {track_mm} mm on the outer layers with no ground fill on the next layer in (limit {max} mm); its return current has to go round")));
+            }
+            rep.unreferenced.push(Unreferenced { net: net.clone(), track_mm, bare_mm });
+        }
+    }
     rep.total_track_mm = r1(rep.total_track_mm);
     rep.over = over;
     rep

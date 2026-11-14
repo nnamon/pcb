@@ -1078,7 +1078,9 @@ else:
     # source: review 20, schematic_changed_after_gate (finding 61)
     d = full("sch_after_gate")
     sch_edit(d, "C3", "(dnp no)", "(dnp yes)")
-    sch_edit(d, "R1", '"5.1k"', '"4.7k"', within=10 ** 6)
+    # 5.2k, not the reviewer's 4.7k: from 0.7.0 a 4.7k CC pull-down is a usb-cc finding, and the release must stop
+    # for the changed schematic alone (review 23, 15)
+    sch_edit(d, "R1", '"5.1k"', '"5.2k"', within=10 ** 6)
     P("check", "--project", d, "--work", os.path.join(work, "sag_c"))
     r = P("release", "--project", d, "-o", os.path.join(work, "sag_out"), "--work", os.path.join(work, "sag_r"))
     want("release: a schematic changed after the gate stops the release (review 20, 61)", not out(r, "done"), r.get("outcome"))
@@ -1086,6 +1088,8 @@ else:
     # source: review 20, value_only, lcsc_same_package, lcsc_other_title_other_pads (finding 55)
     def resync20(name, edits, fake=None):
         d = full(name)
+        if name == "rs20_lcsc_same_package":
+            open(os.path.join(d, "pcb.toml"), "a").write(CC_WAIVER)
         if fake:
             json.dump(fake[1], open(os.path.join(d, "parts", f"{fake[0]}.easyeda.json"), "w"))
             json.dump(jlc(fake[0]), open(os.path.join(d, "parts", f"{fake[0]}.jlc.json"), "w"))
@@ -1098,6 +1102,10 @@ else:
             th = through(d, name)
             res.update(check=th["check"].get("outcome"), release=th["release"].get("outcome"))
         return res
+    # lcsc_same_package makes R1, J1's CC1 pull-down, a 10k. From 0.7.0 the usb-cc rule reads this schematic's pin
+    # names (CC1_A5), so that is a circuit finding, rightly; the case is about the replacement, so it waives it
+    # (review 23, 15)
+    CC_WAIVER = '\n[[waiver]]\ncheck = "circuit"\nitem = "usb-cc J1 CC1"\nwhy = "the case swaps the pull-down for a 10k on purpose"\n'
     for k, edits in (("value_only", [('"5.1k"', '"5.10k"')]), ("lcsc_same_package", [('"LCSC" "C25905"', '"LCSC" "C25744"'), ('"5.1k"', '"10k"')])):
         res = resync20("rs20_" + k, edits)
         want(f"sync: {k}: replaced without --rip, copper kept, check and release pass (review 20, 55)", out(res["sync"], "done") and res["replaced"] == ["R1"]
@@ -1222,12 +1230,63 @@ want("parts: a Preferred Extended part is not counted as a loading fee",
      len(ext) == 1 and ext[0].startswith("1 Extended part(s), each a loading fee: C9500001") and "Preferred" in ext[0]
      and {q["lcsc"]: q["preferred"] for q in r["data"]["parts"]} == {"C9500001": False, "C11": True}, r)
 
+# ---- 0.7.0: the copper graph (via-current, the decoupling loop, ground under a critical net)
+# source: the badge carrier's Gate 2 reviews counted supply vias and measured capacitor returns by hand
+d = project(os.path.join(work, "copper"), [("U1", "ic", "", "C9500001"), ("C1", "100n", "", "C11")],
+            {"+3V3": [("U1", "1", "VDD"), ("C1", "1", "")], "GND": [("U1", "2", "GND"), ("C1", "2", "")]}, {k: two(*v) for k, v in IC.items()},
+            place=[("U1", -8, 0, 0, "top"), ("C1", 4, 0, 0, "top")],
+            extra='[nets."+3V3"]\ncurrent_a = 2.0\n[quality]\nmax_decap_loop_mm = 10\n')
+s1 = P("sync", "--project", d, "--work", os.path.join(d, "w"))
+s2 = P("place", "--project", d, "--work", os.path.join(d, "wp"))
+# +3V3 from U1 down a via, along the back and up a second via to C1; GND straight across on the front
+COPPER = """
+def pad(r, n):
+    q = [p for p in fp(r).Pads() if p.GetNumber() == n][0].GetPosition()
+    return mm(q.x), mm(q.y)
+def trk(a, c, layer, net):
+    t = pcbnew.PCB_TRACK(b); t.SetStart(V(*a)); t.SetEnd(V(*c)); t.SetWidth(FM(0.8)); t.SetLayer(layer); t.SetNet(b.FindNet(net)); b.Add(t)
+def via(at, net):
+    v = pcbnew.PCB_VIA(b); v.SetPosition(V(*at)); v.SetWidth(pcbnew.F_Cu, FM(0.6)); v.SetDrill(FM(0.3)); v.SetNet(b.FindNet(net)); b.Add(v)
+(ux, uy), (cx, cy) = pad("U1", "1"), pad("C1", "1")
+va, vb = (ux, uy - 2), (cx, cy - 2)
+trk((ux, uy), va, pcbnew.F_Cu, "+3V3"); via(va, "+3V3"); trk(va, vb, pcbnew.B_Cu, "+3V3"); via(vb, "+3V3"); trk(vb, (cx, cy), pcbnew.F_Cu, "+3V3")
+if len(sys.argv) > 2:
+    for at in ((va[0], va[1] - 1), (vb[0], vb[1] - 1)):
+        via(at, "+3V3")
+    trk(va, (va[0], va[1] - 1), pcbnew.F_Cu, "+3V3"); trk(va, (va[0], va[1] - 1), pcbnew.B_Cu, "+3V3")
+    trk(vb, (vb[0], vb[1] - 1), pcbnew.F_Cu, "+3V3"); trk(vb, (vb[0], vb[1] - 1), pcbnew.B_Cu, "+3V3")
+(gx, gy), (hx, hy) = pad("U1", "2"), pad("C1", "2")
+trk((gx, gy), (gx, gy + 2), pcbnew.F_Cu, "GND"); trk((gx, gy + 2), (hx, hy + 2), pcbnew.F_Cu, "GND"); trk((hx, hy + 2), (hx, hy), pcbnew.F_Cu, "GND")
+print(json.dumps({"span": abs(cx - ux), "gspan": abs(hx - gx)}))
+"""
+geo = pcbnew_run(os.path.join(d, "board.kicad_pcb"), COPPER)
+c = P("check", "--project", d, "--work", os.path.join(d, "wc"))
+f = (c.get("data") or {}).get("findings") or []
+vc = [x for x in f if x["check"] == "via-current"]
+want("check: 2 A through one 0.3 mm via at a time is two via-current findings, each at its via",
+     out(s1, "done") and out(s2, "done") and len(vc) == 2 and all(x["item"].startswith("+3V3 via ") and x.get("at") and "1 via(s)" in x["message"] and "2 such vias" in x["message"] for x in vc), (s1, s2, vc))
+loop = [x for x in f if x["check"] == "quality" and x["item"] == "decap-loop U1 +3V3"]
+# the supply side is 2 + span + 2 mm of track and two vias of 1.6 mm; the ground side 2 + span + 2 mm
+expect = (4 + geo["span"] + 3.2) + (4 + geo["gspan"])
+want("check: the decoupling loop is the copper there and back, over the project's limit", len(loop) == 1 and f"{expect:.2f}".rstrip("0").rstrip(".") in loop[0]["message"], (loop, expect))
+pcbnew_run(os.path.join(d, "board.kicad_pcb"), COPPER, "more")
+toml_sub(d, "max_decap_loop_mm = 10", "max_decap_loop_mm = 100")
+c = P("check", "--project", d, "--work", os.path.join(d, "wc2"))
+f = (c.get("data") or {}).get("findings") or []
+want("check: a second via beside each, and a limit the loop is within, clear both", not [x for x in f if x["check"] == "via-current" or x["item"].startswith("decap-loop")], [x for x in f if x["check"] in ("via-current", "quality")])
+
 if not M4P:
     skipped.append("erc")
 else:
     d = full("erc_clean")
     c = chk(d, os.path.join(d, "wc"))
     want("check: the paddle-keyer schematic has no ERC or circuit finding", not [x for x in c["unwaived"] if x.startswith(("erc", "circuit"))] and "erc-skipped" not in wcodes(c), c["unwaived"])
+    # a critical net's track is measured against the ground fill on the other side
+    d = full("unreferenced")
+    open(os.path.join(d, "pcb.toml"), "a").write('\n[nets.XIN]\nclass = "critical"\n')
+    q = P("quality", "--project", d)
+    u = (q.get("data") or {}).get("unreferenced") or []
+    want("quality: a critical net's outer track and its length with no ground beneath are reported", [x["net"] for x in u] == ["XIN"] and 0 < u[0]["track_mm"] and 0 <= u[0]["bare_mm"] <= u[0]["track_mm"], q)
     d = full("erc_open_pin")
     sch = os.path.join(d, "schematic", "paddle-keyer.kicad_sch")
     t = open(sch).read()

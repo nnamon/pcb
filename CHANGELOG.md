@@ -2,6 +2,17 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.7.0 (14 Nov 2026)
+
+The copper graph, the part of M5b that the reviews of the badge carrier did by hand (`DESIGN.md`, "The copper graph"). A new MINOR: a board that passed can fail on `via-current`, and `usb-cc` now reads more schematics, so a project moves its `[project] pcb` pin to `"0.7"` and runs `pcb check` again. Review 23 (`docs/reviews/23_0.6.1_0.7.0.md`) found a fault in 0.6.1 and one in this version's first `via-current`; both are fixed here.
+
+- `pcb check`, new finding `via-current`: a net with `current_a` whose pads are joined only through vias that together carry less than that current.
+- `[quality] max_decap_loop_mm`: the copper from an IC's supply pin through its nearest decoupling capacitor and back to its ground pin (`pcb check`, `quality` item `decap-loop U1 +3V3`).
+- `[quality] max_unreferenced_mm`: a critical net's outer-layer track with no ground fill on the next layer in. `pcb quality` lists it for every critical net (`data.unreferenced`).
+- `circuit` rule `usb-cc` reads pin names with the pin number after them (`CC1_A5`). A schematic made from JLCPCB's symbols names them so, and 0.6.x never judged its CC pins.
+- `pcb route --project`, a fault in 0.6.1: with a `critical` net in `pcb.toml`, a run that named no nets still took every net for one the caller named, so no zone kept its net: `--rip all` ripped the zones' vias and the router laid their nets as tracks. A zone's net is now kept unless the caller's own `--nets` or `--rip` names it.
+- `pcb route`: a net the caller names is judged as any other net though it has a zone (it stayed out of `still_open` and the gate allowed it any number of open pads). A zone's net with pads its fills do not join is reported: `plane_open`, warning `plane-open`.
+
 ## 0.6.1 (14 Nov 2026)
 
 Three faults in `pcb route` that the routing benchmark showed (`docs/bench/route-0.6.1.md`), and the benchmark itself.

@@ -20,6 +20,7 @@
 //! - **quality** (M5): a route quality measure over its limit in `[quality]` (`quality.rs`): a power net as a thin
 //!   trace, a detour, vias on a two-pad net, a route in slivers, a net of many widths, a top track over a bottom one,
 //!   a pour in small pieces.
+//! - **via-current** (0.7.0): a net with `current_a` whose pads are joined only through vias that carry less.
 //! - **silk-owner** (M5a): a footprint's reference, shown on the silkscreen, sits nearer another part's pads than
 //!   its own (GUIDELINES check 15). Designators drawn as artwork (`[[text]]`, a project's own legend) are not read.
 //! - **edge-setting** (M5a): an outline with arcs and a board copper-to-edge setting under the fab file's value for it.
@@ -86,6 +87,7 @@ fn fix_of(check: &str, item: &str) -> Option<String> {
         "testpoint" => "add the test point to the schematic, then pcb sync".into(),
         "erc" => "fix the schematic; pcb sync brings the change to the board".into(),
         "circuit" => "fix the schematic, then pcb sync; or waive it with the reason it does not apply".into(),
+        "via-current" => "pcb edit: add vias beside this one (`add_via` ops), each joined to the same copper on both layers".into(),
         "edge-setting" => "set board.design_settings.rules.min_copper_edge_clearance in the .kicad_pro, then pcb zone".into(),
         _ => return None,
     })
@@ -212,7 +214,7 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
     }
     let mut f: Vec<Finding> = vec![];
     let mut add = |check: &str, item: String, count: usize, message: String| {
-        let at = if check == "ring" && item.starts_with("via ") {
+        let at = if (check == "ring" && item.starts_with("via ")) || check == "via-current" {
             let w: Vec<&str> = item.split_whitespace().collect();
             (w.len() >= 3).then(|| w[w.len() - 2].parse::<f64>().ok().zip(w[w.len() - 1].parse::<f64>().ok())).flatten().map(|(x, y)| [x, y])
         } else if matches!(check, "drc" | "stale" | "spec" | "silk" | "fab" | "quality" | "erc" | "cpl-bottom" | "edge-setting" | "width-current") {
@@ -288,6 +290,14 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         for c in crate::circuit::run(&nl) {
             add("circuit", c.item, 1, c.message);
         }
+        // the copper of each IC's decoupling loop, against the project's limit (copper.rs)
+        if let Some(max) = p.quality.as_ref().and_then(|q| q.max_decap_loop_mm) {
+            for lp in crate::copper::decap_loops(&b, &crate::circuit::decoupling_pairs(&nl)) {
+                if lp.mm > max + 1e-6 {
+                    add("quality", format!("decap-loop {} {}", lp.ic, lp.net), 1, format!("{}'s nearest decoupling capacitor on {} is {}, a loop of {} mm of copper from its supply pin through the capacitor and back to its ground pin (limit {max} mm); move the capacitor to the pin, or give its ground pad a via beside it", lp.ic, lp.net, lp.cap, lp.mm));
+                }
+            }
+        }
     }
 
     // the board carries what pcb.toml says (review 16, 25 and 29)
@@ -330,6 +340,12 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
                 add("width-current", format!("{net} {layer}"), 1, format!("{net} carries {a} A; its narrowest track on {layer} is {w} mm, IPC-2221 asks {need:.3} mm at a 10 °C rise"));
             }
         }
+    }
+
+    // via-current: a net's pads joined only through vias that carry less than its current (copper.rs)
+    let amps: std::collections::BTreeMap<String, f64> = p.nets.iter().filter_map(|(n, r)| Some((n.clone(), r.current_a?))).collect();
+    for (item, msg) in crate::copper::via_current(&b, &amps) {
+        add("via-current", item, 1, msg);
     }
 
     // side, paste

@@ -5,6 +5,7 @@ mod board;
 mod check;
 mod circuit;
 mod contract;
+mod copper;
 mod diff;
 mod drawing;
 mod doctor;
@@ -764,6 +765,9 @@ fn run(cli: Cli) -> Result<Reply> {
             if let Some(e) = &rep.attempt_error {
                 warnings.push(contract::warn("second-run-failed", format!("the router's second run, without region keep-outs, gave no result; pcb kept the first run's result: {e}")));
             }
+            for n in &rep.plane_open {
+                warnings.push(contract::warn("plane-open", format!("{n} has a zone and pads its fills do not join; the router lays nothing for a zone's net. Run pcb zone (with a [[stitch]] for it), or name it in --nets to route it as tracks")));
+            }
             if !rep.dropped_nets.is_empty() {
                 warnings.push(contract::warn("route-partial", format!("the result was worse only where {} ran, so their new copper was dropped and the rest kept; route them again, or lay them with pcb edit", rep.dropped_nets.join(", "))));
             }
@@ -868,6 +872,7 @@ fn run(cli: Cli) -> Result<Reply> {
             pw.sort_by(|a, c| c.length_mm.total_cmp(&a.length_mm));
             list("long thin nets with 8 or more pads (a rail routed as a signal?):", pw.iter().map(|n| format!("{} {} mm, narrowest {} mm, {} pads{}", n.net, n.length_mm, n.narrowest_mm, n.pads, if n.power { "" } else { "; not marked power in pcb.toml" })).collect());
             list("top tracks directly over a bottom track of another net:", r.broadside.iter().filter(|x| x.mm >= 3.0).map(|x| format!("{} over {}: {} mm", x.top, x.bottom, x.mm)).collect());
+            list("critical nets' outer track with no ground fill beneath:", r.unreferenced.iter().map(|x| format!("{}: {} of {} mm", x.net, x.bare_mm, x.track_mm)).collect());
             list("pours:", r.pours.iter().map(|x| format!("{} {}: {} pieces, {} small, largest {} mm²", x.net, x.layer, x.pieces, x.small, x.largest_mm2)).collect());
             if l.project.quality.is_none() {
                 h += "no [quality] limits in pcb.toml: nothing here fails pcb check\n";

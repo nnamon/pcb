@@ -109,6 +109,8 @@ pub struct Report {
     pub drc_total_after: usize,
     /// Nets whose new copper was dropped because the result was worse only where they ran; the rest was kept.
     pub dropped_nets: Vec<String>,
+    /// Zones' nets with pads still not joined after the run: the router lays nothing for a zone's net.
+    pub plane_open: Vec<String>,
     /// Dangling segments removed: router copper left hanging, and kept tails orphaned by ripping.
     pub pruned_segments: usize,
     /// Requested nets that KiCad still reports as not fully connected after the route.
@@ -407,7 +409,10 @@ fn net_widths(b: &Board) -> BTreeMap<String, f64> {
 }
 
 /// Route each net at its own width: nets wider or narrower than the DSN's default rule move out of the default class
-/// into a class of their width (same vias and clearance). Freerouting would otherwise lay them at the default width.
+/// into a class of their width, with the same vias and no clearance of its own, so they take the board's clearances
+/// and its via-to-via spacing with them. Freerouting would otherwise lay them at the default width. Only the first
+/// class (KiCad's default) is read: a net in a KiCad net class with its own clearance stays there, and that class
+/// does not carry the via-to-via spacing.
 fn width_classes(dsn: &str, widths: &BTreeMap<String, f64>) -> Result<(String, BTreeMap<String, f64>)> {
     let root = sexpr::parse(dsn)?;
     let network = root.find("network").context("DSN has no network")?;
@@ -447,9 +452,7 @@ fn via_spacing(dsn: &str, board: &Path) -> Result<String> {
     let Some(structure) = root.find("structure") else { return Ok(dsn.to_string()) };
     let Some(rule) = structure.find("rule") else { return Ok(dsn.to_string()) };
     // padstacks named "Via[0-1]_600:300_um": size and drill in um
-    // the via with the least copper round its hole sets the spacing: two of them stand nearest hole to hole. Taking
-    // the widest ring left paddle-keyer v1.0.0's 0.6/0.3 mm vias 0.46 mm apart beside its 0.8/0.4 mm ones (routing
-    // benchmark, 14 Nov 2026)
+    // the via with the least copper round its hole sets the spacing: two of them stand nearest hole to hole
     let mut ring_um: f64 = f64::INFINITY;
     if let Some(lib) = root.find("library") {
         for ps in lib.find_all("padstack") {
@@ -597,13 +600,13 @@ pub(crate) fn point_seg_dist(p: (f64, f64), a: (f64, f64), c: (f64, f64)) -> f64
     (p.0 - a.0 - u * dx).hypot(p.1 - a.1 - u * dy)
 }
 
-fn pad_on_layer(p: &crate::board::Pad, layer: &str) -> bool {
+pub(crate) fn pad_on_layer(p: &crate::board::Pad, layer: &str) -> bool {
     p.layers.iter().any(|l| l == layer || l == "*.Cu" || (l == "F&B.Cu" && (layer == "F.Cu" || layer == "B.Cu")))
 }
 
 /// Point inside the pad's rotated bounding rectangle (1 um slack). Custom (polygon) pads use their bounding
 /// box, which can only make a dangling end look connected, never the reverse.
-fn in_pad(p: &crate::board::Pad, q: (f64, f64)) -> bool {
+pub(crate) fn in_pad(p: &crate::board::Pad, q: (f64, f64)) -> bool {
     let (lx, ly) = crate::board::rotate(q.0 - p.x, q.1 - p.y, -p.rot);
     lx.abs() <= p.w / 2.0 + 1e-3 && ly.abs() <= p.h / 2.0 + 1e-3
 }
@@ -775,6 +778,9 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             }
         }
     }
+    // the nets the caller names, before "every net" is spelt out below (review 23, 1: with a critical net in
+    // pcb.toml every net counted as named, so no zone kept its net)
+    let user_named: BTreeSet<String> = o.nets.iter().chain(match &o.rip { Rip::Nets(v) => v.iter(), _ => [].iter() }).cloned().collect();
     // a ripped net has to be routed again, so its new copper is always kept; ripping all keeps all
     let mut nets = o.nets.clone();
     let mut rip = o.rip.clone();
@@ -845,8 +851,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // A zone's net is the zone's unless the run names it: the router lays nothing for it (see `without_planes`),
     // so `--rip all` rips nothing of it either. Ripped, the via that feeds a pad from its pour would be gone with
     // nothing to lay it again. A net named in --nets or --rip is routed as tracks, zone or not.
-    let named = |n: &String| o.nets.contains(n) || matches!(&o.rip, Rip::Nets(v) if v.contains(n));
-    let zone_owned: BTreeSet<String> = b.zones.iter().filter(|_| !o.no_zones).map(|z| z.net.clone()).filter(|n| !n.is_empty() && !named(n)).collect();
+    let zone_owned: BTreeSet<String> = b.zones.iter().filter(|_| !o.no_zones).map(|z| z.net.clone()).filter(|n| !n.is_empty() && !user_named.contains(n)).collect();
     let r = o.region;
     let mut rep = Report { prewired: prewired.clone(), ..Report::default() };
     // Copper is ripped only well inside the region, so the ends left by ripping (where the router must
@@ -924,6 +929,8 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     // with their outlines gone (`without_planes`), the zones' nets are left alone as classes the router ignores
     let (dsn_text, plane_classes) = ignore_nets(&dsn_text, "pcb_plane", &|n| zone_owned.contains(n))?;
     ignored.extend(plane_classes);
+    // a class one pass made and the other emptied is gone from the DSN (review 23, 4)
+    ignored.retain(|name| dsn_text.contains(&format!("(class {name} ")));
     let dsn_text = via_spacing(&dsn_text, Path::new(board_path))?;
     let dsn_text = edge_inset(&dsn_text, Path::new(board_path))?;
     // Freerouting 1.9 hung on a dialog for any non-ASCII character; 2.5 runs headless, but the session must still
@@ -932,9 +939,8 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let (dsn_keep, routable) = keepouts(&dsn_text, &scratch_board, Some(r), &o.layers)?;
     let (dsn_open, _) = keepouts(&dsn_text, &scratch_board, None, &o.layers)?;
     std::fs::write(&dsn, &dsn_keep)?;
-    let mut plane_nets: Vec<String> = b.zones.iter().filter(|_| !o.no_zones).map(|z| z.net.clone()).filter(|n| !n.is_empty()).collect();
-    plane_nets.sort();
-    plane_nets.dedup();
+    // the zones' nets, less any the run names: a named net is routed and judged as any other (review 23, 2)
+    let plane_nets: Vec<String> = zone_owned.iter().cloned().collect();
 
     // 4-5. one attempt: Freerouting on the DSN, its copper read back and laid into the board text
     let attempt = |keep: bool, tag: &str| -> Result<Laid> {
@@ -1356,6 +1362,17 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             }
         }
     }
+    // a zone's net with pads its fills do not reach is nobody's unless it is said (review 23, 3)
+    for (k, v) in &g.after {
+        let (kind, nets) = kicad::key_parts(k);
+        if kind == "unconnected_items" && *v > 0 {
+            for net in nets.iter().filter(|n| plane_nets.iter().any(|p| p == *n)) {
+                if !rep.plane_open.contains(net) {
+                    rep.plane_open.push(net.clone());
+                }
+            }
+        }
+    }
     let dest = g.written;
     // vias this run laid on pasted SMD pads: the router may change layer at a pad it starts from (badge carrier 0.6.0)
     if let Ok(after) = Board::load(&dest) {
@@ -1477,6 +1494,23 @@ mod tests {
         assert!(out.contains("(component lib:cap__variant_6\n") && out.contains("(image lib:cap__variant_6\n"), "{out}");
         assert!(out.contains("(component \"lib:cap\"\n") && out.contains("(net \"A::B\""), "other names are left alone: {out}");
         assert_eq!(out.len(), dsn.len() + 2 * ("__variant_".len() - 2));
+    }
+
+    #[test]
+    fn plane_outlines_are_left_out() {
+        let dsn = "(pcb x\n  (structure\n    (layer F.Cu)\n    (plane GND (polygon B.Cu 0 0 0 10 0 10 10))\n    (plane \"+3V3\" (polygon F.Cu 0 0 0 5 0 5 5))\n    (rule (width 200))\n  )\n  (network\n    (net GND (pins C1-2))\n  )\n)\n";
+        let out = without_planes(dsn).unwrap();
+        assert!(!out.contains("(plane") && out.contains("(rule (width 200))") && out.contains("(net GND (pins C1-2))"), "{out}");
+        assert_eq!(without_planes("(pcb x (network))").unwrap(), "(pcb x (network))");
+    }
+
+    #[test]
+    fn a_width_class_has_no_clearance_of_its_own() {
+        let dsn = "(pcb x\n  (network\n    (class kicad_default \"\" A B\n      (circuit\n        (use_via V)\n      )\n      (rule\n        (width 150)\n        (clearance 150.1)\n      )\n    )\n  )\n)\n";
+        let (out, _) = width_classes(dsn, &BTreeMap::from([("A".to_string(), 0.3)])).unwrap();
+        let root = sexpr::parse(&out).unwrap();
+        let wide = root.find("network").unwrap().find_all("class").find(|c| c.arg(1) == Some("pcb_width_300")).unwrap();
+        assert!(wide.find("rule").unwrap().find("clearance").is_none() && wide.find("circuit").is_some(), "{out}");
     }
 
     #[test]

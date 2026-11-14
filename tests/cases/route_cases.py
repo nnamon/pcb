@@ -23,6 +23,9 @@ CASES = {
     # 0.6.1: the case above also holds that a zone's net is the zone's: with the zone's outline no longer given to
     # the router, --rip all must leave GND's via and track, or the oracle finds G1 cut from its pour (source: the
     # routing benchmark, 14 Nov 2026)
+    # 0.7.0 (review 23, 1): with a critical net in pcb.toml "every net" is spelt out, and 0.6.1 then took every
+    # net for one the caller named, so GND's via was ripped all the same
+    "zoned_rip_all_with_critical": ("gzone", ["--rip", "all", "--project", "PROJECT:crit_w"], "done", None, ("", "all")),
     "arc_refused": ("arc", ["--nets", "N"], "refused", "arcs", None),
     "non_ascii_refused": ("nonascii", ["--nets", "N"], "refused", "not ASCII", None),
     "unknown_net_refused": ("base", ["--nets", "NOPE"], "refused", "no net NOPE", None),
@@ -77,7 +80,8 @@ PREWIRE = {
 }
 # pcb.toml files for --project
 PROJECT_HEAD = 'schema = 1\n\n[project]\nname = "r"\nversion = "0.1.0"\nboard = "board.kicad_pcb"\nlayers = 2\nfab = "jlcpcb-2layer-1.6mm"\n\n[nets.N]\n'
-PROJECT = {"crit_n": PROJECT_HEAD + 'class = "critical"\n', "width_n": PROJECT_HEAD + "width_mm = 0.35\n", "amp_n": PROJECT_HEAD + "current_a = 1.0\n"}
+PROJECT = {"crit_n": PROJECT_HEAD + 'class = "critical"\n', "width_n": PROJECT_HEAD + "width_mm = 0.35\n", "amp_n": PROJECT_HEAD + "current_a = 1.0\n",
+           "crit_w": PROJECT_HEAD.replace("[nets.N]", "[nets.W]") + 'class = "critical"\n'}
 # custom rules files (.kicad_dru) written beside a case's board
 N_WIDE = '(version 1)\n(rule "N wide"\n  (condition "A.NetName == \'N\'")\n  (constraint track_width (min 0.5mm)))\n'
 DRU = {"custom_rules_kept": N_WIDE, "partial_kept": N_WIDE}
