@@ -2,6 +2,15 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.6.1 (14 Nov 2026)
+
+Three faults in `pcb route` that the routing benchmark showed (`docs/bench/route-0.6.1.md`), and the benchmark itself.
+
+- Footprints that share a library name but differ in their pads are no longer routed to each other's pad places. KiCad exports them as `NAME`, `NAME::1`, `NAME::2`, and Freerouting 2.5.0 read them as one footprint: on paddle-keyer v1.0.0, whose capacitors are one name in five sizes, it laid V3V3 across C3's GND pad. The gate rejected the result; now the result is right.
+- A net routed at its own width keeps the via-to-via spacing. Its width class carried a copy of the default clearance and so lost the spacing `pcb route` adds for the hole-to-hole rule: two vias came out 0.46 mm apart.
+- Zones no longer stand in the router's way. With a zone's outline in what Freerouting was given, some nets of other names found no path: paddle-keyer under its GND pours left two nets open in every run, and routes whole without the outlines. The zones' nets are now net classes the router ignores, so it lays nothing for them, and `--rip all` leaves their tracks and vias. A net named in `--nets` or `--rip` is routed as tracks, zone or not, as before; `--no-zones` still routes every zone's net as tracks.
+- `tests/bench/route_bench.py` routes a copy of each board with its tracks and vias taken out (it used `--rip all`, which leaves stitching vias in the router's way), takes `--runs N` and passes arguments on to `pcb route`.
+
 ## 0.6.0 (14 Nov 2026)
 
 Source: Copper (`claynicholson/copper-kicad-mcp`), read on 14 Nov 2026 and compared with `pcb` area by area (`DESIGN.md`, "Schematic checks, part search and routing additions"). A new MINOR: a board that passed `pcb check` can now fail on `erc` or `circuit`, so a project moves its `[project] pcb` pin to `"0.6"` and runs `pcb check` again.

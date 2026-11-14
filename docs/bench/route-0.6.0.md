@@ -1,5 +1,7 @@
 # Routing benchmark, pcb 0.6.0
 
+Superseded by `route-0.6.1.md`, which found this run's failures to be three faults in `pcb route` and corrects two of the explanations below.
+
 14 Nov 2026, `tests/bench/route_bench.py` in the `pcb-ci:8-local` image (Freerouting 2.5.0), one run per board, one Freerouting attempt each. Each board is a fixture's finished layout (built by `cargo xtask test`); the whole board is the region and all its unlocked copper is ripped and routed again.
 
 | Board | Outcome | Nets left open | Vias (the layout had) | Track mm (the layout had) |

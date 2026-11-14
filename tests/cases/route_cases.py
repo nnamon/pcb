@@ -20,6 +20,9 @@ CASES = {
     "rip_all_keeps_locked": ("base", ["--rip", "all", "--nets", "N"], "done", None, ("", "all")),
     "rip_one_net": ("base", ["--rip", "W", "--nets", "N"], "done", None, ("", "W,N")),
     "zoned_rip_all": ("gzone", ["--rip", "all"], "done", None, ("", "all")),
+    # 0.6.1: the case above also holds that a zone's net is the zone's: with the zone's outline no longer given to
+    # the router, --rip all must leave GND's via and track, or the oracle finds G1 cut from its pour (source: the
+    # routing benchmark, 14 Nov 2026)
     "arc_refused": ("arc", ["--nets", "N"], "refused", "arcs", None),
     "non_ascii_refused": ("nonascii", ["--nets", "N"], "refused", "not ASCII", None),
     "unknown_net_refused": ("base", ["--nets", "NOPE"], "refused", "no net NOPE", None),

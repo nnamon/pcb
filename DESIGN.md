@@ -403,7 +403,11 @@ A `pcb check` finding carries `at` (KiCad mm) when its item names a part, a pad 
 
 - **Widths from `pcb.toml`.** With `--project`, a net the run routes is laid at its `width_mm`; a net with `current_a` and no `width_mm` at the IPC-2221 width (10 °C rise, rounded up to 0.01 mm) for the layer that needs the widest among `--layers`, when that is wider than its existing tracks. With an inner layer among `--layers` that is the inner-layer width on every layer (1 A: 1.57 mm against 0.31 mm), so give such a net a `width_mm`. `--width` replaces either. Critical nets are not the router's, so they take none. Before, a power net was laid at the board's default width unless `--width` named it, and `width-current` then failed it.
 - **Partial keep.** When the gate finds the result worse, and the regressions name some but not all of the nets the run laid copper for, that copper is dropped and the rest gated again. If it passes it is written: `dropped_nets` lists the nets, and the run warns `route-partial`. A dropped net keeps its input copper, less any tail the run pruned as dangling. If it is still worse, the whole run goes to `.rejected` as before. A net that was ripped and then dropped would be left open where the input had it connected, which the gate counts as worse, so such a run is still rejected.
-- **`tests/bench/route_bench.py`** rips a routed board's copper, routes it again and reports the nets left open, the vias and the track length against the layout the board had. `docs/bench/` holds the runs.
+- **`tests/bench/route_bench.py`** takes the tracks and vias out of a copy of a routed board, routes it and reports the nets left open, the vias and the track length against the layout the board had. `docs/bench/` holds the runs.
+- **What Freerouting is given (0.6.1).** Three changes to the DSN, each from a fault the benchmark showed:
+  - Footprint variants (`NAME::1`) are renamed without `::`. Freerouting 2.5.0 read the variants of one name as one footprint and routed to another variant's pad places.
+  - A width class carries its width alone. With a clearance of its own it lost the board's via-to-via spacing.
+  - Zone outlines (`plane`) are left out, and the zones' nets go into classes the router ignores (`pcb_plane_<i>`). With the outlines in, some nets of other names found no path. A zone's net is the zone's: the router lays nothing for it and `--rip all` rips nothing of it. A net the run names in `--nets` or `--rip` is routed as tracks all the same.
 
 ## Planning drawings
 
