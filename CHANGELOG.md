@@ -2,6 +2,24 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.6.0 (14 Nov 2026)
+
+Source: Copper (`claynicholson/copper-kicad-mcp`), read on 14 Nov 2026 and compared with `pcb` area by area (`DESIGN.md`, "Schematic checks, part search and routing additions"). A new MINOR: a board that passed `pcb check` can now fail on `erc` or `circuit`, so a project moves its `[project] pcb` pin to `"0.6"` and runs `pcb check` again.
+
+- `pcb check`, new findings:
+  - `erc`: KiCad's ERC on the schematic. `pcb` ran none, so an open pin or two names on one net reached the board unseen.
+  - `circuit`: five rules of thumb over the netlist: `decoupling`, `usb-cc`, `i2c-pullup`, `crystal-load`, `led-resistor`. Each is waivable by its item.
+  - Each finding carries `at`, its place on the board, and `fix`, the command or change that clears it, where it has one.
+  - Warnings `erc-warnings` and `erc-skipped`.
+- `pcb search WORDS [--package P]`: JLCPCB's assembly parts for some words, Basic first, then Preferred, then Extended, with Basic parts in other packages when the asked package has none. Before, an agent found LCSC codes on its own.
+- `pcb parts`: a Preferred Extended part is no longer counted as a loading fee in `extended-parts`. The flag was fetched and not read. `data.parts[].preferred` is new.
+- `pcb route --project`:
+  - lays a net at its `[nets.<NET>] width_mm`, or at the IPC-2221 width for its `current_a` when that is wider than its tracks. `width_mm` was read by no command, and a power net came out at the default width unless `--width` named it.
+  - keeps the rest of a result that is worse only where some nets' new copper runs (`dropped_nets`, warning `route-partial`). Before, one badly laid net sent every net's copper to `.rejected`.
+- `tests/bench/route_bench.py`: a routing benchmark on the fixture boards; the first run is in `docs/bench/`.
+- Review 22 (`docs/reviews/22_0.6.0.md`) found no blocker; its seven should-fix findings are closed in this version.
+- Not taken from Copper: its own router (about 97 % of connections on its own benchmark, with up to 2.3 times a human layout's vias), schematic drawing and auto-layout, other fabs' profiles, checkpoints.
+
 ## 0.5.1 (13 Nov 2026)
 
 - `pcb parts --live` fetches every part of the schematic that has an LCSC code, with or without a board. Before a board existed it fetched only assembled parts, and `pcb sync` then refused the DNP, BOM-excluded and hand-fitted ones for want of their footprints, so a new project with such a part could not make its first board.

@@ -106,7 +106,9 @@
               "near",
               "edge",
               "quality",
-              "silk-owner"
+              "silk-owner",
+              "erc",
+              "circuit"
              ]
             },
             "item": {
@@ -124,6 +126,17 @@
               "string",
               "null"
              ]
+            },
+            "at": {
+             "type": "array",
+             "items": {
+              "type": "number"
+             },
+             "minItems": 2,
+             "maxItems": 2
+            },
+            "fix": {
+             "type": "string"
             }
            }
           }

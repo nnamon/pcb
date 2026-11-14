@@ -16,7 +16,8 @@
 //!   `[parts.<LCSC>]` entry (zero when there is none), and the pads must land within 0.05 mm (0.15 mm for
 //!   two-pad parts).
 //!
-//! Library type (Basic or Extended) is reported per part; Extended parts are listed in a warning.
+//! Library type (Basic or Extended) and JLCPCB's Preferred flag are reported per part; Extended parts that are not
+//! Preferred are listed in a warning, each a loading fee.
 
 use crate::board::Board;
 use crate::contract::{failed, refused, warn, Warning};
@@ -40,6 +41,8 @@ pub struct PartInfo {
     pub stock: Option<u64>,
     /// "Basic" or "Extended".
     pub library: Option<String>,
+    /// JLCPCB's preferredComponentFlag: an Extended part that carries no loading fee in Economic assembly.
+    pub preferred: bool,
     /// JLCPCB's componentProductType: 0 Economic and Standard, 2 Standard only.
     pub product_type: Option<i64>,
     pub fetched: Option<String>,
@@ -254,7 +257,7 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
     let today = crate::gates::today();
     let mut r = Report::default();
     let parts = assembled(l, b, work)?;
-    let mut extended = vec![];
+    let (mut extended, mut preferred) = (vec![], vec![]);
     let mut stale = vec![];
     for (code, refs) in &parts {
         let need = refs.len() as u64 * boards;
@@ -283,8 +286,11 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                     if info.product_type == Some(2) {
                         r.findings.push(Finding { item: format!("{code} economic"), message: format!("{code} ({}) is Standard assembly only (componentProductType 2)", refs.join(", ")) });
                     }
+                    info.preferred = part.get("preferredComponentFlag").and_then(|x| x.as_bool()).unwrap_or(false);
+                    // a Preferred Extended part carries no loading fee (GUIDELINES check 3); 0.5.1 and earlier
+                    // counted it as one
                     if info.library.as_deref() == Some("Extended") {
-                        extended.push(code.clone());
+                        if info.preferred { preferred.push(code.clone()) } else { extended.push(code.clone()) }
                     }
                 }
                 if let Some(f) = &info.fetched
@@ -346,7 +352,7 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
         r.parts.push(info);
     }
     if !extended.is_empty() {
-        r.warnings.push(warn("extended-parts", format!("{} Extended part(s), each a loading fee: {}", extended.len(), extended.join(", "))));
+        r.warnings.push(warn("extended-parts", format!("{} Extended part(s), each a loading fee: {}{}", extended.len(), extended.join(", "), if preferred.is_empty() { String::new() } else { format!(" ({} Preferred Extended part(s) carry none: {})", preferred.len(), preferred.join(", ")) })));
     }
     if !stale.is_empty() {
         r.warnings.push(warn("parts-stale", format!("JLCPCB data older than {STALE_DAYS} days for {}; run `pcb parts --live` before ordering", stale.join(", "))));
@@ -390,6 +396,113 @@ pub fn run(l: &Loaded, live: bool, work: &Path) -> Result<Report> {
     }
     let mut r = check(l, b.as_ref(), work)?;
     r.fetched = fetched;
+    Ok(r)
+}
+
+/// One part `pcb search` found.
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct Hit {
+    pub lcsc: String,
+    pub mpn: String,
+    pub brand: String,
+    pub package: String,
+    /// "Basic", "Preferred" (Extended with no loading fee) or "Extended".
+    pub library: String,
+    /// Economic assembly takes it (componentProductType 0).
+    pub economic: bool,
+    pub stock: u64,
+    /// USD each at the smallest quantity JLCPCB prices.
+    pub price_usd: Option<f64>,
+    pub description: String,
+}
+
+#[derive(Serialize, Default)]
+pub struct SearchReport {
+    pub query: String,
+    pub package: Option<String>,
+    /// Basic first, then Preferred, then Extended; within each, the largest stock first.
+    pub hits: Vec<Hit>,
+    /// With `--package` and no Basic or Preferred hit in it: Basic parts for the same words in other packages
+    /// (GUIDELINES check 3: try the next package size before an Extended part).
+    pub basic_in_other_packages: Vec<Hit>,
+    /// Parts left out because Economic assembly does not take them (`--standard` lists them).
+    pub standard_only_left_out: usize,
+}
+
+fn hit(c: &Value) -> Option<Hit> {
+    let s = |k: &str| c.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let lcsc = s("componentCode");
+    if lcsc.is_empty() {
+        return None;
+    }
+    let preferred = c.get("preferredComponentFlag").and_then(|x| x.as_bool()).unwrap_or(false);
+    let library = if s("componentLibraryType") == "base" { "Basic" } else if preferred { "Preferred" } else { "Extended" };
+    let price_usd = c.get("componentPrices").and_then(|x| x.as_array()).and_then(|v| v.iter().min_by_key(|t| t.get("startNumber").and_then(|n| n.as_i64()).unwrap_or(i64::MAX))).and_then(|t| t.get("productPrice")).and_then(|x| x.as_f64());
+    Some(Hit { lcsc, mpn: s("componentModelEn"), brand: s("componentBrandEn"), package: s("componentSpecificationEn"), library: library.into(), economic: c.get("componentProductType").and_then(|x| x.as_i64()) == Some(0), stock: c.get("stockCount").and_then(|x| x.as_u64()).unwrap_or(0), price_usd, description: s("describe") })
+}
+
+/// The hits of several replies as one ranked list: no part twice, none out of stock, Standard-only parts only when
+/// asked for; Basic, then Preferred, then Extended, the largest stock first. Returns the list and how many
+/// Standard-only parts were left out.
+pub fn rank(replies: &[Value], standard: bool, limit: usize) -> (Vec<Hit>, usize) {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut hits: Vec<Hit> = replies
+        .iter()
+        .flat_map(|r| r.pointer("/data/componentPageInfo/list").and_then(|l| l.as_array()).cloned().unwrap_or_default())
+        .filter_map(|c| hit(&c))
+        .filter(|h| h.stock > 0 && seen.insert(h.lcsc.clone()))
+        .collect();
+    let left_out = if standard { 0 } else { hits.iter().filter(|h| !h.economic).count() };
+    hits.retain(|h| standard || h.economic);
+    let order = |h: &Hit| match h.library.as_str() {
+        "Basic" => 0,
+        "Preferred" => 1,
+        _ => 2,
+    };
+    hits.sort_by(|a, b| order(a).cmp(&order(b)).then(b.stock.cmp(&a.stock)).then(a.lcsc.cmp(&b.lcsc)));
+    hits.truncate(limit);
+    (hits, left_out)
+}
+
+/// `pcb search`: JLCPCB's assembly parts for some words, the cheapest kind to assemble first. Three questions to
+/// JLCPCB's parts API (Basic parts, Preferred parts, all parts), each for the words and the package; nothing is
+/// cached. `PCB_SEARCH_REPLIES` names a folder of recorded replies (`base.json`, `preferred.json`, `all.json`,
+/// `base_any.json`) read in place of the network, for the tests.
+pub fn search(words: &str, package: Option<&str>, standard: bool, limit: usize) -> Result<SearchReport> {
+    if words.trim().is_empty() {
+        return Err(refused("usage", "pcb search needs words to search for, such as \"10k 0603\" or an MPN"));
+    }
+    let recorded = std::env::var("PCB_SEARCH_REPLIES").ok();
+    let ask = |name: &str, extra: &[(&str, Value)]| -> Result<Value> {
+        if let Some(d) = &recorded {
+            let p = Path::new(d).join(format!("{name}.json"));
+            let t = std::fs::read_to_string(&p).map_err(|e| failed("io", format!("{}: {e}", p.display())))?;
+            return serde_json::from_str(&t).map_err(|e| failed("network", format!("{}: {e}", p.display())));
+        }
+        let mut body = serde_json::json!({ "keyword": words, "currentPage": 1, "pageSize": 25, "searchSource": "search" });
+        for (k, v) in extra {
+            body[*k] = v.clone();
+        }
+        let r = curl(&["-H", "Content-Type: application/json", "-d", &body.to_string(), JLC_URL])?;
+        let v: Value = serde_json::from_slice(&r).map_err(|e| failed("network", format!("JLCPCB reply for {words:?}: {e}")))?;
+        // a reply with no page of results is an error from JLCPCB, not an empty search (review 22, 13)
+        if v.pointer("/data/componentPageInfo").is_none_or(|p| p.is_null()) {
+            return Err(failed("network", format!("JLCPCB's parts API gave no result page for {words:?}: {}", v.get("message").and_then(|m| m.as_str()).unwrap_or("no message"))));
+        }
+        Ok(v)
+    };
+    let spec: Vec<(&str, Value)> = package.map(|p| vec![("componentSpecification", Value::from(p))]).unwrap_or_default();
+    let with = |more: (&'static str, Value)| {
+        let mut v = spec.clone();
+        v.push(more);
+        v
+    };
+    let replies = [ask("base", &with(("componentLibraryType", "base".into())))?, ask("preferred", &with(("preferredComponentFlag", true.into())))?, ask("all", &spec)?];
+    let (hits, standard_only_left_out) = rank(&replies, standard, limit);
+    let mut r = SearchReport { query: words.to_string(), package: package.map(String::from), hits, standard_only_left_out, ..Default::default() };
+    if package.is_some() && !r.hits.iter().any(|h| h.library != "Extended") {
+        r.basic_in_other_packages = rank(&[ask("base_any", &[("componentLibraryType", "base".into())])?], false, limit).0;
+    }
     Ok(r)
 }
 
@@ -453,5 +566,24 @@ mod tests {
     fn day_counts() {
         assert_eq!(days_between("2026-10-01", "2026-11-04"), Some(34));
         assert_eq!(days_between("2024-02-28", "2024-03-01"), Some(2));
+    }
+
+    #[test]
+    fn search_ranks_basic_then_preferred_then_stock() {
+        let part = |code: &str, lib: &str, pref: bool, kind: i64, stock: u64| serde_json::json!({"componentCode": code, "componentLibraryType": lib, "preferredComponentFlag": pref, "componentProductType": kind, "stockCount": stock, "componentSpecificationEn": "0603", "componentPrices": [{"startNumber": 100, "productPrice": 0.001}, {"startNumber": 1, "productPrice": 0.002}]});
+        let reply = |v: Vec<Value>| serde_json::json!({"data": {"componentPageInfo": {"list": v}}});
+        let replies = [
+            reply(vec![part("C2", "base", false, 0, 10)]),
+            reply(vec![part("C3", "expand", true, 0, 5)]),
+            reply(vec![part("C4", "expand", false, 0, 900), part("C2", "base", false, 0, 10), part("C5", "expand", false, 2, 9999), part("C6", "expand", false, 0, 0), part("C7", "expand", false, 0, 950)]),
+        ];
+        let (hits, left) = rank(&replies, false, 10);
+        assert_eq!(hits.iter().map(|h| (h.lcsc.as_str(), h.library.as_str())).collect::<Vec<_>>(), [("C2", "Basic"), ("C3", "Preferred"), ("C7", "Extended"), ("C4", "Extended")]);
+        assert_eq!(left, 1, "the Standard-only part is counted, the one out of stock is not");
+        assert_eq!(hits[0].price_usd, Some(0.002));
+        let (all, left) = rank(&replies, true, 2);
+        assert_eq!((all.len(), left), (2, 0));
+        // an empty reply (JLCPCB sends list: null) is no hits
+        assert!(rank(&[serde_json::json!({"data": {"componentPageInfo": {"list": null}}})], false, 10).0.is_empty());
     }
 }

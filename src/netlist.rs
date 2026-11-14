@@ -51,6 +51,8 @@ pub struct Node {
     pub pin: String,
     /// The symbol's pin name, as KiCad gives it (`pinfunction`), empty when the pin has none.
     pub function: String,
+    /// The symbol's electrical type (`pintype`: `power_in`, `passive` and so on), empty when the netlist gives none.
+    pub pintype: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -151,7 +153,7 @@ pub fn parse(text: &str) -> Result<Netlist> {
     let mut nets = vec![];
     if let Some(ns) = root.find("nets") {
         for n in ns.find_all("net") {
-            let nodes = n.find_all("node").map(|x| Node { reference: s(x, "ref"), pin: s(x, "pin"), function: s(x, "pinfunction") }).collect();
+            let nodes = n.find_all("node").map(|x| Node { reference: s(x, "ref"), pin: s(x, "pin"), function: s(x, "pinfunction"), pintype: s(x, "pintype") }).collect();
             nets.push(Net { name: s(n, "name"), nodes });
         }
     }

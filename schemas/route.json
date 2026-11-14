@@ -50,7 +50,8 @@
      "freerouting_log",
      "prewired",
      "attempts",
-     "attempt_used"
+     "attempt_used",
+     "dropped_nets"
     ],
     "properties": {
      "regressions": {
@@ -151,6 +152,12 @@
       }
      },
      "vias_in_pads": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dropped_nets": {
       "type": "array",
       "items": {
        "type": "string"

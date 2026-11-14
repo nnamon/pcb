@@ -3,6 +3,7 @@
 mod art;
 mod board;
 mod check;
+mod circuit;
 mod contract;
 mod diff;
 mod drawing;
@@ -10,6 +11,7 @@ mod doctor;
 mod easyeda;
 mod fab;
 mod edit;
+mod erc;
 mod footprint;
 mod freerouting;
 mod gates;
@@ -117,8 +119,9 @@ enum Cmd {
         /// Number of Freerouting runs. pcb keeps the run with the fewest open nets; two runs give different results
         #[arg(long, default_value_t = 1)]
         attempts: u32,
-        /// pcb.toml, or the folder holding it: its `[nets.X] class = "critical"` nets are never ripped or laid by
-        /// the router, and all must be fully connected before it runs.
+        /// pcb.toml, or the folder holding it. Its `[nets.X] class = "critical"` nets are never ripped or laid by
+        /// the router, and all must be fully connected before it runs. Its other nets are routed at their
+        /// `width_mm`, or at the IPC-2221 width for their `current_a` where that is wider than their tracks.
         #[arg(long)]
         project: Option<String>,
         /// Route in two stages: the first copper layer of --layers alone, then every layer for the nets still open.
@@ -315,6 +318,22 @@ enum Cmd {
         #[arg(long, default_value = "pcb_work/status")]
         work: String,
     },
+    /// Find a part in JLCPCB's assembly library: Basic parts first, then Preferred, then Extended, the largest
+    /// stock first. Parts Economic assembly does not take are left out. Asks JLCPCB's parts API; nothing is cached
+    Search {
+        /// What to search for: a value and a description ("100nF X7R"), or a manufacturer's part number
+        words: Vec<String>,
+        /// Only this package, as JLCPCB names it (0603, SOT-23-5). With no Basic or Preferred part in it, Basic
+        /// parts in other packages are listed too
+        #[arg(long)]
+        package: Option<String>,
+        /// List parts that need Standard assembly too
+        #[arg(long)]
+        standard: bool,
+        /// The most parts to list
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
     /// JLCPCB's data for every assembled part (stock, Basic or Extended, Economic), and each part's footprint
     /// matched to JLCPCB's for the CPL's rotation and centre offsets. Reads the parts/ cache beside pcb.toml;
     /// --live fetches it first
@@ -459,6 +478,7 @@ fn command_name(c: &Cmd) -> &'static str {
         Cmd::Check { .. } => "check",
         Cmd::Gate { .. } => "gate",
         Cmd::Parts { .. } => "parts",
+        Cmd::Search { .. } => "search",
         Cmd::Sync { .. } => "sync",
         Cmd::Place { .. } => "place",
         Cmd::Drawing { .. } => "drawing",
@@ -604,6 +624,11 @@ fn run(cli: Cli) -> Result<Reply> {
                     return Err(contract::refused("usage", format!("--width names {n} twice")));
                 }
             }
+            let proj_nets = match &proj {
+                Some(pp) => project::load(&project::locate(pp))?.project.nets,
+                None => Default::default(),
+            };
+            let layer_list: Vec<String> = layers.split(',').filter(|s| !s.is_empty()).map(String::from).collect();
             let o = route::Opts {
                 region: parse_region(&region)?,
                 nets: nets.split(',').filter(|s| !s.is_empty()).map(String::from).collect(),
@@ -622,10 +647,18 @@ fn run(cli: Cli) -> Result<Reply> {
                 prewire,
                 no_zones,
                 attempts,
-                critical: match &proj {
-                    Some(pp) => project::load(&project::locate(pp))?.project.nets.iter().filter(|(_, r)| r.class.as_deref() == Some("critical")).map(|(n, _)| n.clone()).collect(),
-                    None => vec![],
-                },
+                critical: proj_nets.iter().filter(|(_, r)| r.class.as_deref() == Some("critical")).map(|(n, _)| n.clone()).collect(),
+                rule_widths: proj_nets.iter().filter(|(_, r)| r.class.as_deref() != Some("critical")).filter_map(|(n, r)| Some((n.clone(), r.width_mm?))).collect(),
+                // the widest the current asks on a layer the router may use, to 0.01 mm up
+                current_widths: proj_nets
+                    .iter()
+                    .filter(|(_, r)| r.class.as_deref() != Some("critical") && r.width_mm.is_none())
+                    .filter_map(|(n, r)| {
+                        let a = r.current_a?;
+                        let w = layer_list.iter().map(|l| check::ipc_width_mm(a, l == "F.Cu" || l == "B.Cu")).fold(0.0, f64::max);
+                        Some((n.clone(), (w * 100.0).ceil() / 100.0))
+                    })
+                    .collect(),
             };
             let out = out.unwrap_or_else(|| board.clone());
             if max_cross_mm.is_some() && !staged {
@@ -648,8 +681,15 @@ fn run(cli: Cli) -> Result<Reply> {
                 } else {
                     // stage 2: every layer, for the nets the first left open; the prewire is in the board already
                     let before = board::Board::load(&out)?;
-                    let second = route::Opts { nets: r1.still_open.clone(), rip: route::Rip::None, prewire: vec![], work: o.work.join("stage2"), ..o.clone() };
+                    // a --width for a net stage 1 closed is not stage 2's (review 22, 7: it was refused as a net the run does not route)
+                    let second = route::Opts { nets: r1.still_open.clone(), rip: route::Rip::None, prewire: vec![], work: o.work.join("stage2"), widths: o.widths.iter().filter(|(n, _)| r1.still_open.contains(n)).map(|(n, w)| (n.clone(), *w)).collect(), ..o.clone() };
                     let mut r2 = route::run(&out, &out, &second)?;
+                    // nets stage 1 dropped stay dropped in the report
+                    for n in &r1.dropped_nets {
+                        if !r2.dropped_nets.contains(n) {
+                            r2.dropped_nets.push(n.clone());
+                        }
+                    }
                     stage_note = format!("\nstaged: {} alone left {:?} open; stage 2 on {:?} added {} segments and {} vias", o.layers[0], r1.still_open, o.layers, r2.added_segments, r2.added_vias);
                     // what stage 2 laid off the first layer, per net: the longest connected run
                     if r2.regressions.is_empty() {
@@ -723,6 +763,9 @@ fn run(cli: Cli) -> Result<Reply> {
             warnings.extend(rep.declared_pinless_nets.iter().map(|n| contract::warn("pinless-net", format!("{n} has copper but no pads; declared to Freerouting"))));
             if let Some(e) = &rep.attempt_error {
                 warnings.push(contract::warn("second-run-failed", format!("the router's second run, without region keep-outs, gave no result; pcb kept the first run's result: {e}")));
+            }
+            if !rep.dropped_nets.is_empty() {
+                warnings.push(contract::warn("route-partial", format!("the result was worse only where {} ran, so their new copper was dropped and the rest kept; route them again, or lay them with pcb edit", rep.dropped_nets.join(", "))));
             }
             if !rep.plane_split.is_empty() {
                 warnings.push(contract::warn("plane-split", format!("the new tracks cut zone fills apart ({}); run pcb zone again, with stitching vias for the net", rep.plane_split.join("; "))));
@@ -875,6 +918,26 @@ fn run(cli: Cli) -> Result<Reply> {
             }
             let h = format!("wrote {} files to {out}: scale {}, {} table rows, {} ordinates, {} overlapping texts", r.files.len(), r.scale, r.table_rows, r.ordinates.len(), r.overlaps);
             Ok(Reply { outcome: if r.overlaps == 0 { Outcome::Done } else { Outcome::Rejected }, error: None, written: Some(out.clone()), warnings, human: h, data: serde_json::to_value(&r)? })
+        }
+        Cmd::Search { words, package, standard, limit } => {
+            let r = parts::search(&words.join(" "), package.as_deref(), standard, limit)?;
+            let mut h = format!("{} part(s) for {:?}{}", r.hits.len(), r.query, r.package.as_ref().map(|p| format!(" in {p}")).unwrap_or_default());
+            let row = |q: &parts::Hit| format!("\n  {:<10} {:<9} {:<12} stock {:>9} {:>8}  {} {}", q.lcsc, q.library, q.package, q.stock, q.price_usd.map(|p| format!("${p}")).unwrap_or_default(), q.mpn, if q.economic { "" } else { "(Standard assembly only)" });
+            for q in &r.hits {
+                h += &row(q);
+            }
+            let mut warnings = vec![];
+            if !r.basic_in_other_packages.is_empty() {
+                h += "\nBasic parts in other packages:";
+                for q in &r.basic_in_other_packages {
+                    h += &row(q);
+                }
+                warnings.push(contract::warn("basic-other-package", format!("no Basic or Preferred part for {:?} in {}; Basic parts exist in {}", r.query, r.package.as_deref().unwrap_or(""), r.basic_in_other_packages.iter().map(|q| format!("{} ({})", q.package, q.lcsc)).collect::<Vec<_>>().join(", "))));
+            }
+            if r.standard_only_left_out > 0 {
+                warnings.push(contract::warn("standard-only", format!("{} part(s) that need Standard assembly are left out; --standard lists them", r.standard_only_left_out)));
+            }
+            Ok(Reply { outcome: Outcome::Done, error: None, written: None, warnings, human: h, data: serde_json::to_value(&r)? })
         }
         Cmd::Parts { project: proj, live, work } => {
             let l = project::load(&project::locate(&proj))?;

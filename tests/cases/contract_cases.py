@@ -94,6 +94,28 @@ for name, args in runs.items():
         problems.append(f"message does not say {words[name]!r}: {d.get('error', {}).get('message', '')[:200]}")
     results[name] = "; ".join(problems) or "ok"
 
+# pcb search (0.6.0), on replies recorded from JLCPCB's parts API on 14 Nov 2026 for "100nF" in 0201: no Basic part in
+# 0201, every 0201 part Standard assembly only, Basic parts in 0402 to 1206
+env = dict(os.environ, PCB_SEARCH_REPLIES=os.path.join(here, "..", "lib", "search"))
+r = subprocess.run([os.path.abspath(pcb), "--json", "search", "100nF", "--package", "0201"], capture_output=True, text=True, env=env)
+d, problems = check(r.stdout, r.returncode)
+if not problems:
+    codes = sorted(w["code"] for w in d["warnings"])
+    others = [(h["lcsc"], h["library"], h["package"]) for h in d["data"]["basic_in_other_packages"]]
+    if d["data"]["hits"] or codes != ["basic-other-package", "standard-only"] or others[:2] != [("C14663", "Basic", "0603"), ("C1525", "Basic", "0402")] or d["data"]["standard_only_left_out"] != 12:
+        problems.append(f"hits {d['data']['hits']}, warnings {codes}, other packages {others}")
+results["search_basic_in_another_package"] = "; ".join(problems) or "ok"
+r = subprocess.run([os.path.abspath(pcb), "--json", "search", "100nF", "--package", "0201", "--standard", "--limit", "3"], capture_output=True, text=True, env=env)
+d, problems = check(r.stdout, r.returncode)
+if not problems and ([h["economic"] for h in d["data"]["hits"]] != [False] * 3 or [h["stock"] for h in d["data"]["hits"]] != sorted((h["stock"] for h in d["data"]["hits"]), reverse=True)):
+    problems.append(f"--standard lists the Standard-only parts, the largest stock first: {d['data']['hits']}")
+results["search_standard"] = "; ".join(problems) or "ok"
+r = subprocess.run([os.path.abspath(pcb), "--json", "search"], capture_output=True, text=True, env=env)
+d, problems = check(r.stdout, r.returncode)
+if not problems and d["outcome"] != "refused":
+    problems.append(f"outcome {d['outcome']}, want refused")
+results["search_no_words_refused"] = "; ".join(problems) or "ok"
+
 # sensitivity: broken outputs the checker must flag
 good = {"schema": "pcb/info/1", "ok": True, "outcome": "done", "warnings": [], "data": {}}
 broken = {

@@ -98,6 +98,11 @@ pub fn drc_counts(work: &Path, board: &str, name: &str) -> Result<BTreeMap<Strin
 
 /// As `drc_counts`; with `keep_fills`, KiCad judges the fills the file holds instead of filling again.
 pub fn drc_counts_with(work: &Path, board: &str, name: &str, keep_fills: bool) -> Result<BTreeMap<String, usize>> {
+    Ok(drc_with(work, board, name, keep_fills)?.into_iter().map(|(k, (n, _))| (k, n)).collect())
+}
+
+/// As `drc_counts_with`, with the place (board mm) of each key's first violation.
+pub fn drc_with(work: &Path, board: &str, name: &str, keep_fills: bool) -> Result<BTreeMap<String, (usize, Option<[f64; 2]>)>> {
     let rpt = work.join(format!("{name}.json"));
     let _ = std::fs::remove_file(&rpt);
     let mut args = vec!["drc", board, rpt.to_str().unwrap()];
@@ -112,7 +117,7 @@ pub fn drc_counts_with(work: &Path, board: &str, name: &str, keep_fills: bool) -
             format!("KiCad listed only the first violations of some types ({}), so its DRC of {board} is incomplete and cannot be compared. Fix the design rules or the board until every type is under KiCad's limit. If the type is one the design means to break, such as silk_over_copper under artwork, set its severity to \"ignore\" in the board's .kicad_pro (board.design_settings.rule_severities); the fab's own kinds stay errors in pcb check whatever it says", list.join(", ")),
         ));
     }
-    let mut m = BTreeMap::new();
+    let mut m: BTreeMap<String, (usize, Option<[f64; 2]>)> = BTreeMap::new();
     for it in h["items"].as_array().context("DRC gave no items")? {
         let mut nets: Vec<String> = it["at"]
             .as_array()
@@ -122,7 +127,9 @@ pub fn drc_counts_with(work: &Path, board: &str, name: &str, keep_fills: bool) -
             .collect();
         nets.sort();
         nets.dedup();
-        *m.entry(drc_key(it["type"].as_str().unwrap_or("?"), &nets)).or_default() += 1;
+        let at = it["at"].as_array().and_then(|a| a.first()).and_then(|a| Some([a["x"].as_f64()?, a["y"].as_f64()?]));
+        let e = m.entry(drc_key(it["type"].as_str().unwrap_or("?"), &nets)).or_insert((0, at));
+        e.0 += 1;
     }
     Ok(m)
 }

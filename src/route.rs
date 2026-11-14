@@ -44,6 +44,11 @@ pub struct Opts {
     pub layers: Vec<String>,
     /// Widths that replace a net's usual width for this run (`--width NET=MM`): an owner's choice for one link.
     pub widths: BTreeMap<String, f64>,
+    /// Widths from pcb.toml (`--project`), for the nets this run routes: `width_mm` as it is, and for a net with
+    /// `current_a` and no `width_mm` the IPC-2221 width on the layers the router may use, where that is wider than
+    /// the net's existing tracks. `--width` replaces either.
+    pub rule_widths: BTreeMap<String, f64>,
+    pub current_widths: BTreeMap<String, f64>,
     /// Explicit edits applied before routing (`--prewire`): parts moved or copper placed where the router cannot
     /// find room. Their copper is kept as it is; the whole change is gated once against the input.
     pub prewire: Vec<crate::edit::Op>,
@@ -102,6 +107,8 @@ pub struct Report {
     pub regressions: Vec<String>,
     pub drc_total_before: usize,
     pub drc_total_after: usize,
+    /// Nets whose new copper was dropped because the result was worse only where they ran; the rest was kept.
+    pub dropped_nets: Vec<String>,
     /// Dangling segments removed: router copper left hanging, and kept tails orphaned by ripping.
     pub pruned_segments: usize,
     /// Requested nets that KiCad still reports as not fully connected after the route.
@@ -846,6 +853,14 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let (dsn_text, declared) = declare_wiring_nets(&std::fs::read_to_string(&dsn)?)?;
     rep.declared_pinless_nets = declared;
     let mut want_widths = net_widths(&b);
+    let routed = |net: &String| b.nets.contains(net) && (o.nets.is_empty() || o.nets.contains(net));
+    for (net, w) in o.current_widths.iter().filter(|(net, _)| routed(net)) {
+        let e = want_widths.entry(net.clone()).or_insert(*w);
+        *e = e.max(*w);
+    }
+    for (net, w) in o.rule_widths.iter().filter(|(net, _)| routed(net)) {
+        want_widths.insert(net.clone(), *w);
+    }
     for (net, w) in &o.widths {
         if !b.nets.contains(net) {
             return Err(refused("unknown-net", format!("--width names no net {net} on this board")));
@@ -1230,14 +1245,47 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             g = finish(&text_of(&laids[0].1)?)?;
         }
     }
+    // A result that is worse only where some nets' new copper is: that copper is dropped and the rest is gated
+    // once more, so one net the router laid badly does not cost every net it laid well. The dropped nets stay as
+    // the input had them and are reported (`dropped_nets`, and `still_open` if they were open). Source: the
+    // comparison with Copper (14 Nov 2026), whose router removes only the connections DRC blames.
+    let net_of = |line: &str| -> Option<String> {
+        let (_, r) = line.rsplit_once("(net ")?;
+        sexpr::parse(&format!("(net {}", r.trim_end().strip_suffix(')')?)).ok()?.arg(1).map(String::from)
+    };
+    let mut dropped: Vec<String> = vec![];
+    let (mut drop_segments, mut drop_vias) = (0, 0);
+    if !g.regressions.is_empty() {
+        let l = &laids[chosen].1;
+        let laid: std::collections::BTreeSet<String> = l.new_text.lines().filter_map(net_of).collect();
+        let blamed: std::collections::BTreeSet<String> = g.regressions.iter().flat_map(|w| kicad::key_parts(w.rsplit_once(": ").map(|x| x.0).unwrap_or(w)).1).filter(|n| laid.contains(n)).collect();
+        if !blamed.is_empty() && blamed.len() < laid.len() {
+            let kept: String = l.new_text.lines().filter(|line| !net_of(line).is_some_and(|n| blamed.contains(&n))).map(|line| format!("{line}\n")).collect();
+            let mut e = l.edits.clone();
+            e.insert(root.span.1 - 1, kept);
+            let rejected = g.written.clone();
+            let g2 = finish(&e.apply(src)?)?;
+            if g2.regressions.is_empty() {
+                crate::gate::remove_result(&rejected);
+                g = g2;
+                drop_segments = l.new_text.lines().filter(|line| line.trim_start().starts_with("(segment") && net_of(line).is_some_and(|n| blamed.contains(&n))).count();
+                drop_vias = l.new_text.lines().filter(|line| line.trim_start().starts_with("(via") && net_of(line).is_some_and(|n| blamed.contains(&n))).count();
+                dropped = blamed.into_iter().collect();
+            } else {
+                // still worse: report, and leave in .rejected, the whole run
+                g = finish(&text_of(l)?)?;
+            }
+        }
+    }
     let lr = &laids[chosen].1.rep;
     rep.attempt_used = laids[chosen].0;
-    rep.added_segments = lr.added_segments;
-    rep.added_vias = lr.added_vias;
+    rep.added_segments = lr.added_segments - drop_segments;
+    rep.added_vias = lr.added_vias - drop_vias;
     rep.dropped_outside = lr.dropped_outside;
     rep.dropped_other_nets = lr.dropped_other_nets;
     rep.dropped_duplicates = lr.dropped_duplicates;
-    rep.nets_routed = lr.nets_routed.clone();
+    rep.nets_routed = lr.nets_routed.iter().filter(|(n, _)| !dropped.contains(n)).map(|(n, c)| (n.clone(), *c)).collect();
+    rep.dropped_nets = dropped;
     rep.pruned_segments = lr.pruned_segments;
     rep.split_tracks = lr.split_tracks;
     rep.joins_outside_region = lr.joins_outside_region;

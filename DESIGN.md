@@ -113,7 +113,7 @@ Built by the end of M3: `roundtrip`, `info`, `import-tscircuit`, `render`, `doct
 | `[gates.<name>]` | `version`, `passed` (YYYY-MM-DD), `inputs` (`sha256:...`) | written by `pcb gate pass` (M3), never by hand |
 | `[decisions.<key>]` | `text`, `date`: owner decisions an agent must not ask about again | `status` |
 | `[assembly]` | `machine_sides` (`top`, `bottom`), `hand_fit` (references), `pin_in_paste`, `designators` (board reference to BOM and CPL designator), `boards` (boards ordered assembled, default 5), `service` (`economic`, the default, or `standard`) | M3 check, release; `boards` by parts; `service` by check's `spec` |
-| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm`, `fill_priority`, `class` (`critical`, `power`, `signal`) | M2 zones, M3 width and rating checks; `class` by route `--project` and `[quality]`. `width_mm` is recorded (`pcb init` writes it) and read by no command: the router takes a net's most common track width, or `--width` |
+| `[nets.<NET>]` | `current_a`, `width_mm`, `fill_grow_mm`, `fill_priority`, `class` (`critical`, `power`, `signal`) | M2 zones, M3 width and rating checks; `class` by route `--project` and `[quality]`. `pcb route --project` lays a net at its `width_mm` (`pcb init` writes it), or at the IPC-2221 width for its `current_a` when that is wider than its tracks; `--width` replaces either (0.6.0) |
 | `[[keepout]]` | `name`, `rect` (x0, y0, x1, y1 mm), `grow_mm`, `layers` (`"all"` or a list), `forbid` (`pour`, `track`, `via`, `footprint`) | M2 |
 | `[[zone]]` | `net`, `layers`, `clearance_mm`, `thermal = { gap_mm, spoke_mm }`, `priority`, `min_width_mm`, `connect` (`thermal`, `solid`, `none`) | M2 |
 | `[fill]` | `layers`, `clearance_mm`, `min_width_mm`, `priority`: the power fills grown from each `fill_grow_mm` net | M2 |
@@ -369,6 +369,41 @@ Fixture `paddle_keyer_m4`: a KiCad schematic of paddle-keyer (made once by `make
 - the read-back mutations on the released Gerbers, and `verify_drawing.py` (sheet sizes, the table against the CPL, ordinates against the board, no text overlapping).
 
 The routing is Freerouting's and differs from v1.0.0's; pcb check finds the DRC items v1.0.0 went out with (courtyards and silkscreen against JLCPCB's footprints), waived in the fixture with v1.0.0's reasons.
+
+## Schematic checks, part search and routing additions (0.6.0)
+
+Source: a comparison with Copper (`claynicholson/copper-kicad-mcp`, read 14 Nov 2026), an MCP server that draws schematics, picks parts and routes with its own router. `pcb` was stricter about the board and the files ordered; Copper checked the circuit, searched for parts and gave each finding a place and a fix. 0.6.0 takes those.
+
+### `erc` and `circuit` in `pcb check`
+
+- **`erc`** (`src/erc.rs`): `kicad-cli sch erc --format json --severity-all` on `[project] netlist` when it is a `.kicad_sch`. Each type KiCad reports as an error is one finding, counted, with the first violation's text and place on the sheet. `multiple_net_names` and `same_local_global_label` are warnings in KiCad and findings here: each means a net is not the net its name says. Other warnings go in one `erc-warnings` warning. The library-link types (`lib_symbol_issues`, `lib_symbol_mismatch`, `footprint_link_issues`, `footprint_filter`) are left out, since `pcb` takes footprints from JLCPCB's data and not from KiCad's library tables: the paddle-keyer schematic has 112 of them and no other violation. A `.net` netlist has no schematic to check (`erc-skipped`).
+- **`circuit`** (`src/circuit.rs`): five rules of thumb over the netlist. Each finding's item is `<rule> <reference> [<net or pin>]`, and a `[[waiver]]` takes it.
+
+| Rule | Finding | How it decides |
+| --- | --- | --- |
+| `decoupling` | A supply pin of a part with reference `U` or `IC` on a net with no capacitor to ground | Supply pin: pin type `power_in`, or with no type (or `passive`) a pin named `VDD`, `VCC`, `VBAT`, `AVDD` and the like (not `VIN`: `VIN+` is an amplifier's input). Capacitor: reference `C` with another pin on a ground net, on the supply net or one ferrite bead, inductor or link of 1 Ω or less away |
+| `usb-cc` | A receptacle's CC pin with no pull-down and no controller; CC1 and CC2 on one net; a pull-down that is not 5.1 kΩ ± 6 % | Receptacle: a connector with pins named `CC1` and `CC2`. Reference prefixes `J`, `P`, `CN`, `USB`, `USBC` and `X` are read. A part with reference `U`, `IC` or `Q` on the net or behind one series resistor, or a resistor to a supply, counts as a controller or a source |
+| `i2c-pullup` | An I2C net with no resistor to a supply | I2C: a pin of an IC or connector named only `SDA`, `SCL` (with a digit or an `I2C`/`TWI` prefix), or a net with `SDA` or `SCL` as a word of its name (`SENSOR_SDA`). A pin named `GPIO4/I2C0_SDA/UART1_TX` does not make a net I2C |
+| `crystal-load` | A terminal of a part with reference `Y` with no capacitor to ground | Only a part with exactly two signal nets and no supply or output pin, so an oscillator is not judged |
+| `led-resistor` | A two-pin LED with no resistor on a terminal net that is neither ground nor a supply | LED: reference `LED`, or `D` with `LED` as a word of its value or starting a word of its footprint. A resistor elsewhere on ground or the rail does not count |
+
+  Net names are read by their last path part, so a sheet named `pwr` makes no net a supply. Ground is a net with `GND` in a word of its name, or `VSS`, `0V`, `EARTH`. A supply is a net with a `power_in` or `power_out` pin, or named like `+3V3`, `5V`, `VBUS`, `VCC`; a name with `EN`, `DET`, `SENSE`, `PG` or `FAULT` as a word is a signal. A part marked DNP counts as present. With no `[project] netlist`, neither `erc` nor `circuit` runs. The rules check that a part is present, not its value (but for the CC pull-down) or its distance: `[[near]]` holds the distance. The paddle-keyer schematic gives no finding.
+
+### A finding's place and fix
+
+A `pcb check` finding carries `at` (KiCad mm) when its item names a part, a pad (`REF.PAD`) or a via, or when it is a DRC kind (the place of its first violation, from the run with the board's own rules when both runs report the kind), and `fix` where one command or kind of change clears it (`pcb zone` for a stale zone, a `[[paste]]` rule for `paste-unassembled`). An agent renders the place with `pcb render --region` without reading the message for coordinates. A `width-current` finding has no place: its item is a net.
+
+### `pcb search`
+
+`pcb search WORDS [--package P] [--standard] [--limit N]` asks JLCPCB's parts API (the endpoint `pcb parts --live` uses) three times: Basic parts (`componentLibraryType: "base"`), Preferred parts (`preferredComponentFlag: true`) and all parts, each for the words and, with `--package`, `componentSpecification`. The hits are merged: none twice, none out of stock, Basic then Preferred then Extended, the largest stock first. Parts with `componentProductType` other than 0 are left out and counted (`standard-only`) unless `--standard`. With `--package` and no Basic or Preferred hit, a fourth question lists Basic parts in any package (`basic-other-package`): GUIDELINES check 3 asks for the next package size before an Extended part. Nothing is cached; the part enters the project's cache when it is in the schematic and `pcb parts --live` runs. The tests read recorded replies (`PCB_SEARCH_REPLIES`, `tests/lib/search/`).
+
+`pcb parts` reads `preferredComponentFlag` too: a Preferred Extended part carries no loading fee and is no longer counted in `extended-parts` (0.5.1 counted it).
+
+### Routing additions
+
+- **Widths from `pcb.toml`.** With `--project`, a net the run routes is laid at its `width_mm`; a net with `current_a` and no `width_mm` at the IPC-2221 width (10 °C rise, rounded up to 0.01 mm) for the layer that needs the widest among `--layers`, when that is wider than its existing tracks. With an inner layer among `--layers` that is the inner-layer width on every layer (1 A: 1.57 mm against 0.31 mm), so give such a net a `width_mm`. `--width` replaces either. Critical nets are not the router's, so they take none. Before, a power net was laid at the board's default width unless `--width` named it, and `width-current` then failed it.
+- **Partial keep.** When the gate finds the result worse, and the regressions name some but not all of the nets the run laid copper for, that copper is dropped and the rest gated again. If it passes it is written: `dropped_nets` lists the nets, and the run warns `route-partial`. A dropped net keeps its input copper, less any tail the run pruned as dangling. If it is still worse, the whole run goes to `.rejected` as before. A net that was ripped and then dropped would be left open where the input had it connected, which the gate counts as worse, so such a run is still rejected.
+- **`tests/bench/route_bench.py`** rips a routed board's copper, routes it again and reports the nets left open, the vias and the track length against the layout the board had. `docs/bench/` holds the runs.
 
 ## Planning drawings
 

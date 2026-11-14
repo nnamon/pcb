@@ -34,10 +34,10 @@ These steps take a new board from an empty folder to an order. `pcb route`, `pcb
 7. Lay the nets a router shouldn't choose for you (a crystal, a USB pair, a switching regulator's loop) by hand with `pcb edit`, and mark them `class = "critical"`. Then route the rest:
 
    ```
-   pcb route hw/my-board.kicad_pcb --region 20,20,80,60 --project . --width V3V3=0.4
+   pcb route hw/my-board.kicad_pcb --region 20,20,80,60 --project .
    ```
 
-   The region is in KiCad's coordinates (see "Coordinates"); `20,20,80,60` is the whole of a 60 × 40 mm board made by `pcb sync`. Everything outside the region stays locked. Each net is laid at its most common existing track width, or the board's default for a net with no tracks yet, so give power nets their width with `--width`. With `--project`, `pcb route` refuses to run while a critical net is incomplete and never rips or lays one. Without `-o` it overwrites the board. Measure the result with `pcb quality`.
+   The region is in KiCad's coordinates (see "Coordinates"); `20,20,80,60` is the whole of a 60 × 40 mm board made by `pcb sync`. Everything outside the region stays locked. With `--project`, a net is laid at its `[nets.<NET>] width_mm`, or at the IPC-2221 width for its `current_a` when that is wider than its existing tracks (the widest any allowed layer needs: 1 A is 0.31 mm on an outer layer and 1.57 mm once an inner layer is allowed, so give such a net a `width_mm`). Any other net is laid at its most common existing track width, or the board's default for a net with no tracks yet. `--width NET=MM` replaces all of these for one run. Also with `--project`, `pcb route` refuses to run while a critical net is incomplete and never rips or lays one. When the result makes DRC worse only where some nets' new copper runs, that copper is dropped, the rest is written, and the dropped nets are named (warning `route-partial`). Without `-o` it overwrites the board. Measure the result with `pcb quality`.
 8. Run `pcb zone` again, since new tracks can cut a plane apart (warning `plane-split`), then `pcb paste` and `pcb art`. `pcb paste` applies paste rules: windows on exposed pads, pin-in-paste on plated pads, no paste on test pads. `pcb art` draws artwork from GeoJSON and text in a TrueType font, including the version on the silkscreen. Run each again after changing its settings, or `pcb check` reports it stale.
 9. Run `pcb check --fab`. It runs every check below, then plots the Gerbers and reads them back. Fix each finding, or add a `[[waiver]]` with the reason, until nothing unwaived is left.
 10. Run `pcb gate pass layout`. It runs `pcb check` without the read-back and, when nothing is unwaived, records the gate in `pcb.toml` with a hash of the board, its `.kicad_pro` and `.kicad_dru`, `pcb.toml` less its `[gates]`, the schematic, and the `[[art]]` files and `[[text]]` fonts. Changing any of them, or `[project] version`, makes the gate stale (`pcb gate status`). This records only that `pcb check` passed; it isn't Gate 2, the independent review in GUIDELINES check 18.
@@ -165,6 +165,8 @@ It refuses the whole list, writing nothing, when no item is where an operation p
 
 ### Parts
 
+`pcb search WORDS [--package P]` finds a part before it is in the schematic. It asks JLCPCB's parts API and lists Basic parts first, then Preferred, then Extended, the largest stock first, each with its LCSC code, package, stock and price. Parts that need Standard assembly are left out unless `--standard` is given. With `--package` and no Basic or Preferred part in that package, it also lists Basic parts in other packages (warning `basic-other-package`): GUIDELINES asks for the next package size before an Extended part. For example, `pcb search 100nF --package 0201` finds no part Economic assembly takes and lists the Basic 0402 and 0603 ones.
+
 `pcb parts` judges every assembled part from the cache:
 
 | Code | Condition |
@@ -173,7 +175,7 @@ It refuses the whole list, writing nothing, when no item is where an operation p
 | finding `stock` | Stock under `[assembly] boards` (default 5) times the part's count |
 | finding `economic` | JLCPCB marks the part Standard-only (`componentProductType` 2), whatever `[assembly] service` says |
 | warning `buy-ahead` | Stock under 20 times the need, or under 1000 |
-| warning `extended-parts` | Extended parts, each a loading fee, listed |
+| warning `extended-parts` | Extended parts that aren't Preferred, each a loading fee, listed. Preferred Extended parts carry no fee; they are named after the others, and `data.parts[].preferred` marks each |
 | warning `parts-stale` | Data over 30 days old |
 
 It also matches each assembled top-side part's pads to JLCPCB's footprint over the four quarter turns. JLCPCB's pads must land within 0.05 mm of the board's (0.15 mm for two-pad parts). The turn and origin that fit must equal `[parts.<LCSC>] rotation_offset_deg` and `cpl_offset_mm` (zero when absent), the origin within 0.02 mm (0.1 mm for two-pad parts). A two-pad part matched by shape alone, or a pad pattern that fits at more than one turn, is a finding, because the CPL could place it reversed. Numbering a footprint's pads as JLCPCB's footprint does avoids both.
@@ -184,6 +186,8 @@ KiCad's DRC runs twice, once with the board's own rules and once with the fab's 
 
 | Finding | Condition |
 | --- | --- |
+| `erc` | KiCad's ERC on the schematic, when `[project] netlist` is a `.kicad_sch`: each violation type KiCad calls an error, plus `multiple_net_names` and `same_local_global_label`, where a net isn't the net its name says. Other ERC warnings are listed in one warning (`erc-warnings`); library-link warnings are ignored. With a `.net` file it warns `erc-skipped` |
+| `circuit` | Five rules of thumb over the netlist, each waivable where it doesn't apply: an IC supply pin with no capacitor to ground (`decoupling U1 +3V3`); a USB-C receptacle's CC1 or CC2 with no 5.1 kΩ to ground and no controller, the two tied together, or a pull-down of another value (`usb-cc J1 CC1`); an I2C net with no pull-up to a supply (`i2c-pullup U1 SDA`); a crystal terminal with no load capacitor to ground (`crystal-load Y1`); a two-pin LED with no resistor in series on either terminal (`led-resistor D1`). They read reference prefixes (`U`, `C`, `R`, `Y`, `D`, `J`), pin names and net names, so a part named otherwise isn't judged |
 | `stale` | `pcb zone`, `paste` or `art` hasn't run since its settings or files changed; what `paste` or `art` made is missing from the board; or the board differs from the schematic (parts, values, LCSC codes, flags, every pad's net) or from a `[[place]]` |
 | `width-current` | The narrowest track per layer on a net with `current_a`, against IPC-2221 at a 10 °C rise (outer 1 oz, inner 0.5 oz) |
 | `near` | A part farther than `max_mm` from its pin, pad centre to the nearest pad centre on the same net |
@@ -200,6 +204,8 @@ KiCad's DRC runs twice, once with the board's own rules and once with the fab's 
 | `edge-setting` | An outline with arcs and zones, and a copper-to-edge setting under 0.35 mm: pours fill to chords of a curve and read back under 0.3 mm |
 | `testpoint` | A `[bringup] test_points` reference missing, or with no exposed outer pad |
 | `quality` | A route measure over its `[quality]` limit: power track width, detour against the shortest path, vias on a two-pad net, segments per 10 mm, distinct widths, length run over another net's track on the other side, small pieces of a pour |
+
+In the JSON output a finding carries `at`, its place on the board in KiCad's coordinates, when it names one part, pad or via or is a DRC kind (the first violation's place), and `fix`, the command or change that clears it, where one does.
 
 `pcb check` exits 1 while any finding is unwaived. A `[[waiver]]` gives the check, the item exactly as `pcb check` prints it, the most it may count, and the reason. Copy the item from the output: a DRC item is the kind followed by the nets involved, such as `courtyards_overlap <no net>`. Waived findings are listed with their reasons, and a waiver that matches nothing is warned. `stale` and `spec` take no waiver; for `spec`, set `[assembly] service = "standard"` if you mean to pay for Standard assembly.
 
@@ -218,13 +224,14 @@ KiCad's DRC judges the board's objects and the read-back judges the plotted shap
 
 ### Coverage of GUIDELINES
 
-`pcb` runs all or part of GUIDELINES checks 2, 3, 6 to 16, 19 and 21:
+`pcb` runs all or part of GUIDELINES checks 2 to 4 and 6 to 16, 19 and 21:
 
 | GUIDELINES check | What `pcb` does |
 | --- | --- |
 | 2 Pins against the datasheet | Pin names against JLCPCB's symbol or your datasheet names; it can't read a datasheet or a connector drawing |
 | 3 JLCPCB eligibility and stock | `pcb parts` |
-| 6 Design for test | `testpoint`; it runs no ERC |
+| 4 Ratings and margins | `circuit`: decoupling, USB-C CC resistors, I2C pull-ups, crystal load capacitors and LED resistors are present; apart from the 5.1 kΩ CC pull-down, not their values, ratings or margins |
+| 6 Design for test | `testpoint`, and `erc`: KiCad's ERC |
 | 7 DRC | `pcb check`, twice |
 | 8 Netlist match | `stale`: the board against the schematic |
 | 9 Current, thermal and signal | `width-current`, `near`, `quality`; not via counts, ground returns or return paths |
@@ -236,7 +243,7 @@ KiCad's DRC judges the board's objects and the read-back judges the plotted shap
 | 19 Release record | `CHECKSUMS.txt` |
 | 21 On order day | `pcb parts --live` re-checks stock |
 
-Checks 1, 4, 5, 17, 18 and 20 are a person's or a reviewer's: the requirements trace, ratings and margins, protection, firmware, the independent Gate 1 and Gate 2 reviews and the package check.
+Checks 1, 5, 17, 18 and 20, and the rest of check 4, are a person's or a reviewer's: the requirements trace, ratings and margins, protection, firmware, the independent Gate 1 and Gate 2 reviews and the package check.
 
 ### Known limits
 
@@ -245,6 +252,7 @@ Checks 1, 4, 5, 17, 18 and 20 are a person's or a reviewer's: the requirements t
 - Paste drawn as footprint graphics is not seen, so such a part passes `paste` and `paste-unassembled` and is printed anyway. Draw paste as pads.
 - Nothing traces current through the copper yet, so the via count on a power path, whether a capacitor's ground reaches its IC's ground pin, and whether a signal has ground beneath it are a reviewer's. A copper graph, planned for the next milestone, would cover them.
 - `pcb parts` doesn't match bottom-side footprints.
+- The `circuit` rules check that a part is there, not that it is the right value or near enough: a 100 pF capacitor passes `decoupling`, and its distance from the pin is a `[[near]]` rule's. `pcb search` and `pcb parts --live` use JLCPCB's parts API, which is not a published interface and can change.
 - `pcb route` refuses a board with track arcs (`arc-unsupported`): replace them with segments, or route that net by hand. Paste windows work on the top side only, and `add_via` makes through vias only.
 - `pcb new --layers 6` is accepted, but `pcb sync` can't make the board. JLCPCB publishes no Economic assembly colour or finish rules for 6 layers, so on that process `pcb check` warns `spec-unchecked` and doesn't judge the spec. There is no 8-layer fab file.
 - Fab files exist for JLCPCB's 1.6 mm 2-, 4- and 6-layer processes. Another process is a new file in `fab/` and a line in `src/fab.rs`.
@@ -256,7 +264,7 @@ Checks 1, 4, 5, 17, 18 and 20 are a person's or a reviewer's: the requirements t
 | Stage | Commands |
 | --- | --- |
 | Start | `pcb new`; `pcb init BOARD`; `pcb doctor` |
-| Parts and circuit | `pcb parts`, `pcb sync` |
+| Parts and circuit | `pcb search WORDS`, `pcb parts`, `pcb sync` |
 | Layout | `pcb place`, `pcb route BOARD`, `pcb edit BOARD`, `pcb zone`, `pcb paste`, `pcb art` |
 | Checks | `pcb check [--fab]`, `pcb quality` |
 | Gates and release | `pcb gate status`, `pcb gate pass NAME`, `pcb release -o DIR`, `pcb compare-gerbers A B` (two Gerber sets compared shape by shape; every difference needs an explanation or the outcome is rejected) |

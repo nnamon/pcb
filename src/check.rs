@@ -45,6 +45,50 @@ pub struct Finding {
     pub message: String,
     /// The waiver's reason, when one covers it.
     pub waived: Option<String>,
+    /// Where on the board it is (KiCad mm, y down), when the finding has one place: the part, pad or via it names,
+    /// or the first of a DRC kind's violations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
+    /// The command or change that clears it, when there is one to name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+/// The place a finding's item names: `REF.PAD`, then `REF`, among the item's words.
+fn place_of(b: &Board, item: &str) -> Option<[f64; 2]> {
+    for w in item.split_whitespace() {
+        if let Some((r, n)) = w.split_once('.')
+            && let Some(q) = b.footprint_by_ref(r).and_then(|f| f.pads.iter().find(|q| q.number == n)) {
+            return Some([q.x, q.y]);
+        }
+        if let Some(f) = b.footprint_by_ref(w) {
+            return Some([f.x, f.y]);
+        }
+    }
+    None
+}
+
+/// What clears a finding of a check, where one command or one kind of change does.
+fn fix_of(check: &str, item: &str) -> Option<String> {
+    let first = item.split_whitespace().next().unwrap_or("");
+    Some(match check {
+        "stale" => format!("pcb {item}"),
+        "via-in-pad" => "pcb edit: move the via off the pad (a `move_via` op), or waive it for a plugged via or a thermal pad".into(),
+        "paste-unassembled" => format!("add a [[paste]] with pad = \"{first}.<PAD>\" and no_paste = true for each pasted pad to pcb.toml, then pcb paste"),
+        "paste" => "pcb paste, after a [[paste]] rule for the part if its footprint has no paste".into(),
+        "near" => format!("move {first} in [[place]], then pcb place"),
+        "edge" if first != "outline" => format!("move {first} in [[place]], then pcb place"),
+        "width-current" => {
+            // the item is the net, then the layer
+            let net = item.rsplit_once(' ').map(|x| x.0).unwrap_or(item);
+            format!("pcb route --project . --rip {net:?} --nets {net:?} lays it again at the width its current_a asks; or pcb edit with a `set_width` op")
+        }
+        "testpoint" => "add the test point to the schematic, then pcb sync".into(),
+        "erc" => "fix the schematic; pcb sync brings the change to the board".into(),
+        "circuit" => "fix the schematic, then pcb sync; or waive it with the reason it does not apply".into(),
+        "edge-setting" => "set board.design_settings.rules.min_copper_edge_clearance in the .kicad_pro, then pcb zone".into(),
+        _ => return None,
+    })
 }
 
 #[derive(Serialize, Default)]
@@ -167,14 +211,25 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         return Err(refused("config", format!("project.fab {} is for {fab_layers} copper layers; pcb.toml says {} and the board has {}", p.project.fab, p.project.layers, b.copper_layers.len())));
     }
     let mut f: Vec<Finding> = vec![];
-    let mut add = |check: &str, item: String, count: usize, message: String| f.push(Finding { check: check.into(), item, count, message, waived: None });
+    let mut add = |check: &str, item: String, count: usize, message: String| {
+        let at = if check == "ring" && item.starts_with("via ") {
+            let w: Vec<&str> = item.split_whitespace().collect();
+            (w.len() >= 3).then(|| w[w.len() - 2].parse::<f64>().ok().zip(w[w.len() - 1].parse::<f64>().ok())).flatten().map(|(x, y)| [x, y])
+        } else if matches!(check, "drc" | "stale" | "spec" | "silk" | "fab" | "quality" | "erc" | "cpl-bottom" | "edge-setting" | "width-current") {
+            None
+        } else {
+            place_of(&b, &item)
+        };
+        let fix = fix_of(check, &item);
+        f.push(Finding { check: check.into(), item, count, message, waived: None, at, fix })
+    };
 
     // drc, twice on copies: once with the board's own rules, once with the fab's in their place. KiCad lets the
     // later of two custom rules win, so one rules file holding both would drop the board's stricter ones (review
     // 16, 28). Each kind and its nets counts the larger of its two counts. In both copies the kinds the fab rules
     // report under, and unconnected and shorted items, are errors whatever the project file says (review 15, 5;
     // review 16, 37)
-    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut counts: std::collections::BTreeMap<String, (usize, Option<[f64; 2]>)> = std::collections::BTreeMap::new();
     for (tag, fab_only) in [("own", false), ("fab", true)] {
         let copy = work.join(format!("check_{tag}.kicad_pcb"));
         // a reused --work folder holds the last run's copy and the files KiCad wrote beside it (.kicad_prl, the
@@ -204,13 +259,35 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
             }
             std::fs::write(&pro, serde_json::to_string_pretty(&v)?)?;
         }
-        for (k, c) in crate::kicad::drc_counts_with(work, &copy.to_string_lossy(), &format!("check_drc_{tag}"), fab_only && !b.zones.is_empty())? {
-            let e = counts.entry(k).or_default();
-            *e = (*e).max(c);
+        for (k, (c, at)) in crate::kicad::drc_with(work, &copy.to_string_lossy(), &format!("check_drc_{tag}"), fab_only && !b.zones.is_empty())? {
+            let e = counts.entry(k).or_insert((0, at));
+            e.0 = e.0.max(c);
         }
     }
-    for (k, c) in &counts {
+    let drc_at: std::collections::BTreeMap<String, [f64; 2]> = counts.iter().filter_map(|(k, (_, at))| Some((k.clone(), (*at)?))).collect();
+    for (k, (c, _)) in &counts {
         add("drc", k.clone(), *c, format!("KiCad DRC: {k} ({c})"));
+    }
+
+    // the schematic: KiCad's ERC, and the circuit checks over the netlist (GUIDELINES checks 4 to 6)
+    let mut erc_warning = None;
+    if let Some(rel) = p.project.netlist.as_ref() {
+        let path = l.path.parent().unwrap_or(Path::new(".")).join(rel);
+        if path.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
+            let e = crate::erc::run(&path, &work.join("erc"))?;
+            for (kind, (n, first)) in &e.errors {
+                add("erc", kind.clone(), *n, format!("KiCad ERC: {kind} ({n}); the first: {first}"));
+            }
+            if !e.warnings.is_empty() {
+                erc_warning = Some(crate::contract::warn("erc-warnings", format!("KiCad ERC warnings on {rel}: {}", e.warnings.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", "))));
+            }
+        } else {
+            erc_warning = Some(crate::contract::warn("erc-skipped", format!("[project] netlist is {rel}, not a .kicad_sch, so KiCad's ERC did not run; run it where the schematic is drawn")));
+        }
+        let nl = crate::netlist::load(&path, &work.join("netlist"))?;
+        for c in crate::circuit::run(&nl) {
+            add("circuit", c.item, 1, c.message);
+        }
     }
 
     // the board carries what pcb.toml says (review 16, 25 and 29)
@@ -526,6 +603,7 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
 
     // the files as the fab will read them (M5a): what pcb release would refuse, found before a release is made
     let mut warnings = vec![];
+    warnings.extend(erc_warning);
     if p.finish.is_none() {
         warnings.push(crate::contract::warn("finish-unset", "pcb.toml has no [finish]: the board spec is not held against the assembly service (spec)".to_string()));
     } else if !fab.economic_rules_read && asm.and_then(|a| a.service.as_deref()).unwrap_or("economic") == "economic" {
@@ -545,6 +623,10 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
             add("fab", item.clone(), list.len(), format!("{item}: {}{}", list.iter().take(3).cloned().collect::<Vec<_>>().join("; "), if list.len() > 3 { format!("; and {} more", list.len() - 3) } else { String::new() }));
         }
         warnings.extend(rb.warnings);
+    }
+
+    for x in f.iter_mut().filter(|x| x.check == "drc") {
+        x.at = drc_at.get(&x.item).copied();
     }
 
     // waivers

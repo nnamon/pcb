@@ -53,7 +53,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `parts-cache` | refused | `pcb sync` or `pcb parts`: a part's EasyEDA data is missing from `parts/` or does not convert | Run `pcb parts --live` |
 | `network` | failed | `pcb parts --live` could not reach EasyEDA or JLCPCB, or the reply was not a part | Retry; check the LCSC code |
 | `pdf` | failed | `pcb drawing` could not write the PDF | Report it with the SVG sheets |
-| `kicad-cli` | failed | kicad-cli could not export the schematic's netlist | Open the schematic in KiCad 10 and check it loads |
+| `kicad-cli` | failed | kicad-cli could not export the schematic's netlist or run its ERC | Open the schematic in KiCad 10 and check it loads |
 | `sync` | failed | `pcb sync`'s own read-back of the board it wrote found a pad on the wrong net (pcb's bug) | Report it with the board and netlist |
 
 ## Warnings
@@ -89,7 +89,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `unplaced` | sync, place | Parts added beside the board, or with no `[[place]]` and off the board |
 | `ripped` | place | Tracks and vias on a moved part's pads were removed; route those nets again |
 | `buy-ahead` | parts, release | A part's JLCPCB stock is under 20 times the order's need, or under 1000 |
-| `extended-parts` | parts, release | Extended parts, each a loading fee, listed |
+| `extended-parts` | parts, release | Extended parts that are not Preferred, each a loading fee, listed; Preferred Extended parts carry none and are named after them |
 | `parts-stale` | parts, release | JLCPCB data in the cache is over 30 days old |
 | `parts-unchecked` | release | The project has no `parts/` cache, so JLCPCB's data was not checked |
 | `labels-omitted` | drawing | Designators that would overlap other text were left off a view; the table lists them |
@@ -98,3 +98,8 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `silk-filled` | import-tscircuit | A filled silkscreen rectangle was carried over as its outline only |
 | `economic-unknown` | parts, release | JLCPCB's record for a part gives no `componentProductType`, so Economic eligibility is unknown |
 | `spec-unchecked` | check | The fab file has no Economic assembly rules read for its layer count (the 6-layer process), so the board spec was not judged. Check JLCPCB's assembly capabilities page before ordering |
+| `route-partial` | route | The result was worse only where some nets' new copper ran; that copper was dropped (`data.dropped_nets`) and the rest written. Route those nets again, or lay them with `pcb edit` |
+| `erc-warnings` | check | KiCad's ERC reported warnings on the schematic (counted by type); they do not fail the check |
+| `erc-skipped` | check | `[project] netlist` is a `.net` file, so KiCad's ERC did not run. Run ERC where the schematic is drawn |
+| `basic-other-package` | search | No Basic or Preferred part for the words in the asked package; Basic parts in other packages are listed |
+| `standard-only` | search | Parts that need Standard assembly were left out; `--standard` lists them |

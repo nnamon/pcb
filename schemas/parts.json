@@ -40,7 +40,8 @@
        "required": [
         "lcsc",
         "refs",
-        "need"
+        "need",
+        "preferred"
        ],
        "properties": {
         "lcsc": {
@@ -85,6 +86,9 @@
           "string",
           "null"
          ]
+        },
+        "preferred": {
+         "type": "boolean"
         }
        }
       }

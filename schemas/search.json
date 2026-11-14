@@ -1,0 +1,162 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:pcb:search",
+ "title": "pcb search output",
+ "allOf": [
+  {
+   "$ref": "urn:pcb:envelope"
+  }
+ ],
+ "properties": {
+  "schema": {
+   "const": "pcb/search/1"
+  }
+ },
+ "if": {
+  "properties": {
+   "outcome": {
+    "const": "done"
+   }
+  }
+ },
+ "then": {
+  "properties": {
+   "data": {
+    "type": "object",
+    "required": [
+     "query",
+     "package",
+     "hits",
+     "basic_in_other_packages",
+     "standard_only_left_out"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "query": {
+      "type": "string"
+     },
+     "package": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "hits": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "lcsc",
+        "mpn",
+        "brand",
+        "package",
+        "library",
+        "economic",
+        "stock",
+        "price_usd",
+        "description"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "lcsc": {
+         "type": "string"
+        },
+        "mpn": {
+         "type": "string"
+        },
+        "brand": {
+         "type": "string"
+        },
+        "package": {
+         "type": "string"
+        },
+        "library": {
+         "enum": [
+          "Basic",
+          "Preferred",
+          "Extended"
+         ]
+        },
+        "economic": {
+         "type": "boolean"
+        },
+        "stock": {
+         "type": "integer",
+         "minimum": 1
+        },
+        "price_usd": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "description": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "basic_in_other_packages": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "lcsc",
+        "mpn",
+        "brand",
+        "package",
+        "library",
+        "economic",
+        "stock",
+        "price_usd",
+        "description"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "lcsc": {
+         "type": "string"
+        },
+        "mpn": {
+         "type": "string"
+        },
+        "brand": {
+         "type": "string"
+        },
+        "package": {
+         "type": "string"
+        },
+        "library": {
+         "enum": [
+          "Basic",
+          "Preferred",
+          "Extended"
+         ]
+        },
+        "economic": {
+         "type": "boolean"
+        },
+        "stock": {
+         "type": "integer",
+         "minimum": 1
+        },
+        "price_usd": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "description": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "standard_only_left_out": {
+      "type": "integer",
+      "minimum": 0
+     }
+    }
+   }
+  }
+ }
+}

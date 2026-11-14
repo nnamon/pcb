@@ -1,0 +1,537 @@
+{
+ "data": {
+  "componentPageInfo": {
+   "total": 375,
+   "list": [
+    {
+     "componentCode": "C49062",
+     "componentModelEn": "CL03A104KP3NNNC",
+     "componentBrandEn": "Samsung Electro-Mechanics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 156694,
+     "preferredComponentFlag": false,
+     "describe": "100nF 10V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0044
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0034
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 9999,
+       "productPrice": 0.0029
+      },
+      {
+       "startNumber": 10000,
+       "endNumber": 49999,
+       "productPrice": 0.0023
+      },
+      {
+       "startNumber": 50000,
+       "endNumber": 99999,
+       "productPrice": 0.0021
+      },
+      {
+       "startNumber": 100000,
+       "endNumber": -1,
+       "productPrice": 0.0019
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C66938",
+     "componentModelEn": "0201X104K6R3NT",
+     "componentBrandEn": "FH (Guangdong Fenghua Advanced Tech)",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 1771351,
+     "preferredComponentFlag": false,
+     "describe": "100nF 6.3V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0034
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0026
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 14999,
+       "productPrice": 0.0022
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 44999,
+       "productPrice": 0.002
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": 45199,
+       "productPrice": 0.0017
+      },
+      {
+       "startNumber": 45200,
+       "endNumber": -1,
+       "productPrice": 0.0017
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C76928",
+     "componentModelEn": "GRM033R60J104KE19D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 2124977,
+     "preferredComponentFlag": false,
+     "describe": "100nF 6.3V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0028
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0022
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 14999,
+       "productPrice": 0.0018
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 44999,
+       "productPrice": 0.0015
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": 45199,
+       "productPrice": 0.0013
+      },
+      {
+       "startNumber": 45200,
+       "endNumber": -1,
+       "productPrice": 0.0013
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C76934",
+     "componentModelEn": "GRM033R61A104KE15D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 1087702,
+     "preferredComponentFlag": false,
+     "describe": "100nF 10V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0035
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0026
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 14999,
+       "productPrice": 0.0022
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 44999,
+       "productPrice": 0.002
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": 45199,
+       "productPrice": 0.0018
+      },
+      {
+       "startNumber": 45200,
+       "endNumber": -1,
+       "productPrice": 0.0018
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C76937",
+     "componentModelEn": "GRM033R61C104KE84D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 221792,
+     "preferredComponentFlag": false,
+     "describe": "100nF 16V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 499,
+       "productPrice": 0.0099
+      },
+      {
+       "startNumber": 500,
+       "endNumber": 1499,
+       "productPrice": 0.0081
+      },
+      {
+       "startNumber": 1500,
+       "endNumber": 14999,
+       "productPrice": 0.0071
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 29999,
+       "productPrice": 0.0062
+      },
+      {
+       "startNumber": 30000,
+       "endNumber": 44999,
+       "productPrice": 0.0057
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": -1,
+       "productPrice": 0.0054
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C76939",
+     "componentModelEn": "GRM033R61E104KE14D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 437683,
+     "preferredComponentFlag": false,
+     "describe": "100nF 25V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 499,
+       "productPrice": 0.0115
+      },
+      {
+       "startNumber": 500,
+       "endNumber": 1499,
+       "productPrice": 0.0087
+      },
+      {
+       "startNumber": 1500,
+       "endNumber": 14999,
+       "productPrice": 0.0074
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 29999,
+       "productPrice": 0.0063
+      },
+      {
+       "startNumber": 30000,
+       "endNumber": 44999,
+       "productPrice": 0.0059
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": -1,
+       "productPrice": 0.0057
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C85923",
+     "componentModelEn": "GRM033C71C104KE14D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 708425,
+     "preferredComponentFlag": false,
+     "describe": "100nF 16V X7S ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 499,
+       "productPrice": 0.0177
+      },
+      {
+       "startNumber": 500,
+       "endNumber": 1499,
+       "productPrice": 0.014
+      },
+      {
+       "startNumber": 1500,
+       "endNumber": 14999,
+       "productPrice": 0.0123
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 29999,
+       "productPrice": 0.0107
+      },
+      {
+       "startNumber": 30000,
+       "endNumber": 44999,
+       "productPrice": 0.0102
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": -1,
+       "productPrice": 0.0099
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C88916",
+     "componentModelEn": "GRM033R61C104KE14D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 10710,
+     "preferredComponentFlag": false,
+     "describe": "100nF 16V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 199,
+       "productPrice": 0.0287
+      },
+      {
+       "startNumber": 200,
+       "endNumber": 599,
+       "productPrice": 0.0236
+      },
+      {
+       "startNumber": 600,
+       "endNumber": 1999,
+       "productPrice": 0.0208
+      },
+      {
+       "startNumber": 2000,
+       "endNumber": 14999,
+       "productPrice": 0.0192
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 29999,
+       "productPrice": 0.016
+      },
+      {
+       "startNumber": 30000,
+       "endNumber": -1,
+       "productPrice": 0.0152
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C89140",
+     "componentModelEn": "JMK063BJ104KP-F",
+     "componentBrandEn": "Taiyo Yuden",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 12,
+     "preferredComponentFlag": false,
+     "describe": "100nF 6.3V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0012
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0012
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 14999,
+       "productPrice": 0.0011
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 15199,
+       "productPrice": 0.0011
+      },
+      {
+       "startNumber": 15200,
+       "endNumber": 15399,
+       "productPrice": 0.0011
+      },
+      {
+       "startNumber": 15400,
+       "endNumber": -1,
+       "productPrice": 0.0011
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C92801",
+     "componentModelEn": "LMK063BJ104KP-F",
+     "componentBrandEn": "Taiyo Yuden",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 9938,
+     "preferredComponentFlag": false,
+     "describe": "100nF 10V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 499,
+       "productPrice": 0.0182
+      },
+      {
+       "startNumber": 500,
+       "endNumber": 1499,
+       "productPrice": 0.0147
+      },
+      {
+       "startNumber": 1500,
+       "endNumber": 14999,
+       "productPrice": 0.0128
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 29999,
+       "productPrice": 0.0116
+      },
+      {
+       "startNumber": 30000,
+       "endNumber": 44999,
+       "productPrice": 0.0106
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": -1,
+       "productPrice": 0.01
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C123439",
+     "componentModelEn": "0201X104K6R3CT",
+     "componentBrandEn": "Walsin Tech Corp",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 211605,
+     "preferredComponentFlag": false,
+     "describe": "100nF 6.3V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0015
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0012
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 14999,
+       "productPrice": 0.001
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 44999,
+       "productPrice": 0.0008
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": 45199,
+       "productPrice": 0.0007
+      },
+      {
+       "startNumber": 45200,
+       "endNumber": -1,
+       "productPrice": 0.0007
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C126622",
+     "componentModelEn": "GRT033R61A104KE01D",
+     "componentBrandEn": "Murata Electronics",
+     "componentSpecificationEn": "0201",
+     "componentLibraryType": "expand",
+     "componentProductType": 2,
+     "stockCount": 14829,
+     "preferredComponentFlag": false,
+     "describe": "100nF 10V X5R ±10% 0201 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0073
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0059
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 14999,
+       "productPrice": 0.005
+      },
+      {
+       "startNumber": 15000,
+       "endNumber": 44999,
+       "productPrice": 0.0046
+      },
+      {
+       "startNumber": 45000,
+       "endNumber": 104999,
+       "productPrice": 0.0041
+      },
+      {
+       "startNumber": 105000,
+       "endNumber": -1,
+       "productPrice": 0.0039
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    }
+   ]
+  }
+ }
+}

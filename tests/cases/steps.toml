@@ -12,7 +12,7 @@
 id = "contract"
 name = "output contract"
 run = ["tests/cases/contract_cases.py", "{pcb}", "{work}"]
-covers = ["contract", "doctor", "init", "status"]
+covers = ["contract", "doctor", "init", "status", "search"]
 
 [[step]]
 id = "adapter"
@@ -74,7 +74,7 @@ covers = ["check", "gate", "release", "compare-gerbers", "paste", "art"]
 id = "m4_cases"
 name = "M4 cases: parts, sync, place, drawing"
 run = ["tests/cases/m4_cases.py", "{pcb}", "{work}"]
-covers = ["parts", "sync", "place", "drawing", "footprint", "release"]
+covers = ["parts", "sync", "place", "drawing", "footprint", "release", "check"]
 after_fixtures = true
 env = { PCB_M4_PROJECT = "{flow:paddle_keyer_m4}" }
 

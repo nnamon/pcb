@@ -35,10 +35,19 @@ CASES = {
     # review 6, K4: the board's custom rules file says N is at least 0.5 mm wide; the router lays it at 0.2, so the
     # gate, checking by the same rules, must reject the result
     "custom_rules_kept": ("base", ["--nets", "N"], "rejected", None, None),
+    # 0.6.0: the same rules file with N routed and W ripped and routed again. Only N's copper breaks the rule, so N's is dropped,
+    # W's is kept and the run is done (source: the comparison with Copper; before, one bad net cost the whole run)
+    "partial_kept": ("base", ["--rip", "W", "--nets", "N,W"], "done", None, ("", "W")),
     # --width: N (no tracks, so the 0.2 mm default) at 0.3, and W (0.4 mm) ripped and routed again at 0.25
     "width_override_wider": ("base", ["--nets", "N", "--width", "N=0.3"], "done", None, ("", "N", "N=0.3")),
     "width_override_narrower": ("base", ["--rip", "W", "--nets", "W", "--width", "W=0.25"], "done", None, ("", "W", "W=0.25")),
     "width_override_unknown_net_refused": ("base", ["--nets", "N", "--width", "NOPE=0.3"], "refused", "no net NOPE", None),
+    # 0.6.0: widths from pcb.toml with --project. width_mm as it is; current_a at the IPC-2221 width for the layers
+    # the router may use (1 A on an outer layer: 0.3005 mm, so 0.31); --width replaces either. Before 0.6.0 a power
+    # net was laid at the board's default width unless --width named it (source: the comparison with Copper)
+    "project_width_mm": ("base", ["--nets", "N", "--project", "PROJECT:width_n"], "done", None, ("", "N", "N=0.35")),
+    "project_current_width": ("base", ["--nets", "N", "--project", "PROJECT:amp_n"], "done", None, ("", "N", "N=0.31")),
+    "project_width_flag_wins": ("base", ["--nets", "N", "--project", "PROJECT:amp_n", "--width", "N=0.25"], "done", None, ("", "N", "N=0.25")),
     # --prewire: N2 moved 2 mm down by an edit, then N routed to it; the edit's target checked like pcb edit
     "prewire_move_then_route": ("base", ["--nets", "N", "--prewire", "PREWIRE:move_n2"], "done", None, ("N", "N")),
     # a prewired track on a ripped net is the owner's choice: --rip removes the input's copper, never the prewire's
@@ -64,9 +73,11 @@ PREWIRE = {
     "wire_n": [{"op": "add_track", "net": "N", "layer": "F.Cu", "width": 0.2, "points": [[20, 15], [40, 15]]}],
 }
 # pcb.toml files for --project
-PROJECT = {"crit_n": 'schema = 1\n\n[project]\nname = "r"\nversion = "0.1.0"\nboard = "board.kicad_pcb"\nlayers = 2\nfab = "jlcpcb-2layer-1.6mm"\n\n[nets.N]\nclass = "critical"\n'}
+PROJECT_HEAD = 'schema = 1\n\n[project]\nname = "r"\nversion = "0.1.0"\nboard = "board.kicad_pcb"\nlayers = 2\nfab = "jlcpcb-2layer-1.6mm"\n\n[nets.N]\n'
+PROJECT = {"crit_n": PROJECT_HEAD + 'class = "critical"\n', "width_n": PROJECT_HEAD + "width_mm = 0.35\n", "amp_n": PROJECT_HEAD + "current_a = 1.0\n"}
 # custom rules files (.kicad_dru) written beside a case's board
-DRU = {"custom_rules_kept": '(version 1)\n(rule "N wide"\n  (condition "A.NetName == \'N\'")\n  (constraint track_width (min 0.5mm)))\n'}
+N_WIDE = '(version 1)\n(rule "N wide"\n  (condition "A.NetName == \'N\'")\n  (constraint track_width (min 0.5mm)))\n'
+DRU = {"custom_rules_kept": N_WIDE, "partial_kept": N_WIDE}
 # case: (copper layers new N tracks may use, whether N must end connected)
 LAYER_CHECKS = {
     "layers_outer_only": ({"F.Cu", "B.Cu"}, False),
@@ -321,6 +332,10 @@ if __name__ == "__main__":
                 got_l = json.loads(p.stdout.strip().splitlines()[-1])
                 if set(got_l["layers"]) != {"F.Cu"}:
                     results[name] = f"N should be routed on F.Cu alone: {got_l}"
+            if results[name] == "ok" and name == "partial_kept":
+                codes = [w["code"] for w in d.get("warnings", [])]
+                if d["data"].get("dropped_nets") != ["N"] or "N" in d["data"]["nets_routed"] or "W" not in d["data"]["nets_routed"] or "route-partial" not in codes or "N" not in d["data"]["still_open"]:
+                    results[name] = f"N's copper must be dropped and reported, W's kept: dropped {d['data'].get('dropped_nets')}, routed {d['data']['nets_routed']}, open {d['data']['still_open']}, warnings {codes}"
             if results[name] == "ok" and name == "critical_prewired_kept":
                 sys.path.insert(0, os.path.join(here, "..", "lib"))
                 import kisexp

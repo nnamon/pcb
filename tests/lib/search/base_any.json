@@ -1,0 +1,273 @@
+{
+ "data": {
+  "componentPageInfo": {
+   "total": 6,
+   "list": [
+    {
+     "componentCode": "C1525",
+     "componentModelEn": "CL05B104KO5NNNC",
+     "componentBrandEn": "Samsung Electro-Mechanics",
+     "componentSpecificationEn": "0402",
+     "componentLibraryType": "base",
+     "componentProductType": 0,
+     "stockCount": 31936073,
+     "preferredComponentFlag": false,
+     "describe": "100nF 16V X7R ±10% 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0024
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0018
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 9999,
+       "productPrice": 0.0015
+      },
+      {
+       "startNumber": 10000,
+       "endNumber": 49999,
+       "productPrice": 0.0013
+      },
+      {
+       "startNumber": 50000,
+       "endNumber": 50199,
+       "productPrice": 0.0012
+      },
+      {
+       "startNumber": 50200,
+       "endNumber": -1,
+       "productPrice": 0.0012
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C14663",
+     "componentModelEn": "CC0603KRX7R9BB104",
+     "componentBrandEn": "YAGEO",
+     "componentSpecificationEn": "0603",
+     "componentLibraryType": "base",
+     "componentProductType": 0,
+     "stockCount": 35262023,
+     "preferredComponentFlag": false,
+     "describe": "100nF 50V X7R ±10% 0603 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0055
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 3999,
+       "productPrice": 0.0043
+      },
+      {
+       "startNumber": 4000,
+       "endNumber": 7999,
+       "productPrice": 0.0037
+      },
+      {
+       "startNumber": 8000,
+       "endNumber": 47999,
+       "productPrice": 0.0033
+      },
+      {
+       "startNumber": 48000,
+       "endNumber": 99999,
+       "productPrice": 0.0029
+      },
+      {
+       "startNumber": 100000,
+       "endNumber": -1,
+       "productPrice": 0.0027
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C24497",
+     "componentModelEn": "CL31B104KBCNNNC",
+     "componentBrandEn": "Samsung Electro-Mechanics",
+     "componentSpecificationEn": "1206",
+     "componentLibraryType": "base",
+     "componentProductType": 0,
+     "stockCount": 1482020,
+     "preferredComponentFlag": false,
+     "describe": "100nF 50V X7R ±10% 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 199,
+       "productPrice": 0.0139
+      },
+      {
+       "startNumber": 200,
+       "endNumber": 599,
+       "productPrice": 0.0106
+      },
+      {
+       "startNumber": 600,
+       "endNumber": 3999,
+       "productPrice": 0.0091
+      },
+      {
+       "startNumber": 4000,
+       "endNumber": 7999,
+       "productPrice": 0.0072
+      },
+      {
+       "startNumber": 8000,
+       "endNumber": 19999,
+       "productPrice": 0.0068
+      },
+      {
+       "startNumber": 20000,
+       "endNumber": -1,
+       "productPrice": 0.0065
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C28233",
+     "componentModelEn": "CL21B104KCFNNNE",
+     "componentBrandEn": "Samsung Electro-Mechanics",
+     "componentSpecificationEn": "0805",
+     "componentLibraryType": "base",
+     "componentProductType": 0,
+     "stockCount": 2866576,
+     "preferredComponentFlag": false,
+     "describe": "100V 100nF X7R ±10% 0805 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 499,
+       "productPrice": 0.0161
+      },
+      {
+       "startNumber": 500,
+       "endNumber": 1999,
+       "productPrice": 0.0121
+      },
+      {
+       "startNumber": 2000,
+       "endNumber": 3999,
+       "productPrice": 0.0103
+      },
+      {
+       "startNumber": 4000,
+       "endNumber": 23999,
+       "productPrice": 0.009
+      },
+      {
+       "startNumber": 24000,
+       "endNumber": 49999,
+       "productPrice": 0.0084
+      },
+      {
+       "startNumber": 50000,
+       "endNumber": -1,
+       "productPrice": 0.0081
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C49678",
+     "componentModelEn": "CC0805KRX7R9BB104",
+     "componentBrandEn": "YAGEO",
+     "componentSpecificationEn": "0805",
+     "componentLibraryType": "base",
+     "componentProductType": 0,
+     "stockCount": 24332654,
+     "preferredComponentFlag": false,
+     "describe": "100nF 50V X7R ±10% 0805 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 199,
+       "productPrice": 0.0138
+      },
+      {
+       "startNumber": 200,
+       "endNumber": 599,
+       "productPrice": 0.009
+      },
+      {
+       "startNumber": 600,
+       "endNumber": 3999,
+       "productPrice": 0.0069
+      },
+      {
+       "startNumber": 4000,
+       "endNumber": 7999,
+       "productPrice": 0.005
+      },
+      {
+       "startNumber": 8000,
+       "endNumber": 19999,
+       "productPrice": 0.0043
+      },
+      {
+       "startNumber": 20000,
+       "endNumber": -1,
+       "productPrice": 0.0039
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    },
+    {
+     "componentCode": "C307331",
+     "componentModelEn": "CL05B104KB54PNC",
+     "componentBrandEn": "Samsung Electro-Mechanics",
+     "componentSpecificationEn": "0402",
+     "componentLibraryType": "base",
+     "componentProductType": 0,
+     "stockCount": 19934692,
+     "preferredComponentFlag": false,
+     "describe": "100nF 50V X7R ±10% 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS",
+     "componentPrices": [
+      {
+       "startNumber": 1,
+       "endNumber": 999,
+       "productPrice": 0.0086
+      },
+      {
+       "startNumber": 1000,
+       "endNumber": 2999,
+       "productPrice": 0.0063
+      },
+      {
+       "startNumber": 3000,
+       "endNumber": 9999,
+       "productPrice": 0.0054
+      },
+      {
+       "startNumber": 10000,
+       "endNumber": 49999,
+       "productPrice": 0.0046
+      },
+      {
+       "startNumber": 50000,
+       "endNumber": 99999,
+       "productPrice": 0.0044
+      },
+      {
+       "startNumber": 100000,
+       "endNumber": -1,
+       "productPrice": 0.0042
+      }
+     ],
+     "componentTypeEn": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"
+    }
+   ]
+  }
+ }
+}

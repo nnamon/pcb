@@ -1164,6 +1164,79 @@ else:
         r = subprocess.run([sys.executable, os.path.join(here, "..", "oracles", "verify_against_v1.py"), z, GOLDEN1], capture_output=True, text=True)
         want(f"verify_against_v1: fails {k} (review 19, 6)", new != src[fname] and r.returncode == 1, (r.returncode, r.stdout[-300:]))
 
+# ---- 0.6.0: the circuit checks, KiCad's ERC, a finding's place and fix, Preferred parts
+# source: the comparison with Copper (14 Nov 2026): pcb ran no ERC and no check of the circuit itself
+
+
+def circuit_project(name, comps, nets, parts_, extra=""):
+    two = lambda a, b: eda([smd("1", 4000, 3000), smd("2", 4010, 3000)], [("1", a), ("2", b)])  # noqa: E731
+    d = project(os.path.join(work, name), comps, nets, {k: two(*v) for k, v in parts_.items()},
+                place=[(c[0], -10 + 5 * i, 0, 0, "top") for i, c in enumerate(comps)], extra=extra)
+    s = P("sync", "--project", d, "--work", os.path.join(d, "w"))
+    c = P("check", "--project", d, "--work", os.path.join(d, "wc"))
+    f = [x for x in (c.get("data") or {}).get("findings") or [] if x["check"] == "circuit"]
+    return s, c, f
+
+
+IC = {"C9500001": ("VDD", "GND"), "C11": ("1", "2")}
+bare = {"+3V3": [("U1", "1", "VDD"), ("R1", "1", "")], "GND": [("U1", "2", "GND"), ("R1", "2", "")]}
+s, c, f = circuit_project("circuit_decap", [("U1", "ic", "", "C9500001"), ("R1", "10k", "", "C11")], bare, IC)
+want("check: an IC supply with no capacitor to ground is a circuit finding", out(s, "done") and [x["item"] for x in f] == ["decoupling U1 +3V3"] and out(c, "rejected"), (s, f))
+u1 = pcbnew_run(os.path.join(work, "circuit_decap", "board.kicad_pcb"), "p = fp('U1').GetPosition()\nprint(json.dumps([round(mm(p.x), 3), round(mm(p.y), 3)]))", save=False)
+want("check: the finding carries the part's place on the board and a fix", bool(f) and f[0].get("at") == u1 and "schematic" in (f[0].get("fix") or ""), (f, u1))
+want("check: a .net netlist says ERC did not run (erc-skipped)", "erc-skipped" in wcodes(c), wcodes(c))
+s, c, f = circuit_project("circuit_decap_waived", [("U1", "ic", "", "C9500001"), ("R1", "10k", "", "C11")], bare, IC,
+                          extra='[[waiver]]\ncheck = "circuit"\nitem = "decoupling U1 +3V3"\nwhy = "the capacitor is on the module"\n')
+want("check: a circuit finding is waived by its item", [bool(x["waived"]) for x in f] == [True], f)
+s, c, f = circuit_project("circuit_decap_ok", [("U1", "ic", "", "C9500001"), ("C1", "100n", "", "C11")],
+                          {"+3V3": [("U1", "1", "VDD"), ("C1", "1", "")], "GND": [("U1", "2", "GND"), ("C1", "2", "")]}, IC)
+want("check: with the capacitor there is no circuit finding", out(s, "done") and f == [], (s, f))
+s, c, f = circuit_project("circuit_led", [("D1", "LED red", "", "C9500002"), ("U1", "ic", "", "C9500001"), ("C1", "100n", "", "C11")],
+                          {"+3V3": [("U1", "1", "VDD"), ("C1", "1", ""), ("D1", "2", "A")], "GND": [("U1", "2", "GND"), ("C1", "2", ""), ("D1", "1", "K")]},
+                          {**IC, "C9500002": ("K", "A")})
+want("check: an LED across the supply with no resistor is a circuit finding", [x["item"] for x in f] == ["led-resistor D1"], (s, f))
+
+# the other three rules through the command (review 22, 16)
+PASS = {"C11": ("1", "2")}
+s, c, f = circuit_project("circuit_usb_cc", [("J1", "usb-c", "", "C9500003"), ("R1", "10k", "", "C11"), ("R2", "5.1k", "", "C11")],
+                          {"CC1": [("J1", "1", "CC1"), ("R1", "1", "")], "CC2": [("J1", "2", "CC2"), ("R2", "1", "")], "GND": [("R1", "2", ""), ("R2", "2", "")]},
+                          {**PASS, "C9500003": ("CC1", "CC2")})
+want("check: a USB-C CC pull-down that is not 5.1 k is a circuit finding", out(s, "done") and [x["item"] for x in f] == ["usb-cc J1 CC1"], (s, f))
+s, c, f = circuit_project("circuit_i2c", [("U2", "sensor", "", "C9500004"), ("U3", "sensor", "", "C9500004"), ("R1", "10k", "", "C11")],
+                          {"SDA": [("U2", "1", "SDA"), ("U3", "1", "SDA"), ("R1", "1", "")], "GND": [("U2", "2", "GND"), ("U3", "2", "GND"), ("R1", "2", "")]},
+                          {**PASS, "C9500004": ("SDA", "GND")})
+want("check: an I2C net with no pull-up to a supply is a circuit finding", out(s, "done") and [x["item"] for x in f] == ["i2c-pullup U2 SDA"], (s, f))
+s, c, f = circuit_project("circuit_crystal", [("Y1", "12MHz", "", "C11"), ("C1", "15p", "", "C11"), ("R1", "1k", "", "C11")],
+                          {"XI": [("Y1", "1", ""), ("C1", "1", "")], "XO": [("Y1", "2", ""), ("R1", "1", "")], "GND": [("C1", "2", ""), ("R1", "2", "")]}, PASS)
+want("check: a crystal terminal with no load capacitor is a circuit finding", out(s, "done") and [x["item"] for x in f] == ["crystal-load Y1"], (s, f))
+
+# a Preferred Extended part carries no loading fee (GUIDELINES check 3); 0.5.1 warned of one
+rec = {"C9500001": jlc("C9500001", lib="expand"), "C11": jlc("C11", lib="expand")}
+rec["C11"]["part"]["preferredComponentFlag"] = True
+two = lambda a, b: eda([smd("1", 4000, 3000), smd("2", 4010, 3000)], [("1", a), ("2", b)])  # noqa: E731
+d = project(os.path.join(work, "preferred"), [("U1", "ic", "", "C9500001"), ("C1", "100n", "", "C11")],
+            {"+3V3": [("U1", "1", "VDD"), ("C1", "1", "")], "GND": [("U1", "2", "GND"), ("C1", "2", "")]}, {k: two(*v) for k, v in IC.items()}, records=rec)
+r = P("parts", "--project", d, "--work", os.path.join(d, "w"))
+ext = [w["message"] for w in r.get("warnings", []) if w["code"] == "extended-parts"]
+want("parts: a Preferred Extended part is not counted as a loading fee",
+     len(ext) == 1 and ext[0].startswith("1 Extended part(s), each a loading fee: C9500001") and "Preferred" in ext[0]
+     and {q["lcsc"]: q["preferred"] for q in r["data"]["parts"]} == {"C9500001": False, "C11": True}, r)
+
+if not M4P:
+    skipped.append("erc")
+else:
+    d = full("erc_clean")
+    c = chk(d, os.path.join(d, "wc"))
+    want("check: the paddle-keyer schematic has no ERC or circuit finding", not [x for x in c["unwaived"] if x.startswith(("erc", "circuit"))] and "erc-skipped" not in wcodes(c), c["unwaived"])
+    d = full("erc_open_pin")
+    sch = os.path.join(d, "schematic", "paddle-keyer.kicad_sch")
+    t = open(sch).read()
+    mk = re.search(r"\n  \(no_connect \(at [^)]*\) \(uuid [^)]*\)\)", t)
+    open(sch, "w").write(t.replace(mk.group(0), "", 1))
+    c = chk(d, os.path.join(d, "wc"))
+    e = [x for x in c["data"]["findings"] if x["check"] == "erc"]
+    want("check: a pin left open in the schematic is an erc finding", [x["item"] for x in e] == ["pin_not_connected"] and "on sheet" in e[0]["message"] and out(c, "rejected"), (e, c["unwaived"]))
+
 if skipped:
     print(f"skipped {len(skipped)} groups: set PCB_M4_PROJECT to the paddle_keyer_m4 fixture flow's project folder")
 print(json.dumps({"failed": len(fails), "fails": fails, "skipped": skipped}))
