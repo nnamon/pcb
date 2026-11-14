@@ -416,7 +416,7 @@ pub struct Near {
     pub why: String,
 }
 
-/// Parts and holes that belong on an edge of the outline's bounding box. When the outline changes, `pcb check` finds
+/// Parts and holes that belong on an edge of the outline, measured towards the named side. When the outline changes, `pcb check` finds
 /// the ones left behind (the badge carrier 0.8.0's square outline left a switch, the IR parts and the lanyard holes
 /// 10 mm inside the edge), and a hole that carries load keeps `min_web_mm` of board to the edge (GUIDELINES: 3 mm).
 #[derive(Debug, Deserialize, Serialize)]
@@ -427,7 +427,7 @@ pub struct Edge {
     pub parts: Vec<String>,
     /// Each part's position within this of the edge.
     pub max_mm: f64,
-    /// Board left between each of the parts' holes and the edge, at least.
+    /// Board left between each of the parts' holes and the nearest edge of any side, at least.
     pub min_web_mm: Option<f64>,
     pub why: String,
 }

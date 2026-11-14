@@ -112,6 +112,17 @@ sol = {s["reference"]: s for s in r["data"].get("solved", [])}
 want("parts: v1.0.0's offsets reproduce, no finding", r["outcome"] == "done" and sol.get("J1", {}).get("cpl_offset_mm") == [0.0, 0.125] and sol.get("J2", {}).get("cpl_offset_mm") == [-0.1, 0.0], {k: sol.get(k) for k in ("J1", "J2")})
 others = [s for k, s in sol.items() if k not in ("J1", "J2") and (s["rotation_offset_deg"] != 0 or abs(s["cpl_offset_mm"][0]) > 0.005 or abs(s["cpl_offset_mm"][1]) > 0.005)]
 want("parts: no other part needs an offset (U1 QFN-56, U3 SOT-23, Q1-Q4 SOT-23)", not others and all(k in sol for k in ("U1", "U3", "Q1", "Q3")), others)
+# source: 0.8.0 (pcb parts did not match bottom-side footprints). The same board with J1, J2, U3 and Q1 turned over
+# by pcbnew, J1 left to right and the others top to bottom after a 30 degree turn: each solves to the same offsets
+# as on the top, with no finding
+db = os.path.join(work, "offsets_bottom")
+shutil.copytree(d, db)
+py("b = pcbnew.LoadBoard(sys.argv[1])\nfor i, r in enumerate(('J1', 'J2', 'U3', 'Q1')):\n    f = b.FindFootprintByReference(r)\n    if i: f.SetOrientationDegrees(f.GetOrientationDegrees() + 30)\n    f.Flip(f.GetPosition(), pcbnew.FLIP_DIRECTION_TOP_BOTTOM if i else pcbnew.FLIP_DIRECTION_LEFT_RIGHT)\npcbnew.SaveBoard(sys.argv[1], b)\nprint(json.dumps(1))", os.path.join(db, "board.kicad_pcb"))
+rb = run("parts", "--project", db, "--work", os.path.join(db, "w"))
+solb = {s["reference"]: s for s in rb["data"].get("solved", [])}
+flipped = open(os.path.join(db, "board.kicad_pcb")).read().count('(layer "B.Cu")\n')
+same = {k: (sol.get(k, {}).get("rotation_offset_deg"), sol.get(k, {}).get("cpl_offset_mm")) == (solb.get(k, {}).get("rotation_offset_deg"), solb.get(k, {}).get("cpl_offset_mm")) and k in solb for k in ("J1", "J2", "U3", "Q1")}
+want("parts: bottom-side parts solve to the offsets they have on the top", rb["outcome"] == "done" and all(same.values()) and not rb["data"].get("findings"), (same, {k: solb.get(k) for k in same}, rb["data"].get("findings"), flipped))
 toml_sub(d, "cpl_offset_mm = [0, 0.125]", "cpl_offset_mm = [0, 0.3]")
 r = run("parts", "--project", d, "--work", os.path.join(d, "w"))
 want("parts: a wrong CPL offset is a finding naming the solved one", r["outcome"] == "rejected" and any(f["item"] == "J1 cpl-offset" and "0.125" in f["message"] for f in r["data"].get("findings", [])), r["data"].get("findings"))

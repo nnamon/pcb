@@ -771,20 +771,35 @@ def g_release():
 
     # source: review 15, release cpl_offsets (turned and bottom parts with offsets, against pcbnew's own transform)
     oracle = '''
+import math
 def where(ref, ox, oy, flip=False, turn=None):
     f = b.FindFootprintByReference(ref)
     if turn is not None:
         f.SetOrientationDegrees(turn)
-    if flip:
+    was = f.IsFlipped()
+    if was:
         f.Flip(f.GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
-    p = pcbnew.PAD(f)
-    p.SetNumber("probe")
-    p.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
-    f.Add(p)
-    p.SetFPRelativePosition(V(ox, -oy))
-    q = p.GetPosition()
-    out = [pcbnew.ToMM(q.x), pcbnew.ToMM(q.y), f.GetOrientationDegrees(), f.IsFlipped()]
-    f.Remove(p)
+    # two probe pads in the footprint as its library has it (y up): JLCPCB's origin, and 1 mm along its x axis.
+    # They go on before the flip, so pcbnew's own flip carries them (0.8.0; the 0.7.0 oracle put the origin on after
+    # the flip, in the mirrored frame, which is right only for an offset with no y part)
+    probes = []
+    for dx in (0, 1):
+        p = pcbnew.PAD(f)
+        p.SetNumber("probe")
+        p.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
+        f.Add(p)
+        p.SetFPRelativePosition(V(ox + dx, -oy))
+        probes.append(p)
+    if flip or was:
+        f.Flip(f.GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
+    q, a = probes[0].GetPosition(), probes[1].GetPosition()
+    ux, uy = pcbnew.ToMM(a.x - q.x), -pcbnew.ToMM(a.y - q.y)
+    # the angle of the footprint's x axis, anticlockwise seen from the side the part is on (from the bottom the
+    # board is turned over left to right)
+    seen = math.degrees(math.atan2(uy, -ux if f.IsFlipped() else ux)) % 360
+    out = [pcbnew.ToMM(q.x), pcbnew.ToMM(q.y), seen, f.IsFlipped(), f.GetFieldText("LCSC")]
+    for p in probes:
+        f.Remove(p)
     return out
 bb = b.GetBoardEdgesBoundingBox()
 cx, cy = pcbnew.ToMM(bb.GetCenter().x), pcbnew.ToMM(bb.GetCenter().y)
@@ -806,6 +821,16 @@ print("ORACLE", json.dumps(res))
     wantp = {k: [round(orc[k][0] - cx, 3), round(cy - orc[k][1], 3)] for k in ("J2", "J1", "C2")}
     gotp = {k: list(got.get(k, [None, None])[:2]) for k in ("J2", "J1", "C2")}
     want("r15 release cpl_offsets", all(wantp[k] == gotp[k] for k in wantp), f"CPL offsets on turned and bottom parts where pcbnew puts them (want {wantp}, got {gotp}; {P.slim(r)})", g, r)
+    # source: M5 proposal, assumption 1; 0.8.0. A bottom part's CPL rotation is the turn of JLCPCB's footprint seen
+    # from the bottom: the footprint's x axis as pcbnew flips it, plus the part's rotation offset. J2 and C2 are on
+    # the bottom, J1 on the top turned 30 degrees
+    import tomllib
+    rules = tomllib.load(open(os.path.join(d, "pcb.toml"), "rb")).get("parts", {})
+    wantr = {k: round((orc[k][2] + rules.get(orc[k][4], {}).get("rotation_offset_deg", 0)) % 360, 3) % 360 for k in ("J2", "J1", "C2")}
+    gotr = {k: (got.get(k) or [None] * 4)[3] for k in wantr}
+    sides = {k: (got.get(k) or [None] * 4)[2] for k in wantr}
+    want("0.8.0 cpl_bottom_rotation", wantr == gotr and sides == {"J2": "Bottom", "J1": "Top", "C2": "Bottom"} and "bottom-cpl-unverified" in r.get("warnings", []),
+         f"CPL rotations of bottom parts as seen from the bottom, against pcbnew's flip (want {wantr}, got {gotr}, sides {sides}; {P.slim(r)})", g, r)
 
     # source: review 15, release dnp_handfit
     d = P.paddle(M3, "dnp")
@@ -1270,9 +1295,9 @@ def g_m5a():
 
     # source: badge carrier 0.8.0 (Gate 2 fab; external review F5): parts left inside a new outline, and lanyard holes
     # 1.4 mm from the edge. The outline is 40 x 30 mm: SW1 2 mm from the top edge, SW2 12 mm; H1 a 4 mm hole with
-    # 1.4 mm of board to the top edge, H2 one with 3.4 mm
+    # 1.4 mm of board to the top edge, H2 one with 3.4 mm (and 5 mm to the right edge: the web is to any edge)
     edge = ('fp("SW1", 10, 2, [("1", 0, 0, "A", 1.0, 1.0)])\nfp("SW2", 20, 12, [("1", 0, 0, "A", 1.0, 1.0)])\ntrack("A", 10, 2, 20, 12, 0.25)\n'
-            'fp("H1", 30, 3.4, [("", 0, 0, None, 4.0, 4.0, "npth")])\nfp("H2", 36, 5.4, [("", 0, 0, None, 4.0, 4.0, "npth")])\n')
+            'fp("H1", 30, 3.4, [("", 0, 0, None, 4.0, 4.0, "npth")])\nfp("H2", 33, 5.4, [("", 0, 0, None, 4.0, 4.0, "npth")])\n')
     et = ('\n[[edge]]\nside = "top"\nparts = ["SW1", "SW2"]\nmax_mm = 3.0\nwhy = "the slider is worked from the top edge"\n'
           '\n[[edge]]\nside = "top"\nparts = ["H1", "H2"]\nmax_mm = 8.0\nmin_web_mm = 3.0\nwhy = "lanyard holes carry the badge"\n')
     d, c, f = checked("m5_edge", edge, toml=et)
@@ -1353,6 +1378,57 @@ def g_m5a():
     holes = [k for k in f if k[0] == "drc" and "hole_to_hole" in k[1]]
     want("m5a r21", holes and not any(k[0] == "near" for k in f) and "outside" in (f.get(("edge", "J9")) or {}).get("message", ""),
          f"no-net holes 0.3 mm apart found by pcb check, the nearer of two pads numbered 1 measured, a part off the board outside its edge ({sorted(f)})", c)
+
+    # source: review 21, 4 (0.8.0). An L-shaped outline, 40 x 30 with the top right 20 x 15 cut away: S1 is 2 mm left
+    # of the notch's edge and bound to the right (the bounding box said 22 mm); S2 sits in the notch, off the board;
+    # H1's 1 mm hole has 0.2 mm of board to the notch's edge; H3 is bound to the top and its hole has 0.3 mm to the
+    # left edge, which the web now counts
+    ell = ('for s in list(b.GetDrawings()):\n    if s.GetLayer() == pcbnew.Edge_Cuts: b.Remove(s)\n'
+           'lp = [(0, 0), (20, 0), (20, 15), (40, 15), (40, 30), (0, 30)]\n'
+           'for i in range(6):\n    s = pcbnew.PCB_SHAPE(b); s.SetShape(pcbnew.SHAPE_T_SEGMENT); s.SetStart(P(*lp[i])); s.SetEnd(P(*lp[(i + 1) % 6])); s.SetLayer(pcbnew.Edge_Cuts); s.SetWidth(mm(0.05)); b.Add(s)\n'
+           'fp("S1", 18, 5, [("1", 0, 0, None, 1.0, 1.0)])\nfp("S2", 30, 5, [("1", 0, 0, None, 1.0, 1.0)])\n'
+           'fp("H1", 19.3, 10, [("", 0, 0, None, 1.0, 1.0, "npth")])\nfp("H3", 0.8, 25, [("", 0, 0, None, 1.0, 1.0, "npth")])\n')
+    lt = ('\n[[edge]]\nside = "right"\nparts = ["S1", "H1"]\nmax_mm = 3.0\nmin_web_mm = 3.0\nwhy = "probe"\n'
+          '\n[[edge]]\nside = "top"\nparts = ["S2"]\nmax_mm = 30.0\nwhy = "probe"\n'
+          '\n[[edge]]\nside = "top"\nparts = ["H3"]\nmax_mm = 30.0\nmin_web_mm = 3.0\nwhy = "probe"\n')
+    d, c, f = checked("m5_edge_l", ell, toml=lt)
+    em = {k[1]: f[k]["message"] for k in f if k[0] == "edge"}
+    want("r21 edge_l", sorted(em) == ["H1", "H3", "S2"] and "0.20 mm of board" in em["H1"] and "0.30 mm of board" in em["H3"] and "10.00 mm outside the top edge" in em["S2"],
+         f"on an L-shaped outline S1 passes 2 mm from the notch, S2 in the notch is outside, and both thin webs are found ({em})", c)
+
+    # source: review 24, 5, 6 and 1. A 40 x 30 rectangle with 8 mm corners, as KiCad 10 writes it (`radius`): A at
+    # (1, 1) is in the cut corner, off the board; B is on the right edge and bound to the top, 15 mm away; C is level
+    # with the end of a corner's arc
+    rnd = ('for s in list(b.GetDrawings()):\n    if s.GetLayer() == pcbnew.Edge_Cuts: b.Remove(s)\n'
+           's = pcbnew.PCB_SHAPE(b); s.SetShape(pcbnew.SHAPE_T_RECTANGLE); s.SetStart(P(0, 0)); s.SetEnd(P(40, 30)); s.SetCornerRadius(mm(8)); s.SetLayer(pcbnew.Edge_Cuts); s.SetWidth(mm(0.05)); b.Add(s)\n'
+           'fp("A", 1, 1, [("1", 0, 0, None, 0.5, 0.5)])\nfp("B", 40, 15, [("1", 0, 0, None, 0.5, 0.5)])\nfp("C", 8, 15, [("1", 0, 0, None, 0.5, 0.5)])\n')
+    d, c, f = checked("m5_edge_round", rnd, toml='\n[[edge]]\nside = "top"\nparts = ["A", "B", "C"]\nmax_mm = 16.0\nwhy = "probe"\n')
+    em = {k[1]: f[k]["message"] for k in f if k[0] == "edge"}
+    want("r24 edge_round", sorted(em) == ["A"] and "outside" in em["A"] and "(radius" in open(P.board(d)).read(),
+         f"on a rounded rectangle a part in the cut corner is outside, one on the right edge and one level with an arc's end pass ({em})", c)
+
+    # source: review 21, 15 (0.8.0). SW100's designator is centred 1.4 mm above its own pads and runs on over R7's
+    # pad: its middle is nearer its own part, so the anchor alone passed it. SW200's is left-justified with its
+    # anchor 0.3 mm from R9's pad and runs away from R9 towards its own part, which the anchor alone reported
+    ext = ('def shown(name, x, y, just=None):\n    f = b.FindFootprintByReference(name); t = f.Reference(); t.SetVisible(True); t.SetLayer(pcbnew.F_SilkS)\n'
+           '    t.SetTextSize(pcbnew.VECTOR2I(mm(1), mm(1))); t.SetTextThickness(mm(0.15))\n'
+           '    if just is not None: t.SetHorizJustify(just)\n    t.SetPosition(P(x, y))\n'
+           'fp("SW100", 5, 22, [("1", 0, 0, None, 1.0, 1.0), ("2", 2, 0, None, 1.0, 1.0)])\nfp("R7", 10.2, 20.6, [("1", 0, 0, None, 1.0, 1.0)])\nshown("SW100", 8, 20.6)\n'
+           'fp("SW200", 20, 25, [("1", 0, 0, None, 1.0, 1.0), ("2", 2, 0, None, 1.0, 1.0)])\nfp("R9", 14.5, 23.8, [("1", 0, 0, None, 1.0, 1.0)])\nshown("SW200", 15.3, 23.8, pcbnew.GR_TEXT_H_ALIGN_LEFT)\n')
+    d, c, f = checked("m5_silk_extent", ext)
+    so = {k[1]: f[k]["message"] for k in f if k[0] == "silk-owner"}
+    want("r21 silk_extent", sorted(so) == ["SW100"] and "lies over R7" in so["SW100"],
+         f"a designator lying over another part's pad is found, and a justified one is judged by its text, not its anchor ({so})", c)
+
+    # source: review 21, 12 (0.8.0). R2 is left out of the CPL and its pads carry no paste, but its footprint draws
+    # a polygon on the paste layer, which the stencil would print
+    def drawn_paste(t):
+        t = strip_r2_paste(t)
+        i = t.index('(property "Reference" "R2"')
+        return t[:i] + '(fp_poly (pts (xy 0 0) (xy 0.6 0) (xy 0.6 0.6) (xy 0 0.6)) (stroke (width 0) (type solid)) (fill yes) (layer "F.Paste") (uuid "00000000-0000-4000-8000-0000000000aa"))\n\t\t' + t[i:]
+    d, c, f = checked("m5_paste_drawn", two, edit=drawn_paste)
+    want("r21 paste_drawn", ("paste-unassembled", "R2 drawn") in f and ("paste-unassembled", "R2") not in f and "pcb sync" in (f[("paste-unassembled", "R2 drawn")].get("fix") or ""),
+         f"paste drawn as a footprint polygon on a part left out of the CPL is found ({sorted(k for k in f if k[0] == 'paste-unassembled')})", c)
 
     # source: repository split (owner, 13 Nov 2026): pcb new writes a project that reads back, pinned to this pcb;
     # a pin to another version is a config problem every project command refuses on

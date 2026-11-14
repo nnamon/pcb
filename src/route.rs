@@ -146,6 +146,8 @@ pub struct AttemptReport {
     pub added_vias: usize,
     /// Named nets whose pads this run's copper (inside the region, joined to the kept copper) leaves in pieces.
     pub open: Vec<String>,
+    /// Places the net list was turned round for this run (0: the order KiCad exported).
+    pub net_turn: usize,
 }
 
 /// One router run laid into the board text, before the gate.
@@ -154,6 +156,7 @@ struct Laid {
     edits: Edits,
     new_text: String,
     open: Vec<String>,
+    net_turn: usize,
 }
 
 fn inside(r: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
@@ -392,6 +395,49 @@ fn without_planes(dsn: &str) -> Result<String> {
     let mut e = Edits::default();
     for p in structure.find_all("plane") {
         e.replace(p.span, "");
+    }
+    e.apply(dsn)
+}
+
+/// How many places attempt `k` (0 for the first) turns a list of `n` nets round, or None when every order such
+/// turns give has been tried. The step is 7, or the next of 11, 13, 5, 3, 1 that shares no factor with `n`, so no
+/// order comes twice before all `n` have been used (review 24, 3: with a plain 7, a board of 14 nets got the second
+/// attempt's order again in the fourth).
+fn net_turn(n: usize, k: usize) -> Option<usize> {
+    if k == 0 {
+        return Some(0);
+    }
+    if k >= n {
+        return None;
+    }
+    fn gcd(a: usize, b: usize) -> usize {
+        if b == 0 { a } else { gcd(b, a % b) }
+    }
+    let step = [7, 11, 13, 5, 3, 1].into_iter().find(|s| gcd(*s, n) == 1).unwrap_or(1);
+    Some(k * step % n)
+}
+
+/// The nets a DSN lists.
+fn dsn_net_count(dsn: &str) -> Result<usize> {
+    Ok(sexpr::parse(dsn)?.find("network").map(|n| n.find_all("net").count()).unwrap_or(0))
+}
+
+/// The DSN with its nets listed in another order, the list turned round by `turn` places; nothing else changes.
+/// Which nets Freerouting 2.5.0 leaves open depends on the order it meets them in (paddle-keyer v1.0.0 stripped:
+/// DIT, TONE_PWM and XOUT_R open with the file as exported, none with the list turned by 7;
+/// `docs/bench/route-0.8.0.md`), and on a board with no copper laid before the run it gives the same result for the
+/// same file, so a second attempt on the same file would repeat the first.
+fn nets_turned(dsn: &str, turn: usize) -> Result<String> {
+    let root = sexpr::parse(dsn)?;
+    let Some(network) = root.find("network") else { return Ok(dsn.to_string()) };
+    let nets: Vec<&sexpr::Node> = network.find_all("net").collect();
+    if nets.is_empty() || turn % nets.len() == 0 {
+        return Ok(dsn.to_string());
+    }
+    let mut e = Edits::default();
+    for (i, net) in nets.iter().enumerate() {
+        let from = nets[(i + turn) % nets.len()];
+        e.replace(net.span, &dsn[from.span.0..from.span.1]);
     }
     e.apply(dsn)
 }
@@ -943,12 +989,13 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
     let plane_nets: Vec<String> = zone_owned.iter().cloned().collect();
 
     // 4-5. one attempt: Freerouting on the DSN, its copper read back and laid into the board text
-    let attempt = |keep: bool, tag: &str| -> Result<Laid> {
+    let attempt = |keep: bool, tag: &str, net_turn: usize| -> Result<Laid> {
         let mut rep = Report::default();
         let mut final_edits = final_edits.clone();
         // 4. Freerouting
         let (dsn, ses) = (o.work.join(format!("route_{tag}.dsn")), o.work.join(format!("route_{tag}.ses")));
-        std::fs::write(&dsn, if keep { &dsn_keep } else { &dsn_open })?;
+        // attempts after the first get the nets in another order
+        std::fs::write(&dsn, nets_turned(if keep { &dsn_keep } else { &dsn_open }, net_turn)?)?;
         let log = freerouting::run(&o.java, &o.fr_jar, &o.work, &dsn, &ses, o.passes, &plane_nets, &routable, &ignored, o.timeout_s)?;
         rep.freerouting_log = log.lines().filter(|l| l.contains("INFO") || l.contains("WARN") || l.contains("ERROR")).map(|l| l.chars().skip(24).collect::<String>()).collect::<Vec<_>>().join("\n");
 
@@ -1235,21 +1282,24 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             o.nets.clone()
         };
         let open = open_nets(&judged, &segs, &alive, &all_vias, &pads, &b.zones);
-        Ok(Laid { rep, edits: final_edits, new_text, open })
+        Ok(Laid { rep, edits: final_edits, new_text, open, net_turn })
     };
     // Freerouting's insertion step can fail on a path its search found (the badge's PMUX_SS, 2.5.0: "insert trace
     // failed" at a 0.15 mm gap), and whether it does depends on how the keep-outs cut the board into rooms. So when
     // named nets are left open, the router runs once more with no region keep-outs; copper it lays outside the
     // region is still dropped, so that attempt can only win by closing nets inside the region.
-    // Freerouting 2.5 runs its passes on several threads and does not give the same result twice, so `--attempts N`
-    // runs it N times and keeps the run that leaves fewest nets open (M4: paddle-keyer from scratch)
-    let mut plan: Vec<(bool, String)> = (0..o.attempts.max(1)).map(|k| (true, if k == 0 { "region".to_string() } else { format!("region{}", k + 1) })).collect();
+    // `--attempts N` runs Freerouting up to N times and keeps the run that leaves fewest nets open (M4: paddle-keyer
+    // from scratch). 2.5.0 gives the same result for the same file, so each attempt after the first lists the nets
+    // in another order (`net_turn`, 0.8.0), and the attempts stop when every order has been used; the run without
+    // keep-outs has the first attempt's order
+    let n_nets = dsn_net_count(&dsn_keep)?;
+    let mut plan: Vec<(bool, String, usize)> = (0..o.attempts.max(1) as usize).map_while(|k| Some((true, if k == 0 { "region".to_string() } else { format!("region{}", k + 1) }, net_turn(n_nets, k)?))).collect();
     if !o.nets.is_empty() {
-        plan.push((false, "open".to_string()));
+        plan.push((false, "open".to_string(), 0));
     }
     let mut laids: Vec<(usize, Laid)> = vec![];
-    for (i, (keep, tag)) in plan.iter().enumerate() {
-        let laid = match attempt(*keep, tag) {
+    for (i, (keep, tag, k)) in plan.iter().enumerate() {
+        let laid = match attempt(*keep, tag, *k) {
             Ok(l) => l,
             // the second run failing or timing out leaves the first run's result standing (review 8, 17)
             Err(e) if i > 0 => {
@@ -1258,7 +1308,7 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
             }
             Err(e) => return Err(e),
         };
-        rep.attempts.push(AttemptReport { region_keepouts: *keep, added_segments: laid.rep.added_segments, added_vias: laid.rep.added_vias, open: laid.open.clone() });
+        rep.attempts.push(AttemptReport { region_keepouts: *keep, added_segments: laid.rep.added_segments, added_vias: laid.rep.added_vias, open: laid.open.clone(), net_turn: laid.net_turn });
         let done = laid.open.is_empty();
         laids.push((i, laid));
         if done {
@@ -1287,17 +1337,25 @@ pub fn run(board_path: &str, out_path: &str, o: &Opts) -> Result<Report> {
         .flat_map(|n| ["unconnected_items", "via_dangling"].map(|k| crate::project::DrcAllow { kind: k.into(), nets: vec![n.clone()], max: usize::MAX, why: "a plane net, joined by its zones".into() }))
         .collect();
     let finish = |t: &str| gate.finish_allowing(t, out_path, has_zones, &plane_allow);
+    // Every run goes to the gate in that order until one passes, so a run that closes more nets and makes the board
+    // worse never costs a clean run its place (review 24, 2: only the first two were tried, so with three attempts
+    // a clean first run lost to two worse ones)
     let mut chosen = 0;
     let mut g = finish(&text_of(&laids[0].1)?)?;
-    if !g.regressions.is_empty() && laids.len() > 1 {
-        let rejected = g.written.clone();
-        let g2 = finish(&text_of(&laids[1].1)?)?;
-        if g2.regressions.is_empty() {
-            crate::gate::remove_result(&rejected);
-            g = g2;
-            chosen = 1;
-        } else {
-            // both worse: report, and leave in .rejected, the preferred run
+    if !g.regressions.is_empty() {
+        for k in 1..laids.len() {
+            let rejected = g.written.clone();
+            let g2 = finish(&text_of(&laids[k].1)?)?;
+            if g2.regressions.is_empty() {
+                crate::gate::remove_result(&rejected);
+                g = g2;
+                chosen = k;
+                break;
+            }
+            crate::gate::remove_result(&g2.written);
+        }
+        if chosen == 0 && laids.len() > 1 {
+            // all worse: report, and leave in .rejected, the preferred run
             g = finish(&text_of(&laids[0].1)?)?;
         }
     }
@@ -1401,6 +1459,30 @@ mod tests {
     use super::*;
 
     const DSN: &str = "(pcb x\n  (network\n    (net A\n      (pins U1-1 U2-1)\n    )\n  )\n  (wiring\n    (wire (path F.Cu 300 0 0 10 0)(net A)(type fix))\n    (wire (path B.Cu 300 0 0 10 0)(net COIL)(type fix))\n    (via \"Via[0-3]\" 5 5 (net COIL)(type fix))\n  )\n)\n";
+
+    #[test]
+    fn attempts_turn_the_net_list() {
+        let dsn = "(pcb x (network (net A (pins R1-1 R2-1)) (net B (pins R1-2)) (net \"C 1\" (pins R2-2)) (class kicad_default A B \"C 1\")))";
+        let order = |t: &str| sexpr::parse(t).unwrap().find("network").unwrap().find_all("net").map(|n| n.arg(1).unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(dsn_net_count(dsn).unwrap(), 3);
+        // no turn is the file as it is
+        assert_eq!(nets_turned(dsn, 0).unwrap(), dsn);
+        // every net keeps its pins, and the class is not touched
+        let t = nets_turned(dsn, 1).unwrap();
+        assert_eq!(order(&t), ["B", "C 1", "A"]);
+        assert!(t.contains("(net A (pins R1-1 R2-1))") && t.ends_with("(class kicad_default A B \"C 1\")))"));
+        // a file with no network is left alone
+        assert_eq!(nets_turned("(pcb x)", 3).unwrap(), "(pcb x)");
+        // 45 nets: 7 places an attempt. 14 nets share a factor with 7, so the step is 11 and no order comes twice
+        // (review 24, 3). The attempts end when every order has been used
+        assert_eq!((0..5).map(|k| net_turn(45, k)).collect::<Vec<_>>(), [Some(0), Some(7), Some(14), Some(21), Some(28)]);
+        let turns: Vec<usize> = (0..14).map(|k| net_turn(14, k).unwrap()).collect();
+        let mut seen = turns.clone();
+        seen.sort();
+        assert_eq!((turns[1], seen), (11, (0..14).collect::<Vec<_>>()));
+        assert_eq!((net_turn(14, 14), net_turn(6, 6), net_turn(1, 1), net_turn(0, 1), net_turn(1, 0)), (None, None, None, None, Some(0)));
+        assert_eq!((0..6).map(|k| net_turn(6, k).unwrap()).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5].map(|k| k * 7 % 6));
+    }
 
     #[test]
     fn declares_pinless_wiring_nets_once() {

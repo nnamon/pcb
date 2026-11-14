@@ -10,7 +10,7 @@
 //! - **stock:** stock under what the order needs (`[assembly] boards` times the part's count) fails; under 20 times
 //!   that, or under 1000, is a `buy-ahead` warning.
 //! - **economic:** `componentProductType` 2 is Standard assembly only.
-//! - **footprint:** with a board, each assembled top-side part's pads are matched to JLCPCB's footprint (by pad
+//! - **footprint:** with a board, each assembled part's pads are matched to JLCPCB's footprint (by pad
 //!   number when the numbers are the same, else by shape) over the four quarter turns. The turn and the
 //!   footprint origin's place are the rotation and CPL offsets the release needs; they must equal the
 //!   `[parts.<LCSC>]` entry (zero when there is none), and the pads must land within 0.05 mm (0.15 mm for
@@ -188,7 +188,9 @@ fn board_pads(b: &Board, reference: &str) -> Vec<(String, f64, f64)> {
             // rotate() turns local to board as (x cos + y sin, -x sin + y cos); its inverse
             let lx = dx * a.cos() - dy * a.sin();
             let ly = dx * a.sin() + dy * a.cos();
-            (q.number.clone(), lx, -ly)
+            // KiCad keeps a flipped footprint mirrored top to bottom in its own frame (its y negated; pcbnew 10.0.8,
+            // either flip direction), so a bottom part's pads are mirrored back to the footprint as its library has it
+            (q.number.clone(), lx, if f.layer == "B.Cu" { ly } else { -ly })
         })
         .collect()
 }
@@ -313,8 +315,7 @@ pub fn check(l: &Loaded, b: Option<&Board>, work: &Path) -> Result<Report> {
                 let jp: Vec<(String, f64, f64)> = ep.iter().map(|q| (q.number.clone(), q.x, -q.y)).collect();
                 let rule = p.parts.get(code);
                 for reference in refs {
-                    let Some(f) = b.footprint_by_ref(reference) else { continue };
-                    if f.layer == "B.Cu" {
+                    if b.footprint_by_ref(reference).is_none() {
                         continue;
                     }
                     let bp = board_pads(b, reference);

@@ -111,7 +111,7 @@ why = "J1's shell tabs overlap C1's courtyard by design; checked against the con
 
 The other sections are `[assembly]` (machine sides, hand-fitted parts, designator renames, boards ordered, the service), `[finish]`, `[outline]` (`rect_mm`, or a GeoJSON `file`), `[[keepout]]`, `[fill]` and `fill_grow_mm`, `[[stitch]]`, `[[net_tie]]`, `[[pad_override]]`, `[[drc_allow]]`, `[[paste]]`, `[[art]]`, `[parts.<LCSC>]`, `[bringup]`, `[drawing]` and `[decisions]`. `[parts.<LCSC>]` holds CPL offsets and datasheet pin names, and needs a `source` saying where they came from. `[decisions]` records owner decisions an agent must not ask about again. The fields of every section are the structs in [`src/project.rs`](src/project.rs); "Project file" in [`DESIGN.md`](DESIGN.md) explains most of them.
 
-`[project] pcb` pins the tool, for example `pcb = "0.7"`. The commands that check the project (`status`, `parts`, `sync`, `place`, `zone`, `paste`, `art`, `check`, `gate pass`, `release`, `drawing`, `render --look`) refuse a build of another MINOR version, and a pin of `"0.7.0"` accepts that version alone. A MINOR release of `pcb` is one that could make a passing board fail or changes a file `pcb release` writes, so a pinned board keeps being judged by the checks it was designed under.
+`[project] pcb` pins the tool, for example `pcb = "0.8"`. The commands that check the project (`status`, `parts`, `sync`, `place`, `zone`, `paste`, `art`, `check`, `gate pass`, `release`, `drawing`, `render --look`) refuse a build of another MINOR version, and a pin of `"0.8.0"` accepts that version alone. A MINOR release of `pcb` is one that could make a passing board fail or changes a file `pcb release` writes, so a pinned board keeps being judged by the checks it was designed under.
 
 ## Coordinates
 
@@ -192,15 +192,15 @@ KiCad's DRC runs twice, once with the board's own rules and once with the fab's 
 | `width-current` | The narrowest track per layer on a net with `current_a`, against IPC-2221 at a 10 °C rise (outer 1 oz, inner 0.5 oz) |
 | `via-current` | A net with `current_a` whose pads are joined only through vias that together carry less: each via carries what its barrel does (IPC-2221 at a 10 °C rise, 18 µm plating: 1.4 A for a 0.3 mm hole). The item names the first via (`V5 via 30.5 44.2`) |
 | `near` | A part farther than `max_mm` from its pin, pad centre to the nearest pad centre on the same net |
-| `edge` | A part's footprint origin farther than `max_mm` from its edge of the outline's bounding box, or a hole nearer the edge than `min_web_mm` |
+| `edge` | A part's footprint origin farther than `max_mm` from the outline, measured towards its side, or outside the outline; or a hole with less than `min_web_mm` of board to the nearest edge |
 | `spec` | With a `[finish]` and Economic assembly: a board spec the service refuses (4 layers other than green, ENIG other than green, black 2-layer without HASL). On 6 layers it warns `spec-unchecked` instead |
 | `via-in-pad` | A via's hole in a pasted pad of an assembled part; an open drill wicks solder away from the joint |
 | `paste` | An assembled SMD pad with no paste |
-| `paste-unassembled` | Paste on a part left out of the CPL, which JLCPCB would print and reflow into a solder bump |
+| `paste-unassembled` | Paste on a part left out of the CPL, on its pads or drawn in its footprint, which JLCPCB would print and reflow into a solder bump |
 | `side` | An assembled part on a side not in `machine_sides` |
-| `cpl-bottom` | Any part assembled on the bottom: `pcb` doesn't convert its CPL rotation, which JLCPCB mirrors |
+| `cpl-bottom` | Any part assembled on the bottom. `pcb release` writes its CPL rotation as seen from the bottom, a rule JLCPCB doesn't publish, so check each in JLCPCB's placement preview and waive this with the date |
 | `silk` | Silkscreen lines under 0.15 mm; text under 0.6 mm cap height |
-| `silk-owner` | A visible footprint reference nearer another part's pads than its own |
+| `silk-owner` | A visible footprint reference whose middle is nearer another part's pads than its own, or that lies over another part's pad and clear of its own part |
 | `ring` | Annular rings under 0.13 mm on vias, 0.2 mm on plated pads |
 | `edge-setting` | An outline with arcs and zones, and a copper-to-edge setting under 0.35 mm: pours fill to chords of a curve and read back under 0.3 mm |
 | `testpoint` | A `[bringup] test_points` reference missing, or with no exposed outer pad |
@@ -248,11 +248,11 @@ Checks 1, 5, 17, 18 and 20, and the rest of check 4, are a person's or a reviewe
 
 ### Known limits
 
-- `[[edge]]` measures from each footprint's origin to the outline's bounding box, so on a notched or L-shaped board, or for a large part, the distance is wrong. Measuring to the outline itself would fix it.
-- `silk-owner` reads only KiCad's own reference text, at its anchor. A board whose designators are artwork gets no judgement, and a long reference can sit across another part unflagged, so the reviewer checks those by eye.
-- Paste drawn as footprint graphics is not seen, so such a part passes `paste` and `paste-unassembled` and is printed anyway. Draw paste as pads.
+- `[[edge]]` measures from each footprint's origin, so for a large part the distance isn't its body's. It measures to the outline drawn on the board, cut-outs included; an outline held in a footprint isn't read, and one that isn't closed gives `edge` findings with the wrong reason.
+- `silk-owner` reads only KiCad's own reference text, and takes its width as one character width per letter. A top- or bottom-justified reference, or one with "keep upright" off, is placed up to half its height or its whole length off. A board whose designators are artwork gets no judgement, so the reviewer checks those by eye.
+- Paste drawn as footprint graphics counts for `paste-unassembled` only: on an assembled part `paste` still asks for paste on the pads, and the Gerber read-back doesn't judge drawn paste. Draw paste as pads.
 - The copper lengths `pcb` measures are lower bounds: a path counts a fill as the straight line between the two things it joins, and a via as 1.6 mm. `via-current` judges a group of vias that is the only copper between some of a net's pads. It holds `current_a` against every branch, so a pull-up behind one via on a 2 A net is a finding to waive, and it stays silent where the current is shared between vias that join different pieces of copper. The decoupling loop is measured for the nearest capacitor of each IC supply net, not for each supply pin, and only when the netlist names or types the IC's supply pins.
-- `pcb parts` doesn't match bottom-side footprints.
+- A bottom-side part's CPL rotation follows the rule JLCPCB's importers use (180 minus KiCad's angle, plus the part's offset). No order of ours has proved it, so `cpl-bottom` stays a finding until the placement preview has been checked.
 - The `circuit` rules check that a part is there, not that it is the right value or near enough: a 100 pF capacitor passes `decoupling`, and its distance from the pin is a `[[near]]` rule's. `pcb search` and `pcb parts --live` use JLCPCB's parts API, which is not a published interface and can change.
 - `pcb route` refuses a board with track arcs (`arc-unsupported`): replace them with segments, or route that net by hand. Paste windows work on the top side only, and `add_via` makes through vias only.
 - `pcb new --layers 6` is accepted, but `pcb sync` can't make the board. JLCPCB publishes no Economic assembly colour or finish rules for 6 layers, so on that process `pcb check` warns `spec-unchecked` and doesn't judge the spec. There is no 8-layer fab file.
@@ -272,7 +272,7 @@ Checks 1, 5, 17, 18 and 20, and the rest of check 4, are a person's or a reviewe
 | Inspection | `pcb status`; `pcb info BOARD` (the board, one part or one net); `pcb diff A B` (two boards or git revisions as `REV:path`: parts moved, copper per net, zones); `pcb render BOARD` (a PNG with nets labelled, or `--look` for the board as it will look made, in the `[finish]` colours); `pcb drawing placement` |
 | Import and diagnostics | `pcb import-tscircuit` (a KiCad board from a tscircuit circuit JSON); `pcb roundtrip` (a check that pcb's KiCad parser writes a board back unchanged) |
 
-The `pcb route` options a first route needs are `--region`, `--project`, `--width`, `--rip NETS` (clear and re-route a net's copper inside the region) and `--layers`, which defaults to `F.Cu,B.Cu`, so inner layers are routed only when named. `--timeout` is 900 s per Freerouting run, and a route runs Freerouting up to `--attempts` plus one times. `pcb route --help` lists the rest.
+The `pcb route` options a first route needs are `--region`, `--project`, `--width`, `--rip NETS` (clear and re-route a net's copper inside the region) and `--layers`, which defaults to `F.Cu,B.Cu`, so inner layers are routed only when named. `--timeout` is 900 s per Freerouting run, and a route runs Freerouting up to `--attempts` plus one times. When a route leaves nets open, try `--attempts 4`: each attempt after the first gives the router the nets in another order, and the one leaving fewest open is kept. `pcb route --help` lists the rest.
 
 Every command prints a summary and exits with one of these codes:
 - 0, done;

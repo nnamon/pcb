@@ -2,6 +2,22 @@
 
 The minor version is the milestone (see "Milestones" in `DESIGN.md`): 0.4.0 is M4. A patch is a fix within a milestone. Review reports are in `docs/reviews/`.
 
+## 0.8.0 (14 Nov 2026)
+
+Bottom-side assembly, three of review 21's open findings, and routing attempts that differ. A new MINOR: `pcb release` writes a different CPL rotation for a bottom-side part, and a board that passed can fail on `edge`, `silk-owner` or `paste-unassembled`, so a project moves its `[project] pcb` pin to `"0.8"` and runs `pcb check` again.
+
+- **Bottom-side parts** (`DESIGN.md`, "Bottom-side assembly"):
+  - `pcb release` writes a bottom part's CPL rotation as seen from the bottom: 180 minus KiCad's angle, plus the part's `rotation_offset_deg`. It wrote KiCad's angle. A `cpl_offset_mm` with a y part is now applied the right way up on the bottom.
+  - `pcb parts` matches bottom-side footprints to JLCPCB's. It skipped them, so a bottom part's footprint and offsets went unchecked.
+  - `cpl-bottom` and `bottom-cpl-unverified` stay, reworded: JLCPCB publishes no rule for bottom rotations, so the placement preview is still checked for each order.
+- **`[[edge]]`** (review 21, 4) measures to the outline itself, towards the named side, not to its bounding box: on an L-shaped or notched board the bounding box gave a wrong distance. A part outside the outline is a finding. `min_web_mm` is the board left between a hole and the nearest edge of any side; it was measured to the named side only.
+- **The outline** now includes a rounded rectangle's corners (KiCad 10's `radius`) and bezier curves. Both were read wrongly or not at all, so on such a board the outline's bounding box, and with it the origin of the Gerbers and the CPL, can move.
+- **`silk-owner`** (review 21, 15) judges a designator by the middle of its text, not its anchor, which is one end of a left- or right-justified text. A designator that lies over another part's pad and clear of its own part is a finding.
+- **`paste-unassembled`** (review 21, 12) counts paste drawn as footprint graphics or text (item `<REF> drawn`) and pads on `*.Paste`.
+- Review 24 (`docs/reviews/24_0.8.0.md`) found no blocker; its eight should-fix findings are closed in this version.
+- **`pcb route --attempts N`**: each attempt after the first gives Freerouting the nets in another order, until every order has been used. On a board with no copper laid before the run, Freerouting 2.5.0 left the same nets open in every run, so N attempts gained nothing. On paddle-keyer v1.0.0, stripped, the first order leaves three nets open and the second none (`docs/bench/route-0.8.0.md`). Every attempt can now reach the gate, fewest open nets first; before, only two did, so a clean first attempt could lose to two worse ones. `data.attempts[].net_turn` is new, and `schemas/route.json` no longer caps `attempts` at two entries, which `--attempts 3` already broke.
+- Escape stubs at fine-pitch pads were tried and not built: they left more nets open (the same benchmark file).
+
 ## 0.7.0 (14 Nov 2026)
 
 The copper graph, the part of M5b that the reviews of the badge carrier did by hand (`DESIGN.md`, "The copper graph"). A new MINOR: a board that passed can fail on `via-current`, and `usb-cc` now reads more schematics, so a project moves its `[project] pcb` pin to `"0.7"` and runs `pcb check` again. Review 23 (`docs/reviews/23_0.6.1_0.7.0.md`) found a fault in 0.6.1 and one in this version's first `via-current`; both are fixed here.

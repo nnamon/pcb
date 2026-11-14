@@ -77,7 +77,7 @@ Every `pcb` error and warning carries one of these codes (see `src/contract.rs` 
 | `layer-missing` | compare-gerbers | A layer with something on it is in only one of the two sets |
 | `waiver-unused` | check | A `[[waiver]]` matched no finding (stale or misspelt), or its finding counts more than its `max` |
 | `stale` | check | A finding, not a warning: `pcb zone`, `pcb paste` or `pcb art` has not run since pcb.toml's settings for it, or a file they name, changed. Run it again; no waiver covers it |
-| `bottom-cpl-unverified` | release | The CPL has bottom-side parts, whose rotation convention pcb has not checked against JLCPCB's |
+| `bottom-cpl-unverified` | release | The CPL has bottom-side parts. Their rotations are written as seen from the bottom, a rule JLCPCB does not publish: check them in the placement preview |
 | `silk-on-via` | release, check --fab | Silkscreen crosses tented via holes; the ink dips into each. Move the text or the via if the text matters |
 | `via-in-pad` | route | The router laid a via on a pasted SMD pad; `pcb check` reports it as a `via-in-pad` finding. Move the via with `pcb edit`, or pre-wire the net away from the pad |
 | `mask-dam` | release, check --fab | Mask openings closer together than the fab's solder mask bridge (fab file `mask_dam_mm`): the fab opens the mask across the gap. Inspect those pads for solder bridges |

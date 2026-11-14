@@ -117,7 +117,9 @@ enum Cmd {
         /// Leave the copper zones out of what the router sees, so it routes their nets as tracks too
         #[arg(long)]
         no_zones: bool,
-        /// Number of Freerouting runs. pcb keeps the run with the fewest open nets; two runs give different results
+        /// Most Freerouting runs to make, stopping at the first that leaves no net open. pcb keeps the run with the
+        /// fewest open nets. Each run after the first lists the nets in another order, which changes what the router
+        /// leaves open
         #[arg(long, default_value_t = 1)]
         attempts: u32,
         /// pcb.toml, or the folder holding it. Its `[nets.X] class = "critical"` nets are never ripped or laid by
@@ -989,7 +991,7 @@ fn run(cli: Cli) -> Result<Reply> {
             let outcome = if r.problems.is_empty() { Outcome::Done } else { Outcome::Rejected };
             let mut warnings = r.warnings.clone();
             if r.bottom_parts > 0 {
-                warnings.push(contract::warn("bottom-cpl-unverified", format!("{} bottom-side parts in the CPL: their rotations are KiCad's board angles, not checked against JLCPCB's bottom-side convention; check them in JLCPCB's placement preview", r.bottom_parts)));
+                warnings.push(contract::warn("bottom-cpl-unverified", format!("{} bottom-side parts in the CPL: their rotations are written as seen from the bottom (180 minus KiCad's angle, plus the part's offset), a rule JLCPCB does not publish; check them in JLCPCB's placement preview", r.bottom_parts)));
             }
             if !r.version_on_board {
                 warnings.push(contract::warn("version-not-on-board", "no [[text]] entry prints the version on the board; add one with {version} (GUIDELINES: version on the board)".to_string()));

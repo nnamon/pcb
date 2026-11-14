@@ -104,14 +104,14 @@
      "attempts": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 2,
       "items": {
        "type": "object",
        "required": [
         "region_keepouts",
         "added_segments",
         "added_vias",
-        "open"
+        "open",
+        "net_turn"
        ],
        "additionalProperties": false,
        "properties": {
@@ -131,6 +131,10 @@
          "items": {
           "type": "string"
          }
+        },
+        "net_turn": {
+         "type": "integer",
+         "minimum": 0
         }
        }
       }

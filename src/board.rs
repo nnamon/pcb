@@ -422,14 +422,43 @@ impl Board {
                     })
                 }
                 Some("zone") => b.zones.push(parse_zone(n, None, (0.0, 0.0))),
-                Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle")
+                Some("gr_line") | Some("gr_rect") | Some("gr_arc") | Some("gr_poly") | Some("gr_circle") | Some("gr_curve")
                     if n.find("layer").and_then(|l| l.arg(1)) == Some("Edge.Cuts") => {
                         let (x0, y0) = xy(n, "start");
                         let (x1, y1) = xy(n, "end");
                         match n.head() {
                             Some("gr_rect") => {
-                                for (a, b2, c, d) in [(x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)] {
-                                    b.outline.push(Segment { x0: a, y0: b2, x1: c, y1: d });
+                                // KiCad 10 writes a rounded rectangle as `(radius r)`: each corner a quarter circle
+                                // in 16 chords (review 24, 5: it was read as a sharp rectangle)
+                                let (xa, xb, ya, yb) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+                                let r = n.find("radius").and_then(|w| w.num(1)).unwrap_or(0.0).clamp(0.0, (xb - xa).min(yb - ya) / 2.0);
+                                let mut ring: Vec<(f64, f64)> = vec![];
+                                for (cx, cy, from) in [(xb - r, ya + r, -90.0f64), (xb - r, yb - r, 0.0), (xa + r, yb - r, 90.0), (xa + r, ya + r, 180.0)] {
+                                    let steps = if r > 0.0 { 16 } else { 0 };
+                                    for i in 0..=steps {
+                                        let a = (from + 90.0 * i as f64 / steps.max(1) as f64).to_radians();
+                                        ring.push((cx + r * a.cos(), cy + r * a.sin()));
+                                    }
+                                }
+                                for i in 0..ring.len() {
+                                    let (a, c) = (ring[i], ring[(i + 1) % ring.len()]);
+                                    b.outline.push(Segment { x0: a.0, y0: a.1, x1: c.0, y1: c.1 });
+                                }
+                            }
+                            Some("gr_curve") => {
+                                // a cubic bezier, `(pts (xy) (xy) (xy) (xy))`, in 32 chords (review 24, 4: it was not
+                                // read, which left the outline open)
+                                let p = pts(n);
+                                if p.len() == 4 {
+                                    let at = |k: f64| {
+                                        let m = 1.0 - k;
+                                        (m * m * m * p[0].0 + 3.0 * m * m * k * p[1].0 + 3.0 * m * k * k * p[2].0 + k * k * k * p[3].0,
+                                         m * m * m * p[0].1 + 3.0 * m * m * k * p[1].1 + 3.0 * m * k * k * p[2].1 + k * k * k * p[3].1)
+                                    };
+                                    for i in 0..32 {
+                                        let (a, c) = (if i == 0 { p[0] } else { at(i as f64 / 32.0) }, if i == 31 { p[3] } else { at((i + 1) as f64 / 32.0) });
+                                        b.outline.push(Segment { x0: a.0, y0: a.1, x1: c.0, y1: c.1 });
+                                    }
                                 }
                             }
                             Some("gr_poly") => {
@@ -442,7 +471,16 @@ impl Board {
                             }
                             Some("gr_arc") => {
                                 let (mx, my) = xy(n, "mid");
-                                for s in arc_points((x0, y0), (mx, my), (x1, y1)).windows(2) {
+                                // the ends as the file has them, not as the arc's trigonometry gives them back, so
+                                // an arc meets the line it joins to the last bit (review 24, 1)
+                                let mut ap = arc_points((x0, y0), (mx, my), (x1, y1));
+                                if let Some(f) = ap.first_mut() {
+                                    *f = (x0, y0);
+                                }
+                                if let Some(l) = ap.last_mut() {
+                                    *l = (x1, y1);
+                                }
+                                for s in ap.windows(2) {
                                     b.outline.push(Segment { x0: s[0].0, y0: s[0].1, x1: s[1].0, y1: s[1].1 });
                                 }
                             }
@@ -598,6 +636,28 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outline_reads_rounded_rectangles_and_curves() {
+        // review 24, 5 and 4: `(radius 8)` on a gr_rect and a gr_curve were not read
+        let closed = |b: &Board| b.outline.iter().enumerate().all(|(i, s)| {
+            let n = &b.outline[(i + 1) % b.outline.len()];
+            (s.x1 - n.x0).abs() < 1e-9 && (s.y1 - n.y0).abs() < 1e-9
+        });
+        let b = Board::from_str(r#"(kicad_pcb (version 20260206) (gr_rect (start 40 30) (end 0 0) (radius 8) (layer "Edge.Cuts")))"#.to_string()).unwrap();
+        assert!(closed(&b) && b.outline.len() == 4 * 17, "{}", b.outline.len());
+        // the corner is cut: no outline point nearer (0, 0) than the arc, 8 mm round (8, 8)
+        let near = b.outline.iter().map(|s| s.x0.hypot(s.y0)).fold(f64::MAX, f64::min);
+        assert!((near - (128.0f64.sqrt() - 8.0)).abs() < 0.01, "{near}");
+        assert_eq!(b.bbox(), (0.0, 0.0, 40.0, 30.0));
+        let sharp = Board::from_str(r#"(kicad_pcb (version 20260206) (gr_rect (start 0 0) (end 40 30) (layer "Edge.Cuts")))"#.to_string()).unwrap();
+        assert!(closed(&sharp) && sharp.outline.len() == 4 && sharp.bbox() == (0.0, 0.0, 40.0, 30.0));
+        // three lines and a bezier for the bottom edge, which rises to y = 22.5 in the middle
+        let c = Board::from_str(r#"(kicad_pcb (version 20260206) (gr_line (start 0 30) (end 0 0) (layer "Edge.Cuts")) (gr_line (start 0 0) (end 40 0) (layer "Edge.Cuts")) (gr_line (start 40 0) (end 40 30) (layer "Edge.Cuts")) (gr_curve (pts (xy 40 30) (xy 30 20) (xy 10 20) (xy 0 30)) (layer "Edge.Cuts")))"#.to_string()).unwrap();
+        assert!(closed(&c) && c.outline.len() == 3 + 32);
+        let top = c.outline.iter().filter(|s| (s.x0 - 20.0).abs() < 1e-9).map(|s| s.y0).fold(f64::MIN, f64::max);
+        assert!((top - 22.5).abs() < 1e-9, "{top}");
+    }
 
     #[test]
     fn arc_through_mid() {

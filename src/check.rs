@@ -13,7 +13,8 @@
 //! - **via-in-pad** (M5a): a via's hole on a pasted SMD pad of an assembled part; open, it wicks the solder away.
 //! - **paste-unassembled** (M5a): paste on a part the CPL leaves out (test pads, hand-fitted and DNP parts), on a side
 //!   that gets a stencil.
-//! - **cpl-bottom** (M5a): parts assembled on the bottom; their CPL rotation is not verified against JLCPCB's.
+//! - **cpl-bottom** (M5a): parts assembled on the bottom; their CPL rotation is converted (0.8.0) by a rule JLCPCB
+//!   does not publish, so the placement preview is still the proof.
 //! - **near** (M5a): a `[[near]]` part farther from its pin than `max_mm`, or with no pad on the pin's net.
 //! - **edge** (M5a): an `[[edge]]` part farther from its edge than `max_mm`, or one of its holes with less board to
 //!   the edge than `min_web_mm`.
@@ -75,6 +76,7 @@ fn fix_of(check: &str, item: &str) -> Option<String> {
     Some(match check {
         "stale" => format!("pcb {item}"),
         "via-in-pad" => "pcb edit: move the via off the pad (a `move_via` op), or waive it for a plugged via or a thermal pad".into(),
+        "paste-unassembled" if item.ends_with(" drawn") => format!("take the paste-layer shapes out of {first}'s footprint, then pcb sync"),
         "paste-unassembled" => format!("add a [[paste]] with pad = \"{first}.<PAD>\" and no_paste = true for each pasted pad to pcb.toml, then pcb paste"),
         "paste" => "pcb paste, after a [[paste]] rule for the part if its footprint has no paste".into(),
         "near" => format!("move {first} in [[place]], then pcb place"),
@@ -168,6 +170,79 @@ fn content(text: &str) -> Result<Vec<String>> {
     }
     v.sort();
     Ok(v)
+}
+
+/// mm from a point to the board's outline, going towards a side of the board as drawn (`top`, `bottom`, `left`,
+/// `right`). `Err` when the point is outside the outline: with how far beyond that side's edge it is, when it is.
+/// The outline's cut-outs count as edges. A point on the outline, level with a corner or level with the end of an
+/// arc is judged a tenth of a micrometre to either side of its line as well, and is on the board if either is
+/// (review 24, 1 and 6: a part level with a corner arc's end, or on the right or lower edge, was reported outside).
+fn edge_ahead(outline: &[crate::board::Segment], side: &str, x: f64, y: f64) -> std::result::Result<f64, Option<f64>> {
+    let (horizontal, sign) = match side {
+        "top" => (false, -1.0),
+        "bottom" => (false, 1.0),
+        "left" => (true, -1.0),
+        _ => (true, 1.0),
+    };
+    // along the ray from (pa, pb), where pb is the coordinate the ray keeps: signed distances to every outline
+    // segment it crosses; each segment is half open, so a ray through a corner counts one crossing
+    let cast = |pa: f64, pb: f64| -> std::result::Result<f64, Option<f64>> {
+        let hits: Vec<f64> = outline.iter().filter_map(|s| {
+            let (a0, b0, a1, b1) = if horizontal { (s.x0, s.y0, s.x1, s.y1) } else { (s.y0, s.x0, s.y1, s.x1) };
+            ((b0 <= pb) != (b1 <= pb)).then(|| (a0 + (pb - b0) / (b1 - b0) * (a1 - a0) - pa) * sign)
+        }).collect();
+        // on the outline is on the board: 0 when it is that side's edge, else the way to the next one
+        let on = hits.iter().any(|d| d.abs() <= 1e-6);
+        let ahead: Vec<f64> = hits.iter().copied().filter(|d| *d > 1e-6).collect();
+        if ahead.len() % 2 == 1 {
+            return Ok(ahead.iter().copied().fold(f64::MAX, f64::min));
+        }
+        if on {
+            return Ok(0.0);
+        }
+        Err(if ahead.is_empty() { hits.iter().copied().fold(None, |m: Option<f64>, d| Some(m.map_or(-d, |m| m.min(-d)))) } else { None })
+    };
+    let (pa, pb) = if horizontal { (x, y) } else { (y, x) };
+    let on_line = cast(pa, pb);
+    let near: Vec<f64> = [pb - 1e-4, pb + 1e-4].into_iter().filter_map(|q| cast(pa, q).ok()).collect();
+    match (on_line, near.is_empty()) {
+        (Ok(d), true) => Ok(d),
+        // beside the line the board is there: the nearer edge of the two sides, as the line itself can run along one
+        (Ok(d), false) => Ok(near.iter().copied().fold(d, f64::min)),
+        (Err(_), false) => Ok(near.iter().copied().fold(f64::MAX, f64::min)),
+        (Err(e), true) => Err(e),
+    }
+}
+
+/// Points over a KiCad text's ink, at most 0.1 mm apart along it and across 0.8 of its height, and the text's
+/// middle: `at` its anchor, `angle` as the file has it, `width` and `height` in mm, `justify` the words of its
+/// `(justify …)`. KiCad draws a text upright (its angle brought into -90 to 90 degrees); a left- or right-justified
+/// text runs from its anchor, and a mirrored one the other way. Measured on KiCad 10.0.8 (footprints at 0, 90, 30
+/// and 200 degrees, front and back). Not told apart: a text with "keep upright" off, which can run the other way,
+/// and a top- or bottom-justified text, whose middle is half its height from where this puts it (review 24, 11).
+fn text_points(at: (f64, f64), angle: f64, width: f64, height: f64, justify: &[&str]) -> ((f64, f64), Vec<(f64, f64)>) {
+    let mut a = angle.rem_euclid(180.0);
+    if a > 90.0 {
+        a -= 180.0;
+    }
+    let (ux, uy) = (a.to_radians().cos(), -a.to_radians().sin());
+    let side = if justify.contains(&"left") { 1.0 } else if justify.contains(&"right") { -1.0 } else { 0.0 } * if justify.contains(&"mirror") { -1.0 } else { 1.0 };
+    let mid = (at.0 + side * ux * width / 2.0, at.1 + side * uy * width / 2.0);
+    // 0.1 mm apart, so no pad JLCPCB makes falls between two points (review 24, 12: a 0.3 x 0.25 mm pad did
+    // between rows 0.4 mm apart); capped for a text of absurd size
+    let n = ((width / 0.1).ceil() as usize).clamp(1, 600);
+    let rows = ((0.8 * height / 0.1).ceil() as usize).clamp(2, 40);
+    let mut pts = vec![];
+    for r in 0..=rows {
+        let row = (r as f64 / rows as f64 - 0.5) * 0.8;
+        // across the text: the line's normal
+        let (ox, oy) = (-uy * row * height, ux * row * height);
+        for i in 0..=n {
+            let k = (i as f64 / n as f64 - 0.5) * width;
+            pts.push((mid.0 + ux * k + ox, mid.1 + uy * k + oy));
+        }
+    }
+    (mid, pts)
 }
 
 /// mm from a point to a pad's copper (its turned bounding rectangle); 0 inside it.
@@ -354,22 +429,30 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
     let sides: Vec<String> = asm.map(|x| x.machine_sides.clone()).filter(|v| !v.is_empty()).unwrap_or_else(|| vec!["top".into()]);
     let hand: Vec<String> = asm.map(|x| x.hand_fit.clone()).unwrap_or_default();
     let mut is_assembled = vec![];
+    let mut drawn_paste = vec![];
     for fp in &b.footprints {
         let node = sexpr::parse(&b.src[fp.span.0..fp.span.1])?;
         let prop = |k: &str| node.find_all("property").find(|q| q.arg(1) == Some(k)).and_then(|q| q.arg(2)).unwrap_or("").to_string();
         let attrs: Vec<String> = node.find("attr").map(|a| a.items()[1..].iter().filter_map(|x| x.atom().map(String::from)).collect()).unwrap_or_default();
         is_assembled.push(!prop("LCSC").is_empty() && !hand.contains(&fp.reference) && !attrs.iter().any(|a| a == "exclude_from_bom" || a == "exclude_from_pos_files" || a == "dnp"));
+        // paste drawn as footprint graphics or text (every `fp_` item), on a side that gets a stencil (review 21, 12;
+        // review 24, 10)
+        drawn_paste.push(node.items().iter().filter(|g| g.head().is_some_and(|h| h.starts_with("fp_")) && g.find("layer").and_then(|l| l.arg(1)).is_some_and(|l| (l == "F.Paste" && sides.iter().any(|s| s == "top")) || (l == "B.Paste" && sides.iter().any(|s| s == "bottom")))).count());
     }
     // a board with no assembled part gets no stencil
     let stencil = is_assembled.iter().any(|a| *a);
-    for (fp, assembled) in b.footprints.iter().zip(is_assembled) {
+    for ((fp, assembled), drawn) in b.footprints.iter().zip(is_assembled).zip(drawn_paste) {
         let side = if fp.layer == "B.Cu" { "bottom" } else { "top" };
         if !assembled {
             // paste on a part the CPL leaves out, on a side that gets a stencil: JLCPCB prints and reflows it into
             // solder bumps (GUIDELINES check 14; the badge carrier 0.7.0 missed a new test pad)
-            let pasted = fp.pads.iter().filter(|q| q.layers.iter().any(|x| (x == "F.Paste" && sides.iter().any(|s| s == "top")) || (x == "B.Paste" && sides.iter().any(|s| s == "bottom")))).count();
+            // `*.Paste` is both sides (review 21, 12)
+            let pasted = fp.pads.iter().filter(|q| q.layers.iter().any(|x| ((x == "F.Paste" || x == "*.Paste") && sides.iter().any(|s| s == "top")) || ((x == "B.Paste" || x == "*.Paste") && sides.iter().any(|s| s == "bottom")))).count();
             if pasted > 0 && stencil {
                 add("paste-unassembled", fp.reference.clone(), pasted, format!("{} is left out of the CPL but {pasted} of its pads carry paste; give it [[paste]] no_paste = true", fp.reference));
+            }
+            if drawn > 0 && stencil {
+                add("paste-unassembled", format!("{} drawn", fp.reference), drawn, format!("{} is left out of the CPL but its footprint draws {drawn} shape(s) on the paste layer; take them out of the footprint", fp.reference));
             }
             continue;
         }
@@ -399,10 +482,10 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
         }
     }
 
-    // the CPL's rotations are solved against JLCPCB's footprints for the top only; JLCPCB mirrors the bottom's, and
-    // has changed how more than once (M5 proposal, assumption 1)
+    // a bottom part's CPL rotation is converted (release.rs) by the rule JLCPCB's importers use, which JLCPCB does
+    // not publish and has changed more than once (M5 proposal, assumption 1), so the preview is still the proof
     if bottom_assembled > 0 {
-        add("cpl-bottom", "rotation".into(), bottom_assembled, format!("{bottom_assembled} part(s) are assembled on the bottom; pcb does not solve or convert bottom-side CPL rotations. Check each in JLCPCB's placement preview, then waive this with the date"));
+        add("cpl-bottom", "rotation".into(), bottom_assembled, format!("{bottom_assembled} part(s) are assembled on the bottom; pcb writes their CPL rotation as seen from the bottom (180 minus KiCad's angle, plus the part's offset), a rule JLCPCB does not publish. Check each in JLCPCB's placement preview, then waive this with the date"));
     }
     // the board spec against the assembly service (GUIDELINES check 16; the badge carrier 0.7.2 was 4-layer black
     // ENIG with Economic assembly)
@@ -451,7 +534,6 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
             _ => add("near", item, 1, format!("{} or {} is not on the board", n.part, n.to)),
         }
     }
-    let (ex0, ey0, ex1, ey1) = b.bbox();
     if !p.edge.is_empty() && b.outline.is_empty() {
         add("edge", "outline".into(), 1, "the board has no outline on Edge.Cuts to measure [[edge]] against".into());
     }
@@ -461,25 +543,21 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
                 add("edge", r.clone(), 1, format!("{r} is bound to the {} edge and is not on the board", g.side));
                 continue;
             };
-            // mm from a point to the named edge of the outline's bounding box
-            let to_edge = |x: f64, y: f64| match g.side.as_str() {
-                "top" => y - ey0,
-                "bottom" => ey1 - y,
-                "left" => x - ex0,
-                _ => ex1 - x,
-            };
-            let d = to_edge(fp.x, fp.y);
-            if d < -1e-6 {
-                add("edge", r.clone(), 1, format!("{r} is {:.2} mm outside the {} edge ({})", -d, g.side, g.why));
-            } else if d > g.max_mm + 1e-6 {
-                add("edge", r.clone(), 1, format!("{r} is {d:.2} mm from the {} edge of the outline's bounding box, over {} mm ({})", g.side, sexpr::fmt_num(g.max_mm), g.why));
+            // to the outline itself, towards the named side (review 21, 4: the bounding box was wrong on an L-shaped
+            // or notched board)
+            match edge_ahead(&b.outline, &g.side, fp.x, fp.y) {
+                Err(Some(beyond)) => add("edge", r.clone(), 1, format!("{r} is {beyond:.2} mm outside the {} edge ({})", g.side, g.why)),
+                Err(None) => add("edge", r.clone(), 1, format!("{r} is outside the board's outline ({})", g.why)),
+                Ok(d) if d > g.max_mm + 1e-6 => add("edge", r.clone(), 1, format!("{r} is {d:.2} mm from the {} edge, over {} mm ({})", g.side, sexpr::fmt_num(g.max_mm), g.why)),
+                Ok(_) => {}
             }
             if let Some(web) = g.min_web_mm {
                 for q in fp.pads.iter().filter(|q| q.drill.is_some()) {
                     let (dw, dh) = q.drill.unwrap();
-                    let left = to_edge(q.x, q.y) - dw.max(dh) / 2.0;
+                    // the least board left between the hole and any edge, not only the named one
+                    let left = b.outline.iter().map(|s| crate::route::point_seg_dist((q.x, q.y), (s.x0, s.y0), (s.x1, s.y1))).fold(f64::MAX, f64::min) - dw.max(dh) / 2.0;
                     if left + 1e-6 < web {
-                        add("edge", r.clone(), 1, format!("{r}: {left:.2} mm of board between its hole and the {} edge, under {} mm ({})", g.side, sexpr::fmt_num(web), g.why));
+                        add("edge", r.clone(), 1, format!("{r}: {left:.2} mm of board between its hole and the board's edge, under {} mm ({})", sexpr::fmt_num(web), g.why));
                     }
                 }
             }
@@ -489,7 +567,9 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
     // silkscreen ownership (GUIDELINES check 15; the badge carrier 0.7.1 had about fifteen designators beside the
     // wrong part): each visible reference is nearer its own part's pads than any other part's on that side
     {
-        let mut refs: Vec<(usize, f64, f64, bool)> = vec![];
+        // each visible reference: its text's middle and points over its ink (review 21, 15: the anchor alone is one
+        // end of a left- or right-justified designator)
+        let mut refs: Vec<(usize, (f64, f64), Vec<(f64, f64)>, bool)> = vec![];
         for (i, fp) in b.footprints.iter().enumerate() {
             let node = sexpr::parse(&b.src[fp.span.0..fp.span.1])?;
             let Some(pr) = node.find_all("property").find(|q| q.arg(1) == Some("Reference")) else { continue };
@@ -499,20 +579,30 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
                 continue;
             }
             let at = pr.find("at");
-            let (lx, ly) = (at.and_then(|a| a.arg(1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0), at.and_then(|a| a.arg(2)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0));
-            let (dx, dy) = crate::board::rotate(lx, ly, fp.rot);
-            refs.push((i, fp.x + dx, fp.y + dy, layer.starts_with('B')));
+            let num = |k: usize| at.and_then(|a| a.arg(k)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+            let (dx, dy) = crate::board::rotate(num(1), num(2), fp.rot);
+            let font = pr.find("effects").and_then(|e| e.find("font"));
+            let size = |k: usize| font.and_then(|f| f.find("size")).and_then(|z| z.arg(k)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+            let just: Vec<&str> = pr.find("effects").and_then(|e| e.find("justify")).map(|j| j.args()).unwrap_or_default();
+            let (mid, pts) = text_points((fp.x + dx, fp.y + dy), num(3), pr.arg(2).unwrap_or("").chars().count() as f64 * size(2), size(1), &just);
+            refs.push((i, mid, pts, layer.starts_with('B')));
         }
         let gap = |fp: &crate::board::Footprint, x: f64, y: f64| fp.pads.iter().map(|q| pad_gap(q, (x, y))).fold(f64::MAX, f64::min);
-        for (i, x, y, back) in refs {
+        for (i, (x, y), pts, back) in refs {
             let own = &b.footprints[i];
+            // the middle of the text says whose it is; a text lying on another part's pad and clear of its own part
+            // reads as that part's too
             let d_own = gap(own, x, y);
             if d_own == f64::MAX {
                 continue;
             }
-            let nearer = b.footprints.iter().enumerate().filter(|(k, o)| *k != i && (o.layer == "B.Cu") == back).map(|(_, o)| (gap(o, x, y), &o.reference)).filter(|(d, _)| *d + 0.05 < d_own).min_by(|a, c| a.0.total_cmp(&c.0));
+            let reach = |fp: &crate::board::Footprint| pts.iter().map(|q| gap(fp, q.0, q.1)).fold(f64::MAX, f64::min);
+            let others = || b.footprints.iter().enumerate().filter(|(k, o)| *k != i && (o.layer == "B.Cu") == back).map(|(_, o)| o);
+            let nearer = others().map(|o| (gap(o, x, y), &o.reference)).filter(|(d, _)| *d + 0.05 < d_own).min_by(|a, c| a.0.total_cmp(&c.0));
             if let Some((d, other)) = nearer {
-                add("silk-owner", own.reference.clone(), 1, format!("{}'s designator at ({}, {}) is {d:.2} mm from {other} and {d_own:.2} mm from {}; move it nearer its own part", own.reference, sexpr::fmt_num(x), sexpr::fmt_num(y), own.reference));
+                add("silk-owner", own.reference.clone(), 1, format!("{}'s designator at ({}, {}) is {d:.2} mm from {other} and {d_own:.2} mm from {}; move it nearer its own part", own.reference, sexpr::fmt_num((x * 1e3).round() / 1e3), sexpr::fmt_num((y * 1e3).round() / 1e3), own.reference));
+            } else if reach(own) > 0.05 && let Some(o) = others().find(|o| reach(o) <= 0.0) {
+                add("silk-owner", own.reference.clone(), 1, format!("{}'s designator lies over {}'s pad and {:.2} mm from its own part; move it off {}", own.reference, o.reference, reach(own), o.reference));
             }
         }
     }
@@ -671,6 +761,67 @@ pub fn run_with(l: &Loaded, work: &Path, fab_read_back: bool) -> Result<Report> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_on_an_l_shaped_outline() {
+        // 40 x 30 with the top right 20 x 15 cut away (review 21, 4)
+        let pts = [(0.0, 0.0), (20.0, 0.0), (20.0, 15.0), (40.0, 15.0), (40.0, 30.0), (0.0, 30.0)];
+        let o: Vec<crate::board::Segment> = (0..6).map(|i| crate::board::Segment { x0: pts[i].0, y0: pts[i].1, x1: pts[(i + 1) % 6].0, y1: pts[(i + 1) % 6].1 }).collect();
+        // 2 mm left of the notch's edge, not 22 mm from the bounding box
+        assert_eq!(edge_ahead(&o, "right", 18.0, 5.0), Ok(2.0));
+        assert_eq!(edge_ahead(&o, "top", 30.0, 20.0), Ok(5.0));
+        assert_eq!(edge_ahead(&o, "left", 18.0, 5.0), Ok(18.0));
+        assert_eq!(edge_ahead(&o, "bottom", 10.0, 0.0), Ok(30.0));
+        // on the edge itself is 0, in the notch is outside, and beyond the right edge says how far
+        assert_eq!(edge_ahead(&o, "right", 40.0, 20.0), Ok(0.0));
+        assert_eq!(edge_ahead(&o, "top", 30.0, 5.0), Err(Some(10.0)));
+        assert_eq!(edge_ahead(&o, "right", -5.0, 20.0), Err(None));
+        assert_eq!(edge_ahead(&o, "right", 45.0, 20.0), Err(Some(5.0)));
+        // level with the notch's own edge the board is there on one side of the line: the nearer edge counts
+        assert_eq!(edge_ahead(&o, "right", 10.0, 15.0), Ok(10.0));
+        // on an edge, bound to a side across it, on every edge alike (review 24, 6); every corner is on the board
+        let r = edge_ahead(&o, "top", 40.0, 20.0).unwrap();
+        assert!((r - 5.0).abs() < 1e-3, "{r}");
+        let r = edge_ahead(&o, "left", 10.0, 30.0).unwrap();
+        assert!((r - 10.0).abs() < 1e-3, "{r}");
+        assert!((edge_ahead(&o, "top", 0.0, 20.0).unwrap() - 20.0).abs() < 1e-3);
+        for side in ["top", "bottom", "left", "right"] {
+            for c in [(0.0, 0.0), (40.0, 30.0), (0.0, 30.0), (20.0, 15.0), (40.0, 15.0), (20.0, 0.0)] {
+                assert!(edge_ahead(&o, side, c.0, c.1).is_ok(), "{side} {c:?}");
+            }
+        }
+        // the notch's wall, bound to the top: on the board, 5 mm from the top edge
+        assert!((edge_ahead(&o, "top", 20.0, 5.0).unwrap() - 5.0).abs() < 1e-3);
+        // a segment end a few bits off the grid line, as an arc's computed end is (review 24, 1)
+        let mut w = Vec::new();
+        for (a, c) in [((2.0, 0.0), (38.0, 0.0)), ((38.0, 0.0), (40.0, 2.0)), ((40.0, 2.0), (40.0, 28.0)), ((40.0, 28.0), (38.0, 30.0)), ((38.0, 30.0), (2.0, 30.0)), ((2.0, 30.0), (0.0, 28.0)), ((0.0, 28.0), (0.0, 2.0)), ((0.0, 2.0 + 4e-16), (2.0 - 4e-16, 0.0))] {
+            w.push(crate::board::Segment { x0: a.0, y0: a.1, x1: c.0, y1: c.1 });
+        }
+        assert!((edge_ahead(&w, "top", 2.0, 15.0).unwrap() - 15.0).abs() < 1e-3);
+        assert!((edge_ahead(&w, "left", 20.0, 2.0).unwrap() - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn text_runs_from_its_anchor() {
+        // figures from pcbnew 10.0.8: "SW103", 1 mm, left-justified at 0 degrees, its box centre 2.6 mm right of
+        // the anchor; at 90 degrees above it; mirrored (on the back) the other way; 200 degrees is drawn at 20
+        let mid = |angle: f64, j: &[&str]| {
+            let m = text_points((0.0, 0.0), angle, 5.2, 1.0, j).0;
+            ((m.0 * 100.0).round() / 100.0 + 0.0, (m.1 * 100.0).round() / 100.0 + 0.0)
+        };
+        assert_eq!(mid(0.0, &[]), (0.0, 0.0));
+        assert_eq!(mid(0.0, &["left"]), (2.6, 0.0));
+        assert_eq!(mid(90.0, &["left"]), (0.0, -2.6));
+        assert_eq!(mid(180.0, &["right"]), (-2.6, 0.0));
+        assert_eq!(mid(0.0, &["left", "mirror"]), (-2.6, 0.0));
+        assert_eq!(mid(150.0, &["right", "mirror"]), (2.25, 1.3));
+        assert_eq!(mid(200.0, &["left"]), (2.44, -0.89));
+        assert_eq!(mid(290.0, &["right"]), (-0.89, -2.44));
+        // the points span the ink, 5.2 mm long and 0.8 mm across, 0.1 mm apart
+        let p = text_points((0.0, 0.0), 0.0, 5.2, 1.0, &[]).1;
+        let span = |f: fn(&(f64, f64)) -> f64| (p.iter().map(f).fold(f64::MAX, f64::min), p.iter().map(f).fold(f64::MIN, f64::max));
+        assert_eq!((span(|q| q.0), span(|q| q.1), p.len()), ((-2.6, 2.6), (-0.4, 0.4), 53 * 9));
+    }
 
     #[test]
     fn ipc_widths() {

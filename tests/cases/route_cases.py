@@ -7,6 +7,7 @@ Prints one JSON summary; exit 1 on any failure.
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -160,6 +161,18 @@ def m1_branch(outcome, attempts=None, used=None, warn=None):
     return chk
 
 
+def attempts_turned(js, data, dest):
+    """Two attempts, the second kept, its DSN the first's nets in another order with each net's pins unchanged."""
+    att = data.get("attempts", [])
+    if js["outcome"] != "done" or len(att) != 2 or data.get("attempt_used") != 1 or att[0].get("net_turn") != 0 or not att[1].get("net_turn"):
+        return f"{js['outcome']}: attempts {att}, used {data.get('attempt_used')}"
+    w = os.path.join(os.path.dirname(dest), "w")
+    nets = lambda f: re.findall(r"\(net (\S+)\s+\(pins ([^)]*)\)", open(os.path.join(w, f)).read())
+    a, c = nets("route_region.dsn"), nets("route_region2.dsn")
+    k = att[1]["net_turn"]
+    return True if len(a) > 1 and c == a[k:] + a[:k] else f"net lists: first {a}, second {c}, turn {k}"
+
+
 def m1_outcome(outcome):
     return lambda js, data, dest, files: True if js["outcome"] == outcome else f"outcome {js['outcome']}, want {outcome}: {js.get('error')} {data.get('regressions')}"
 
@@ -192,6 +205,14 @@ M1_CASES = {
     "r09_second_fails": ("base", "", ["--nets", "N,S"], None, {"route_region": [S_OK], "route_open": "fail"}, "10", m1_branch("done", 1, 0, "second-run-failed")),  # source: review 9, second_fails
     "r09_second_times_out": ("base", "", ["--nets", "N,S"], None, {"route_region": [S_OK], "route_open": "sleep"}, "10", m1_branch("done", 1, 0, "second-run-failed")),  # source: review 9, second_times_out
     "r09_first_fails": ("base", "", ["--nets", "N,S"], None, {"route_region": "fail", "route_open": [N_OK]}, "10", m1_branch("failed")),  # source: review 9, first_fails
+    # 0.8.0 (routing benchmark: Freerouting 2.5.0 repeats itself on the same file, so --attempts ran the same run
+    # N times): the second attempt gets the nets in another order. Stand-in java: the first leaves N open, the
+    # second closes it
+    "attempts_turn_the_nets": ("base", "", ["--attempts", "2"], None, {"route_region": [S_OK], "route_region2": [S_OK, N_OK]}, "10", lambda js, data, dest, files: attempts_turned(js, data, dest)),
+    # review 24, 2: the first of three attempts lays nothing; the second and third close N across L, which the gate
+    # rejects. The clean first attempt is kept (only the first two of the sorted runs used to reach the gate)
+    "r24_clean_attempt_kept": ("base", "", ["--attempts", "3"], None, {"route_region": [], "route_region2": [N_SHORT], "route_region3": [N_SHORT]}, "10",
+                               lambda js, data, dest, files: (js["outcome"] == "done" and len(data.get("attempts", [])) == 3 and data.get("attempt_used") == 0 and not any(f.startswith("out.rejected") for f in files)) or f"{js['outcome']} attempts {data.get('attempts')} used {data.get('attempt_used')} {files}"),
     # review 9, check 3: prewire protection through --rip (p1 and p2 with Freerouting)
     "r09_p1_set_width_middle_track": ("base", "", ["--rip", "W", "--nets", "W"], [{"op": "set_width", "net": "W", "layer": "F.Cu", "start": [30, 10], "end": [38, 10], "to": 0.5, "from": 0.4}], None, "120",
                                       lambda js, data, dest, files: m1_has(dest, "W", (30.0, 10.0), (38.0, 10.0), 0.5) or f"W: {m1_segs(dest, 'W')}"),  # source: review 9, p1_set_width_middle_track

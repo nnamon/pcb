@@ -29,8 +29,8 @@ pub struct Report {
     pub left_out: Vec<String>,
     /// Whether a `[[text]]` entry prints the version (`{version}`, or the version itself) on the board.
     pub version_on_board: bool,
-    /// Parts in the CPL on the bottom side: their rotation is KiCad's board angle, not yet checked against
-    /// JLCPCB's bottom-side convention.
+    /// Parts in the CPL on the bottom side: their rotation is as seen from the bottom (`cpl_rotation`), a rule
+    /// JLCPCB does not publish.
     pub bottom_parts: usize,
     /// Connectivity rebuilt from the Gerbers and drill files written, and DFM on them (`gerber_helper.py verify`).
     pub verify: serde_json::Value,
@@ -180,16 +180,18 @@ pub fn run(l: &Loaded, out_dir: &str, work: &Path) -> Result<Report> {
             continue;
         }
         let rule = p.parts.get(&lcsc);
+        let bottom = f.layer == "B.Cu";
         let (mut x, mut y) = (f.x - cx, cy - f.y);
         if let Some([ox, oy]) = rule.and_then(|r| r.cpl_offset_mm) {
-            // the part frame is y up, turned with the footprint (anticlockwise in this frame)
-            let (dx, dy) = rotate(ox, oy, -f.rot);
+            // the part frame is y up, turned with the footprint (anticlockwise in this frame); KiCad keeps a
+            // flipped footprint mirrored top to bottom in that frame
+            let (dx, dy) = rotate(ox, if bottom { -oy } else { oy }, -f.rot);
             x += dx;
             y += dy;
         }
-        let rot = (f.rot + rule.map(|r| r.rotation_offset_deg).unwrap_or(0.0)).rem_euclid(360.0);
+        let rot = cpl_rotation(f.rot, rule.map(|r| r.rotation_offset_deg).unwrap_or(0.0), bottom);
         let footprint = f.lib_id.split(':').next_back().unwrap_or(&f.lib_id).to_string();
-        parts.push(Part { reference: rename(&f.reference), value: f.value.clone(), footprint, lcsc, x, y, rot, bottom: f.layer == "B.Cu" });
+        parts.push(Part { reference: rename(&f.reference), value: f.value.clone(), footprint, lcsc, x, y, rot, bottom });
     }
     // designators in natural order (C2 before C10)
     let key = |r: &str| {
@@ -344,4 +346,28 @@ fn with_aux_origin(b: &Board, x: f64, y: f64) -> Result<String> {
         None => e.insert(setup.span.1 - 1, format!(" {text}")),
     }
     e.apply(&b.src)
+}
+/// The CPL rotation of a part: KiCad's footprint angle plus the part's `rotation_offset_deg` on the top. On the
+/// bottom JLCPCB reads the angle as seen from the bottom, the board turned over left to right, so it is 180 minus
+/// KiCad's angle, plus the offset. Mid X and Mid Y stay as seen from the top. JLCPCB does not publish this; it is
+/// what kicad-jlcpcb-tools writes (read 14 Nov 2026) and follows from KiCad's flip, which keeps a flipped
+/// footprint mirrored top to bottom in its own frame.
+pub fn cpl_rotation(kicad_deg: f64, offset_deg: f64, bottom: bool) -> f64 {
+    (if bottom { 180.0 - kicad_deg } else { kicad_deg } + offset_deg).rem_euclid(360.0)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bottom_rotation_is_seen_from_the_bottom() {
+        assert_eq!(cpl_rotation(30.0, 90.0, false), 120.0);
+        // a top part at 30 degrees flipped left to right is at 150 in KiCad and looks the same from the bottom
+        assert_eq!(cpl_rotation(150.0, 90.0, true), 120.0);
+        // flipped top to bottom KiCad has it at -30: from the bottom it is half a turn round
+        assert_eq!(cpl_rotation(-30.0, 0.0, true), 210.0);
+        assert_eq!(cpl_rotation(180.0, 0.0, true), 0.0);
+    }
 }
